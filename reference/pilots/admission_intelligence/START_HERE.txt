@@ -1,0 +1,31 @@
+UCC Admission Intelligence - Correct Deployment
+
+The error:
+  Invalid python code on line 13
+  return `${String(...`
+means JavaScript was pasted into an ERPNext Python Server Script.
+
+USE THE FILES AS FOLLOWS:
+
+1. ERPNext > Server Script > UCC Analytics - Criterion 4
+   Script Type: API
+   API Method: ucc_analytics_criterion_4
+   Paste ONLY:
+   01_SERVER_SCRIPT_PYTHON/PASTE_IN_SERVER_SCRIPT__ucc_analytics_criterion_4.py
+
+2. ERPNext > Custom HTML Block > JavaScript field
+   Paste ONLY:
+   02_CUSTOM_BLOCK_JAVASCRIPT/PASTE_IN_CUSTOM_BLOCK_JAVASCRIPT.js
+
+3. ERPNext > Custom HTML Block > CSS field
+   Paste ONLY:
+   03_CUSTOM_BLOCK_CSS/PASTE_IN_CUSTOM_BLOCK_CSS.css
+
+4. HTML
+   No replacement is required for this first version.
+   The HTML file is included only as a reference.
+
+Important:
+- Do not paste the JavaScript file into Server Script.
+- Do not paste all files together.
+- Back up the current Server Script and Custom HTML Block before replacement.

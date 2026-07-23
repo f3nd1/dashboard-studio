@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sophia Analytics Studio Prototype</title>
+  <style>
+    :root {
+      --navy-950: #0c1b35;
+      --navy-900: #102341;
+      --navy-800: #17345d;
+      --navy-700: #245083;
+      --blue-600: #3b76c5;
+      --blue-100: #eaf2ff;
+      --gold-500: #d6a73a;
+      --gold-100: #fff6df;
+      --green-600: #23815f;
+      --green-100: #e7f7f0;
+      --red-600: #b94a4a;
+      --red-100: #fff0f0;
+      --orange-600: #b86f16;
+      --orange-100: #fff3e2;
+      --purple-600: #6c5ac7;
+      --purple-100: #f1eeff;
+      --ink-900: #142033;
+      --ink-700: #455268;
+      --ink-500: #728097;
+      --line: #dfe6ef;
+      --line-dark: #cbd5e1;
+      --surface: #ffffff;
+      --surface-2: #f6f8fb;
+      --surface-3: #eef2f7;
+      --shadow: 0 12px 28px rgba(15, 31, 58, 0.08);
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-sm: 9px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink-900);
+      background: var(--surface-2);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+
+    .app-shell {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 58px 1fr;
+    }
+
+    .topbar {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      z-index: 10;
+    }
+
+    .brand-cluster, .topbar-actions, .brand-copy, .tab-row, .toolbar-group,
+    .panel-title-row, .canvas-toolbar, .canvas-toolbar-left, .canvas-toolbar-right,
+    .mini-row, .field-row, .migration-card-header, .migration-footer,
+    .status-strip, .kpi-head, .card-header, .card-footer, .hero-actions {
+      display: flex;
+      align-items: center;
+    }
+
+    .brand-cluster { gap: 10px; }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(145deg, var(--navy-900), var(--navy-700));
+      color: #fff;
+      font-weight: 800;
+      letter-spacing: .5px;
+      box-shadow: 0 8px 18px rgba(20, 48, 84, .2);
+    }
+    .brand-copy { gap: 9px; }
+    .brand-copy strong { font-size: 15px; }
+    .version-pill {
+      border: 1px solid #e8d9ad;
+      background: var(--gold-100);
+      color: #806021;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .topbar-search {
+      width: min(460px, 38vw);
+      position: relative;
+    }
+    .topbar-search input {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      border-radius: 10px;
+      padding: 9px 34px 9px 34px;
+      outline: none;
+    }
+    .topbar-search input:focus { border-color: #9db8de; box-shadow: 0 0 0 3px #e9f1ff; }
+    .topbar-search .search-icon { position: absolute; left: 11px; top: 8px; color: var(--ink-500); }
+    .topbar-search .shortcut { position: absolute; right: 9px; top: 8px; color: var(--ink-500); font-size: 12px; }
+
+    .topbar-actions { gap: 8px; }
+    .icon-btn, .soft-btn, .primary-btn, .ghost-btn, .danger-btn, .success-btn {
+      border: 1px solid transparent;
+      border-radius: 9px;
+      min-height: 34px;
+      padding: 7px 11px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      font-weight: 700;
+      font-size: 12px;
+      transition: .15s ease;
+    }
+    .icon-btn { width: 34px; padding: 0; background: #fff; border-color: var(--line); color: var(--ink-700); }
+    .soft-btn { background: #fff; border-color: var(--line); color: var(--ink-700); }
+    .ghost-btn { background: transparent; color: var(--ink-700); }
+    .primary-btn { background: var(--navy-800); color: #fff; box-shadow: 0 8px 16px rgba(28, 62, 105, .16); }
+    .success-btn { background: var(--green-600); color: #fff; }
+    .danger-btn { background: var(--red-100); color: var(--red-600); border-color: #f2caca; }
+    .primary-btn:hover, .success-btn:hover { transform: translateY(-1px); }
+    .soft-btn:hover, .icon-btn:hover { background: var(--surface-2); }
+
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: linear-gradient(145deg, #dbe9ff, #9ebce3);
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 1px var(--line);
+      display: grid;
+      place-items: center;
+      color: var(--navy-800);
+      font-weight: 800;
+      font-size: 12px;
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr) 310px;
+    }
+
+    .left-panel, .right-panel {
+      background: #fff;
+      min-height: 0;
+      overflow: auto;
+    }
+    .left-panel { border-right: 1px solid var(--line); }
+    .right-panel { border-left: 1px solid var(--line); }
+
+    .main-stage {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 48px 1fr;
+      background: #edf1f6;
+    }
+
+    .workspace-tabs {
+      grid-column: 1 / -1;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      padding: 0 18px;
+      display: flex;
+      align-items: end;
+      gap: 22px;
+      height: 48px;
+    }
+    .workspace-tab {
+      height: 48px;
+      border: 0;
+      background: transparent;
+      color: var(--ink-500);
+      font-weight: 800;
+      font-size: 13px;
+      position: relative;
+      padding: 0 2px;
+    }
+    .workspace-tab.active { color: var(--navy-800); }
+    .workspace-tab.active::after {
+      content: "";
+      position: absolute;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--gold-500);
+      left: 0;
+      right: 0;
+      bottom: 0;
+    }
+
+    .panel-section { padding: 16px; border-bottom: 1px solid var(--line); }
+    .panel-title-row { justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .panel-title-row h3 { margin: 0; font-size: 13px; }
+    .panel-kicker { color: var(--ink-500); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .9px; }
+
+    .criterion-select, .property-control, .source-search {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 9px 10px;
+      background: #fff;
+      color: var(--ink-900);
+      outline: none;
+    }
+    .criterion-select:focus, .property-control:focus, .source-search:focus { border-color: #91acd2; box-shadow: 0 0 0 3px #edf4ff; }
+
+    .source-list, .chart-palette { display: grid; gap: 7px; margin-top: 10px; }
+    .source-item, .chart-palette-item {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 10px;
+      padding: 9px;
+      display: grid;
+      grid-template-columns: 30px minmax(0,1fr) auto;
+      align-items: center;
+      gap: 8px;
+      cursor: grab;
+      user-select: none;
+    }
+    .source-item:hover, .chart-palette-item:hover { border-color: #a8bddc; background: #f9fbff; }
+    .source-icon, .chart-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--blue-100);
+      color: var(--navy-700);
+      font-size: 15px;
+      font-weight: 800;
+    }
+    .source-copy strong, .chart-copy strong { display: block; font-size: 11px; }
+    .source-copy small, .chart-copy small { display: block; color: var(--ink-500); margin-top: 2px; font-size: 10px; }
+    .drag-handle { color: var(--ink-500); font-size: 15px; letter-spacing: -2px; }
+
+    .chart-palette { grid-template-columns: 1fr 1fr; }
+    .chart-palette-item { grid-template-columns: 30px minmax(0,1fr); padding: 8px; }
+    .chart-copy small { display: none; }
+
+    .left-footer-note {
+      background: var(--gold-100);
+      border: 1px solid #f1dfac;
+      padding: 10px;
+      border-radius: 10px;
+      font-size: 10px;
+      line-height: 1.45;
+      color: #73571b;
+    }
+
+    .canvas-toolbar {
+      padding: 0 14px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      justify-content: space-between;
+      min-width: 0;
+    }
+    .canvas-toolbar-left, .canvas-toolbar-right { gap: 7px; min-width: 0; }
+    .canvas-title {
+      max-width: 270px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 800;
+      font-size: 13px;
+      margin-right: 8px;
+    }
+    .save-state { color: var(--green-600); font-size: 11px; font-weight: 700; }
+
+    .stage-scroll {
+      min-height: 0;
+      overflow: auto;
+      padding: 18px;
+    }
+
+    .dashboard-canvas {
+      width: min(1180px, 100%);
+      margin: 0 auto;
+      min-height: calc(100vh - 150px);
+      background: #f7f9fc;
+      border: 1px solid #d9e2ee;
+      border-radius: 20px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+      position: relative;
+    }
+    .dashboard-canvas.drag-over { outline: 3px dashed #7fa4d3; outline-offset: -9px; }
+
+    .canvas-hero {
+      min-height: 150px;
+      border-radius: 17px;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 75% 15%, rgba(255,255,255,.12), transparent 24%),
+        linear-gradient(135deg, var(--navy-950), var(--navy-700));
+      color: #fff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      overflow: hidden;
+    }
+    .hero-kicker { color: #f0c45d; text-transform: uppercase; letter-spacing: 1.4px; font-size: 10px; font-weight: 900; }
+    .canvas-hero h1 { margin: 6px 0 7px; font-size: clamp(26px, 3vw, 42px); letter-spacing: -.8px; }
+    .canvas-hero p { margin: 0; max-width: 620px; color: #d6e0ef; font-size: 12px; line-height: 1.5; }
+    .hero-actions { gap: 8px; flex-wrap: wrap; justify-content: end; }
+    .hero-actions .soft-btn { color: #fff; background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.2); }
+    .hero-actions .primary-btn { background: var(--gold-500); color: #1e2a3f; box-shadow: none; }
+
+    .filter-strip {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(115px, 1fr)) auto;
+      gap: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      padding: 10px;
+      margin-top: 12px;
+    }
+    .filter-field label { display: block; color: var(--ink-500); font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+    .filter-field select { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 7px; font-size: 10px; background: #fff; }
+    .filter-action { display: flex; align-items: end; }
+
+    .status-strip {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid #cfe2f8;
+      background: #f1f7ff;
+      gap: 9px;
+      font-size: 10px;
+      color: #35577e;
+    }
+    .status-strip strong { color: var(--navy-800); }
+    .status-strip .push { margin-left: auto; }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .dashboard-card {
+      grid-column: span 6;
+      min-width: 0;
+      min-height: 260px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: 0 7px 20px rgba(17, 38, 68, .05);
+      overflow: hidden;
+      position: relative;
+      transition: .15s ease;
+    }
+    .dashboard-card:hover { box-shadow: 0 12px 28px rgba(17, 38, 68, .09); }
+    .dashboard-card.selected { outline: 3px solid rgba(59,118,197,.22); border-color: #7fa5d7; }
+    .dashboard-card.kpi-card { grid-column: span 3; min-height: 116px; }
+    .dashboard-card.full { grid-column: span 12; }
+    .dashboard-card.third { grid-column: span 4; }
+    .dashboard-card.dragging { opacity: .45; }
+
+    .card-header { justify-content: space-between; gap: 10px; padding: 13px 14px 8px; }
+    .card-title-wrap { min-width: 0; }
+    .card-title { font-size: 12px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card-subtitle { font-size: 9px; color: var(--ink-500); margin-top: 3px; }
+    .card-menu { border: 0; background: transparent; color: var(--ink-500); font-size: 18px; padding: 0 3px; }
+    .card-body { padding: 4px 14px 12px; min-height: 180px; }
+    .card-footer { justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding: 8px 14px; color: var(--ink-500); font-size: 9px; }
+
+    .kpi-body { padding: 2px 14px 12px; }
+    .kpi-head { justify-content: space-between; gap: 10px; }
+    .kpi-icon { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--blue-100); color: var(--blue-600); }
+    .kpi-value { font-size: 28px; font-weight: 900; letter-spacing: -.7px; margin-top: 6px; }
+    .kpi-caption { font-size: 9px; color: var(--ink-500); }
+
+    .chart-svg { width: 100%; height: 170px; display: block; }
+    .axis-line { stroke: #dce4ee; stroke-width: 1; }
+    .grid-line { stroke: #edf1f5; stroke-width: 1; }
+    .chart-line { fill: none; stroke: var(--blue-600); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+    .chart-dot { fill: #fff; stroke: var(--blue-600); stroke-width: 3; }
+    .bar { fill: #5d8ed0; rx: 4; }
+    .bar.alt { fill: #d6a73a; }
+    .chart-label { fill: #718198; font-size: 9px; }
+    .chart-value { fill: #34465e; font-size: 9px; font-weight: 800; }
+
+    .donut-wrap { display: grid; grid-template-columns: 1fr 1.2fr; gap: 10px; align-items: center; min-height: 160px; }
+    .donut {
+      width: 150px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: conic-gradient(#3b76c5 0 37%, #d6a73a 37% 65%, #d26767 65% 87%, #7b68cf 87% 96%, #cbd5e1 96% 100%);
+      margin: auto;
+      position: relative;
+    }
+    .donut::after { content: "62\A Total"; white-space: pre; position: absolute; inset: 27px; border-radius: 50%; background: #fff; display: grid; place-items: center; text-align: center; font-weight: 900; color: var(--navy-800); line-height: 1.4; }
+    .legend { display: grid; gap: 7px; }
+    .legend-row { display: grid; grid-template-columns: 8px minmax(0,1fr) auto; gap: 7px; align-items: center; font-size: 9px; color: var(--ink-700); }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+    .table-card .card-body { padding-top: 0; }
+    .insight-table { width: 100%; border-collapse: collapse; font-size: 9px; }
+    .insight-table th, .insight-table td { text-align: left; padding: 9px 7px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .insight-table th { color: var(--ink-500); text-transform: uppercase; letter-spacing: .5px; font-size: 8px; }
+    .status-pill { display: inline-flex; border-radius: 999px; padding: 4px 7px; font-size: 8px; font-weight: 900; }
+    .status-pill.available { background: var(--green-100); color: var(--green-600); }
+    .status-pill.partial { background: var(--orange-100); color: var(--orange-600); }
+    .status-pill.review { background: var(--red-100); color: var(--red-600); }
+
+    .drop-placeholder {
+      grid-column: span 12;
+      min-height: 110px;
+      border: 2px dashed #b8c6d8;
+      border-radius: 14px;
+      background: rgba(255,255,255,.5);
+      display: grid;
+      place-items: center;
+      color: var(--ink-500);
+      text-align: center;
+      padding: 20px;
+      font-size: 11px;
+    }
+
+    .right-empty { padding: 28px 18px; text-align: center; color: var(--ink-500); }
+    .right-empty .big-icon { width: 58px; height: 58px; margin: 0 auto 10px; border-radius: 16px; display: grid; place-items: center; background: var(--surface-3); font-size: 24px; }
+    .right-empty strong { display: block; color: var(--ink-900); margin-bottom: 5px; font-size: 13px; }
+    .right-empty p { margin: 0; font-size: 10px; line-height: 1.5; }
+
+    .properties-form { padding: 14px; display: grid; gap: 13px; }
+    .property-group { display: grid; gap: 6px; }
+    .property-group label { font-size: 9px; text-transform: uppercase; color: var(--ink-500); font-weight: 900; letter-spacing: .55px; }
+    .property-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .property-help { font-size: 9px; color: var(--ink-500); line-height: 1.4; }
+    .toggle-row { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; }
+    .toggle-copy strong { display: block; font-size: 10px; }
+    .toggle-copy small { display: block; color: var(--ink-500); margin-top: 2px; font-size: 9px; }
+    .toggle {
+      width: 36px; height: 20px; border-radius: 999px; background: #ccd6e3; padding: 2px; border: 0; transition: .2s ease;
+    }
+    .toggle::before { content: ""; display: block; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,.18); transition: .2s ease; }
+    .toggle.on { background: var(--green-600); }
+    .toggle.on::before { transform: translateX(16px); }
+
+    .right-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; border-top: 1px solid var(--line); }
+
+    .migration-view, .builder-view { min-height: 0; }
+    .hidden { display: none !important; }
+    .migration-view { grid-column: 1 / -1; background: #edf1f6; overflow: auto; padding: 20px; }
+    .migration-layout { max-width: 1320px; margin: 0 auto; display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 16px; }
+    .migration-side, .migration-main-card { background: #fff; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+    .migration-side { padding: 16px; height: fit-content; }
+    .migration-main-card { overflow: hidden; }
+    .migration-hero { padding: 22px; background: linear-gradient(135deg, var(--navy-950), var(--navy-700)); color: #fff; }
+    .migration-hero h2 { margin: 5px 0 7px; font-size: 25px; }
+    .migration-hero p { margin: 0; color: #d4deec; font-size: 11px; line-height: 1.5; }
+    .stepper { display: grid; gap: 10px; margin-top: 16px; }
+    .step { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 10px; align-items: start; }
+    .step-number { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-3); color: var(--ink-700); font-weight: 900; font-size: 10px; }
+    .step.complete .step-number { background: var(--green-100); color: var(--green-600); }
+    .step.active .step-number { background: var(--blue-100); color: var(--blue-600); }
+    .step-copy strong { display: block; font-size: 10px; }
+    .step-copy small { display: block; font-size: 9px; color: var(--ink-500); margin-top: 2px; line-height: 1.4; }
+
+    .connection-box { display: grid; gap: 9px; margin-top: 14px; }
+    .connection-status { border: 1px solid #cde8dd; background: var(--green-100); color: var(--green-600); border-radius: 10px; padding: 9px; font-size: 10px; font-weight: 800; }
+
+    .migration-card-header { justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .migration-card-header h3 { margin: 0; font-size: 13px; }
+    .migration-toolbar { display: flex; gap: 8px; align-items: center; }
+    .migration-table-wrap { overflow: auto; }
+    .migration-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    .migration-table th, .migration-table td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .migration-table th { background: #fafbfd; color: var(--ink-500); font-size: 8px; text-transform: uppercase; letter-spacing: .5px; position: sticky; top: 0; z-index: 2; }
+    .mapping-pill { border-radius: 999px; padding: 4px 7px; font-weight: 900; font-size: 8px; display: inline-flex; }
+    .mapping-pill.ready { background: var(--green-100); color: var(--green-600); }
+    .mapping-pill.review { background: var(--orange-100); color: var(--orange-600); }
+    .mapping-pill.blocked { background: var(--red-100); color: var(--red-600); }
+    .metric-name strong { display: block; font-size: 10px; }
+    .metric-name small { color: var(--ink-500); font-size: 8px; }
+    .migration-footer { justify-content: space-between; padding: 14px 16px; background: #fafbfd; }
+    .migration-summary { display: flex; gap: 8px; flex-wrap: wrap; }
+    .summary-chip { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 6px 9px; font-size: 9px; font-weight: 800; color: var(--ink-700); }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      background: var(--navy-900);
+      color: #fff;
+      border-radius: 11px;
+      padding: 11px 14px;
+      box-shadow: 0 16px 36px rgba(6, 22, 44, .28);
+      font-size: 11px;
+      font-weight: 700;
+      transform: translateY(30px);
+      opacity: 0;
+      pointer-events: none;
+      transition: .22s ease;
+      z-index: 50;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(8, 20, 39, .52);
+      display: grid;
+      place-items: center;
+      z-index: 60;
+      padding: 20px;
+    }
+    .modal {
+      width: min(760px, 100%);
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 24px 80px rgba(8,20,39,.35);
+      overflow: hidden;
+    }
+    .modal-header { padding: 15px 17px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+    .modal-header h3 { margin: 0; font-size: 14px; }
+    .modal-body { padding: 16px; max-height: 65vh; overflow: auto; }
+    .code-box { background: #0d1a2d; color: #d8e6fb; border-radius: 11px; padding: 14px; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow: auto; }
+    .modal-footer { padding: 13px 16px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
+
+    @media (max-width: 1180px) {
+      .workspace { grid-template-columns: 225px minmax(0,1fr) 275px; }
+      .filter-strip { grid-template-columns: repeat(3, minmax(115px, 1fr)); }
+      .dashboard-card.kpi-card { grid-column: span 6; }
+      .dashboard-card.third { grid-column: span 6; }
+    }
+
+    @media (max-width: 900px) {
+      body { overflow: auto; }
+      .app-shell { height: auto; min-height: 100vh; }
+      .workspace { grid-template-columns: 1fr; }
+      .left-panel, .right-panel { display: none; }
+      .main-stage { min-height: calc(100vh - 58px); }
+      .dashboard-card, .dashboard-card.kpi-card, .dashboard-card.third { grid-column: span 12; }
+      .filter-strip { grid-template-columns: 1fr 1fr; }
+      .topbar-search { display: none; }
+      .canvas-hero { align-items: start; flex-direction: column; }
+      .hero-actions { justify-content: start; }
+      .migration-layout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-cluster">
+        <div class="brand-mark">UCC</div>
+        <div class="brand-copy">
+          <strong>Sophia Analytics Studio</strong>
+          <span class="version-pill">Prototype v0.1</span>
+        </div>
+      </div>
+      <div class="topbar-search">
+        <span class="search-icon">⌕</span>
+        <input id="globalSearch" type="text" placeholder="Search DocTypes, fields, metrics or dashboards" />
+        <span class="shortcut">⌘ K</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" title="Notifications">◉</button>
+        <button class="soft-btn">Help</button>
+        <div class="avatar">FO</div>
+      </div>
+    </header>
+
+    <div class="workspace-tabs">
+      <button class="workspace-tab active" data-workspace-tab="builder">Visual Dashboard Builder</button>
+      <button class="workspace-tab" data-workspace-tab="migration">Metabase Migration Assistant</button>
+      <button class="workspace-tab" data-workspace-tab="validation">Validation Centre</button>
+    </div>
+
+    <section id="builderView" class="workspace builder-view">
+      <aside class="left-panel">
+        <div class="panel-section">
+          <div class="panel-kicker">Dashboard scope</div>
+          <div class="panel-title-row"><h3>Criterion and section</h3></div>
+          <select class="criterion-select" id="criterionSelect">
+            <option>Criterion 4 · Student Protection and Support</option>
+            <option>Criterion 7 · Performance Outcomes</option>
+            <option>Criterion 3 · External Recruitment Agents</option>
+            <option>Criterion 5 · Academic Systems</option>
+          </select>
+          <select class="criterion-select" id="subcriterionSelect" style="margin-top:8px">
+            <option>4.1.1 · Pre-Course Counselling, Selection and Admissions</option>
+            <option>4.2.1 · Student Contract</option>
+            <option>4.2.2 · Fee Collection and Fee Protection</option>
+            <option>4.5.1 · Student Support Services</option>
+          </select>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title-row">
+            <div><div class="panel-kicker">Data catalogue</div><h3>Sources</h3></div>
+            <button class="icon-btn" id="addSourceBtn" title="Add source">＋</button>
+          </div>
+          <input class="source-search" id="sourceSearch" placeholder="Search sources" />
+          <div class="source-list" id="sourceList">
+            <div class="source-item" draggable="true" data-source="Student Applicant">
+              <div class="source-icon">SA</div><div class="source-copy"><strong>Student Applicant</strong><small>43 fields · live</small></div><div class="drag-handle">⋮⋮</div>
+            </div>
+            <div class="source-item" draggable="true" data-source="Student Admission UCC">
+              <div class="source-icon">AD</div><div class="source-copy"><strong>Student Admission UCC</strong><small>106 fields · live</small></div><div class="drag-handle">⋮⋮</div>
+            </div>
+            <div class="source-item" draggable="true" data-source="Quality Performance Outcomes">
+              <div class="source-icon">QP</div><div class="source-copy"><strong>Quality Performance Outcomes</strong><small>2 child tables · live</small></div><div class="drag-handle">⋮⋮</div>
+            </div>
+            <div class="source-item" draggable="true" data-source="Agent">
+              <div class="source-icon">AG</div><div class="source-copy"><strong>Agent</strong><small>Linked to applicants</small></div><div class="drag-handle">⋮⋮</div>
+            </div>
+            <div class="source-item" draggable="true" data-source="Student Attendance">
+              <div class="source-icon">AT</div><div class="source-copy"><strong>Student Attendance</strong><small>Daily records</small></div><div class="drag-handle">⋮⋮</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title-row"><div><div class="panel-kicker">Visual catalogue</div><h3>Charts and components</h3></div></div>
+          <div class="chart-palette" id="chartPalette">
+            <div class="chart-palette-item" draggable="true" data-chart-type="kpi"><div class="chart-icon">#</div><div class="chart-copy"><strong>KPI</strong></div></div>
+            <div class="chart-palette-item" draggable="true" data-chart-type="line"><div class="chart-icon">⌁</div><div class="chart-copy"><strong>Line</strong></div></div>
+            <div class="chart-palette-item" draggable="true" data-chart-type="bar"><div class="chart-icon">▥</div><div class="chart-copy"><strong>Bar</strong></div></div>
+            <div class="chart-palette-item" draggable="true" data-chart-type="donut"><div class="chart-icon">◌</div><div class="chart-copy"><strong>Donut</strong></div></div>
+            <div class="chart-palette-item" draggable="true" data-chart-type="table"><div class="chart-icon">▤</div><div class="chart-copy"><strong>Table</strong></div></div>
+            <div class="chart-palette-item" draggable="true" data-chart-type="gauge"><div class="chart-icon">◒</div><div class="chart-copy"><strong>Gauge</strong></div></div>
+            <div class="chart-palette-item" draggable="true" data-chart-type="funnel"><div class="chart-icon">▽</div><div class="chart-copy"><strong>Funnel</strong></div></div>
+            <div class="chart-palette-item" draggable="true" data-chart-type="insight"><div class="chart-icon">AI</div><div class="chart-copy"><strong>Insight</strong></div></div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="left-footer-note">
+            Drag a source or chart onto the canvas. Click any card to edit its title, source, calculation and visual type.
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-stage">
+        <div class="canvas-toolbar">
+          <div class="canvas-toolbar-left">
+            <div class="canvas-title" id="dashboardNameLabel">Admission Intelligence</div>
+            <span class="save-state" id="saveState">● All changes saved</span>
+          </div>
+          <div class="canvas-toolbar-right">
+            <button class="soft-btn" id="previewBtn">◉ Preview</button>
+            <button class="soft-btn" id="jsonBtn">Export JSON</button>
+            <button class="soft-btn" id="pythonBtn">Generate Python</button>
+            <button class="primary-btn" id="publishBtn">Publish to Sophia</button>
+          </div>
+        </div>
+
+        <div class="stage-scroll">
+          <div class="dashboard-canvas" id="dashboardCanvas">
+            <section class="canvas-hero">
+              <div>
+                <div class="hero-kicker">Criterion 4 · 4.1.1</div>
+                <h1 id="heroTitle">Admission Intelligence</h1>
+                <p id="heroSubtitle">Live admission analytics for informed decision-making across the student lifecycle.</p>
+              </div>
+              <div class="hero-actions">
+                <button class="soft-btn">Export filtered data</button>
+                <button class="primary-btn">Refresh dashboard</button>
+              </div>
+            </section>
+
+            <section class="filter-strip">
+              <div class="filter-field"><label>Academic year</label><select><option>All academic years</option><option>2026</option><option>2025</option></select></div>
+              <div class="filter-field"><label>Programme</label><select><option>All programmes</option><option>Diploma in Business Management</option></select></div>
+              <div class="filter-field"><label>Intake</label><select><option>All intakes</option><option>January</option><option>April</option></select></div>
+              <div class="filter-field"><label>Status</label><select><option>All statuses</option><option>Admitted</option><option>Approved</option></select></div>
+              <div class="filter-field"><label>Country</label><select><option>All countries</option><option>China</option><option>Singapore</option></select></div>
+              <div class="filter-action"><button class="primary-btn">Apply filters</button></div>
+            </section>
+
+            <section class="status-strip">
+              <span>◉</span>
+              <strong>Live data connected</strong>
+              <span>8 of 8 sources available</span>
+              <span>•</span>
+              <span>8 of 10 metrics verified</span>
+              <button class="soft-btn push">View readiness</button>
+            </section>
+
+            <section class="dashboard-grid" id="dashboardGrid">
+              <article class="dashboard-card kpi-card" draggable="true" data-card-id="applicants" data-type="kpi" data-source="Student Applicant" data-title="No. of Student Applicants" data-x="" data-y="name" data-aggregation="count">
+                <div class="kpi-body"><div class="kpi-head"><div><div class="card-title">No. of Student Applicants</div><div class="card-subtitle">Student Applicant</div></div><div class="kpi-icon">SA</div></div><div class="kpi-value">62</div><div class="kpi-caption">All applicant records</div></div>
+              </article>
+
+              <article class="dashboard-card kpi-card" draggable="true" data-card-id="shortlisted" data-type="kpi" data-source="Student Applicant" data-title="No. of Shortlisted" data-x="application_status" data-y="name" data-aggregation="count">
+                <div class="kpi-body"><div class="kpi-head"><div><div class="card-title">No. of Shortlisted</div><div class="card-subtitle">Status = Approved</div></div><div class="kpi-icon" style="background:var(--gold-100);color:var(--gold-500)">★</div></div><div class="kpi-value">2</div><div class="kpi-caption">Current approved applications</div></div>
+              </article>
+
+              <article class="dashboard-card kpi-card" draggable="true" data-card-id="enrolled" data-type="kpi" data-source="Student Applicant" data-title="No. of Enrolled Students" data-x="application_status" data-y="name" data-aggregation="count">
+                <div class="kpi-body"><div class="kpi-head"><div><div class="card-title">No. of Enrolled Students</div><div class="card-subtitle">Status = Admitted</div></div><div class="kpi-icon" style="background:var(--green-100);color:var(--green-600)">✓</div></div><div class="kpi-value">60</div><div class="kpi-caption">Admitted applicant records</div></div>
+              </article>
+
+              <article class="dashboard-card kpi-card" draggable="true" data-card-id="success-rate" data-type="kpi" data-source="Student Applicant" data-title="Success Rate (%)" data-x="application_status" data-y="name" data-aggregation="percentage">
+                <div class="kpi-body"><div class="kpi-head"><div><div class="card-title">Success Rate (%)</div><div class="card-subtitle">Admitted ÷ all applicants</div></div><div class="kpi-icon" style="background:var(--purple-100);color:var(--purple-600)">↗</div></div><div class="kpi-value">96.77</div><div class="kpi-caption">Conversion to admitted status</div></div>
+              </article>
+
+              <article class="dashboard-card" draggable="true" data-card-id="applicants-year" data-type="line" data-source="Student Applicant" data-title="Student Applicants per Year" data-x="academic_year" data-y="name" data-aggregation="count">
+                <div class="card-header"><div class="card-title-wrap"><div class="card-title">Student Applicants per Year</div><div class="card-subtitle">Count grouped by academic year</div></div><button class="card-menu">⋯</button></div>
+                <div class="card-body">
+                  <svg class="chart-svg" viewBox="0 0 460 180" role="img" aria-label="Applicants per year line chart">
+                    <line class="axis-line" x1="42" y1="145" x2="440" y2="145"/><line class="axis-line" x1="42" y1="20" x2="42" y2="145"/>
+                    <line class="grid-line" x1="42" y1="115" x2="440" y2="115"/><line class="grid-line" x1="42" y1="85" x2="440" y2="85"/><line class="grid-line" x1="42" y1="55" x2="440" y2="55"/>
+                    <polyline class="chart-line" points="65,120 135,133 205,101 275,137 345,123 415,35"/>
+                    <circle class="chart-dot" cx="65" cy="120" r="4"/><circle class="chart-dot" cx="135" cy="133" r="4"/><circle class="chart-dot" cx="205" cy="101" r="4"/><circle class="chart-dot" cx="275" cy="137" r="4"/><circle class="chart-dot" cx="345" cy="123" r="4"/><circle class="chart-dot" cx="415" cy="35" r="4"/>
+                    <text class="chart-label" x="54" y="165">2021</text><text class="chart-label" x="124" y="165">2022</text><text class="chart-label" x="194" y="165">2023</text><text class="chart-label" x="264" y="165">2024</text><text class="chart-label" x="334" y="165">2025</text><text class="chart-label" x="404" y="165">2026</text>
+                    <text class="chart-value" x="60" y="112">7</text><text class="chart-value" x="130" y="125">3</text><text class="chart-value" x="198" y="93">11</text><text class="chart-value" x="270" y="129">2</text><text class="chart-value" x="340" y="115">6</text><text class="chart-value" x="407" y="27">33</text>
+                  </svg>
+                </div>
+                <div class="card-footer"><span>Source: Student Applicant</span><span>Last refreshed just now</span></div>
+              </article>
+
+              <article class="dashboard-card" draggable="true" data-card-id="country" data-type="bar" data-source="Student Applicant" data-title="Applicants per Country" data-x="nationality" data-y="name" data-aggregation="count">
+                <div class="card-header"><div class="card-title-wrap"><div class="card-title">Applicants per Country</div><div class="card-subtitle">Nationality distribution</div></div><button class="card-menu">⋯</button></div>
+                <div class="card-body">
+                  <svg class="chart-svg" viewBox="0 0 460 180" role="img" aria-label="Applicants per country bar chart">
+                    <line class="axis-line" x1="42" y1="145" x2="440" y2="145"/><line class="axis-line" x1="42" y1="20" x2="42" y2="145"/>
+                    <line class="grid-line" x1="42" y1="115" x2="440" y2="115"/><line class="grid-line" x1="42" y1="85" x2="440" y2="85"/><line class="grid-line" x1="42" y1="55" x2="440" y2="55"/>
+                    <rect class="bar" x="67" y="32" width="36" height="113"/><rect class="bar" x="127" y="127" width="36" height="18"/><rect class="bar" x="187" y="137" width="36" height="8"/><rect class="bar" x="247" y="139" width="36" height="6"/><rect class="bar" x="307" y="139" width="36" height="6"/><rect class="bar" x="367" y="135" width="36" height="10"/>
+                    <text class="chart-label" x="67" y="164">China</text><text class="chart-label" x="122" y="164">Chinese</text><text class="chart-label" x="182" y="164">Indonesia</text><text class="chart-label" x="247" y="164">Malaysia</text><text class="chart-label" x="307" y="164">Myanmar</text><text class="chart-label" x="367" y="164">Singapore</text>
+                  </svg>
+                </div>
+                <div class="card-footer"><span>Source: Student Applicant</span><span>Grouped by nationality</span></div>
+              </article>
+
+              <article class="dashboard-card" draggable="true" data-card-id="agents" data-type="donut" data-source="Student Applicant" data-title="Number of Students per Agent" data-x="agent" data-y="name" data-aggregation="count">
+                <div class="card-header"><div class="card-title-wrap"><div class="card-title">Number of Students per Agent</div><div class="card-subtitle">Cross-reference: Criterion 3.2.1</div></div><button class="card-menu">⋯</button></div>
+                <div class="card-body donut-wrap">
+                  <div class="legend">
+                    <div class="legend-row"><span class="legend-dot" style="background:#3b76c5"></span><span>UCC-AGENT-01</span><strong>37.1%</strong></div>
+                    <div class="legend-row"><span class="legend-dot" style="background:#d6a73a"></span><span>EDU-AGENT-02</span><strong>27.4%</strong></div>
+                    <div class="legend-row"><span class="legend-dot" style="background:#d26767"></span><span>EDU-AGENT-03</span><strong>22.6%</strong></div>
+                    <div class="legend-row"><span class="legend-dot" style="background:#7b68cf"></span><span>UCC-AGENT-25</span><strong>9.7%</strong></div>
+                    <div class="legend-row"><span class="legend-dot" style="background:#cbd5e1"></span><span>Other</span><strong>3.2%</strong></div>
+                  </div>
+                  <div class="donut"></div>
+                </div>
+                <div class="card-footer"><span>Source: Student Applicant.agent</span><span>62 records</span></div>
+              </article>
+
+              <article class="dashboard-card" draggable="true" data-card-id="duration" data-type="line" data-source="Student Admission UCC" data-title="Duration from Counselling to Admission" data-x="academic_year" data-y="process_duration" data-aggregation="average">
+                <div class="card-header"><div class="card-title-wrap"><div class="card-title">Duration from Counselling to Admission</div><div class="card-subtitle">Average number of days</div></div><button class="card-menu">⋯</button></div>
+                <div class="card-body">
+                  <svg class="chart-svg" viewBox="0 0 460 180" role="img" aria-label="Counselling to admission duration line chart">
+                    <line class="axis-line" x1="42" y1="145" x2="440" y2="145"/><line class="axis-line" x1="42" y1="20" x2="42" y2="145"/>
+                    <line class="grid-line" x1="42" y1="115" x2="440" y2="115"/><line class="grid-line" x1="42" y1="85" x2="440" y2="85"/><line class="grid-line" x1="42" y1="55" x2="440" y2="55"/>
+                    <polyline class="chart-line" style="stroke:#d58228" points="65,60 135,28 205,83 275,118 345,126 415,132"/>
+                    <circle class="chart-dot" style="stroke:#d58228" cx="65" cy="60" r="4"/><circle class="chart-dot" style="stroke:#d58228" cx="135" cy="28" r="4"/><circle class="chart-dot" style="stroke:#d58228" cx="205" cy="83" r="4"/><circle class="chart-dot" style="stroke:#d58228" cx="275" cy="118" r="4"/><circle class="chart-dot" style="stroke:#d58228" cx="345" cy="126" r="4"/><circle class="chart-dot" style="stroke:#d58228" cx="415" cy="132" r="4"/>
+                    <text class="chart-label" x="54" y="165">2021</text><text class="chart-label" x="124" y="165">2022</text><text class="chart-label" x="194" y="165">2023</text><text class="chart-label" x="264" y="165">2024</text><text class="chart-label" x="334" y="165">2025</text><text class="chart-label" x="404" y="165">2026</text>
+                  </svg>
+                </div>
+                <div class="card-footer"><span>Student signed date − pre-course counselling date</span><span>Submitted admissions only</span></div>
+              </article>
+
+              <article class="dashboard-card full table-card" draggable="true" data-card-id="insights" data-type="table" data-source="Multiple" data-title="Admissions Insights and Data-Based Answers" data-x="" data-y="" data-aggregation="">
+                <div class="card-header"><div class="card-title-wrap"><div class="card-title">Admissions Insights and Data-Based Answers</div><div class="card-subtitle">Management questions generated from configured metrics</div></div><button class="soft-btn">View all questions →</button></div>
+                <div class="card-body">
+                  <table class="insight-table">
+                    <thead><tr><th>Question</th><th>Answer summary</th><th>Source / calculation</th><th>Status</th></tr></thead>
+                    <tbody>
+                      <tr><td>What is the conversion from applicants to enrolled students?</td><td>Overall conversion is 96.77% based on 60 admitted students from 62 applicant records.</td><td>admission_pipeline</td><td><span class="status-pill available">Available</span></td></tr>
+                      <tr><td>Which countries contribute the highest number of applicants?</td><td>China contributes the highest number of applicant records.</td><td>applicant_country</td><td><span class="status-pill available">Available</span></td></tr>
+                      <tr><td>Are counselling-to-admission durations improving?</td><td>The displayed annual trend indicates a shorter average duration in recent years.</td><td>counselling_cycle</td><td><span class="status-pill partial">Partial</span></td></tr>
+                      <tr><td>Which items require follow-up?</td><td>Two imported Metabase calculations still require business-rule validation.</td><td>migration_validation</td><td><span class="status-pill review">Needs review</span></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="card-footer"><span>4 of 6 questions shown</span><span>Updated just now</span></div>
+              </article>
+
+              <div class="drop-placeholder" id="dropPlaceholder">
+                <div><strong>Drop a source or chart here</strong><br/>A new visual definition will be created and opened in the properties panel.</div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+
+      <aside class="right-panel">
+        <div class="panel-section">
+          <div class="panel-kicker">Selected component</div>
+          <div class="panel-title-row"><h3 id="propertiesHeading">Properties</h3><button class="icon-btn" id="duplicateBtn" title="Duplicate">⧉</button></div>
+        </div>
+        <div id="rightEmpty" class="right-empty hidden">
+          <div class="big-icon">⚙</div>
+          <strong>Select a component</strong>
+          <p>Click a chart or KPI on the canvas to edit its title, data source and calculation.</p>
+        </div>
+        <form id="propertiesForm" class="properties-form">
+          <div class="property-group">
+            <label for="propTitle">Display title</label>
+            <input id="propTitle" class="property-control" value="Student Applicants per Year" />
+          </div>
+          <div class="property-row">
+            <div class="property-group"><label for="propType">Visual type</label><select id="propType" class="property-control"><option value="kpi">KPI</option><option value="line">Line chart</option><option value="bar">Bar chart</option><option value="donut">Donut</option><option value="table">Table</option><option value="gauge">Gauge</option><option value="funnel">Funnel</option><option value="insight">Insight</option></select></div>
+            <div class="property-group"><label for="propWidth">Width</label><select id="propWidth" class="property-control"><option value="3">25%</option><option value="4">33%</option><option value="6" selected>50%</option><option value="12">100%</option></select></div>
+          </div>
+          <div class="property-group">
+            <label for="propSource">Data source</label>
+            <select id="propSource" class="property-control"><option>Student Applicant</option><option>Student Admission UCC</option><option>Quality Performance Outcomes</option><option>Agent</option><option>Student Attendance</option><option>Multiple</option></select>
+          </div>
+          <div class="property-row">
+            <div class="property-group"><label for="propX">Dimension / X-axis</label><select id="propX" class="property-control"><option value="academic_year">academic_year</option><option value="nationality">nationality</option><option value="program">program</option><option value="agent">agent</option><option value="application_status">application_status</option><option value="year">year</option><option value="metric">metric</option></select></div>
+            <div class="property-group"><label for="propY">Measure / Y-axis</label><select id="propY" class="property-control"><option value="name">name</option><option value="value">value</option><option value="actual_value">actual_value</option><option value="process_duration">process_duration</option><option value="normalised_percentage">normalised_percentage</option></select></div>
+          </div>
+          <div class="property-row">
+            <div class="property-group"><label for="propAggregation">Aggregation</label><select id="propAggregation" class="property-control"><option value="count">Count</option><option value="average">Average</option><option value="sum">Sum</option><option value="minimum">Minimum</option><option value="maximum">Maximum</option><option value="percentage">Percentage</option></select></div>
+            <div class="property-group"><label for="propOrder">Order</label><select id="propOrder" class="property-control"><option>Ascending</option><option>Descending</option><option>Highest first</option></select></div>
+          </div>
+          <div class="property-group">
+            <label for="propFilter">Condition</label>
+            <input id="propFilter" class="property-control" placeholder="Example: application_status = Admitted" />
+            <div class="property-help">Prototype only. Production version would use a safe visual condition builder instead of free text.</div>
+          </div>
+          <div class="toggle-row"><div class="toggle-copy"><strong>Enable drill-down</strong><small>Open the underlying ERPNext records</small></div><button type="button" class="toggle on" data-toggle></button></div>
+          <div class="toggle-row"><div class="toggle-copy"><strong>Show source label</strong><small>Display evidence source below the visual</small></div><button type="button" class="toggle on" data-toggle></button></div>
+          <div class="toggle-row"><div class="toggle-copy"><strong>Require validation</strong><small>Prevent publishing until values are confirmed</small></div><button type="button" class="toggle on" data-toggle></button></div>
+        </form>
+        <div class="right-actions"><button class="danger-btn" id="deleteBtn">Delete</button><button class="primary-btn" id="applyBtn">Apply changes</button></div>
+      </aside>
+    </section>
+
+    <section id="migrationView" class="migration-view hidden">
+      <div class="migration-layout">
+        <aside class="migration-side">
+          <div class="panel-kicker">Migration workflow</div>
+          <h3 style="margin:5px 0 0;font-size:15px">Metabase connection</h3>
+          <div class="connection-box">
+            <input class="property-control" value="https://metabase.unitedceres.edu.sg" aria-label="Metabase URL" />
+            <input class="property-control" value="••••••••••••••••" aria-label="API key" />
+            <div class="connection-status">● Connection verified · read-only</div>
+            <button class="primary-btn" id="scanBtn">Scan dashboards</button>
+          </div>
+          <div class="stepper">
+            <div class="step complete"><div class="step-number">1</div><div class="step-copy"><strong>Connect</strong><small>Verify Metabase API access</small></div></div>
+            <div class="step complete"><div class="step-number">2</div><div class="step-copy"><strong>Import dashboard</strong><small>Read cards, queries and filters</small></div></div>
+            <div class="step active"><div class="step-number">3</div><div class="step-copy"><strong>Map sources</strong><small>Match tables and fields to ERPNext DocTypes</small></div></div>
+            <div class="step"><div class="step-number">4</div><div class="step-copy"><strong>Validate</strong><small>Compare Metabase and Sophia results</small></div></div>
+            <div class="step"><div class="step-number">5</div><div class="step-copy"><strong>Publish</strong><small>Create dashboard definitions</small></div></div>
+          </div>
+        </aside>
+
+        <main class="migration-main-card">
+          <div class="migration-hero">
+            <div class="hero-kicker">Metabase dashboard #128</div>
+            <h2>Admission Reports</h2>
+            <p>10 cards found · 8 automatically mapped · 2 require review. The importer has resolved direct tables and one saved-question dependency.</p>
+          </div>
+          <div class="migration-card-header">
+            <h3>Imported card inventory</h3>
+            <div class="migration-toolbar"><input class="property-control" style="width:210px" placeholder="Search cards"/><button class="soft-btn">Filter: All</button></div>
+          </div>
+          <div class="migration-table-wrap">
+            <table class="migration-table">
+              <thead><tr><th>Card</th><th>Metabase source</th><th>ERPNext mapping</th><th>Visual</th><th>Validation</th><th>Action</th></tr></thead>
+              <tbody>
+                <tr><td class="metric-name"><strong>No. of Student Applicants</strong><small>Question #2871</small></td><td>tabStudent Applicant</td><td>Student Applicant.name · COUNT</td><td>KPI</td><td><span class="mapping-pill ready">Matched</span></td><td><button class="soft-btn">Preview</button></td></tr>
+                <tr><td class="metric-name"><strong>No. of Shortlisted</strong><small>Question #2872</small></td><td>tabStudent Applicant</td><td>application_status = Approved</td><td>KPI</td><td><span class="mapping-pill ready">Matched</span></td><td><button class="soft-btn">Preview</button></td></tr>
+                <tr><td class="metric-name"><strong>No. of Enrolled Students</strong><small>Question #2873</small></td><td>tabStudent Applicant</td><td>application_status = Admitted</td><td>KPI</td><td><span class="mapping-pill ready">Matched</span></td><td><button class="soft-btn">Preview</button></td></tr>
+                <tr><td class="metric-name"><strong>Success Rate (%)</strong><small>Question #2874</small></td><td>Native SQL</td><td>Conditional percentage</td><td>KPI</td><td><span class="mapping-pill ready">Matched</span></td><td><button class="soft-btn">Preview</button></td></tr>
+                <tr><td class="metric-name"><strong>Student Applicants per Year</strong><small>Question #2875</small></td><td>tabStudent Applicant</td><td>academic_year · COUNT</td><td>Line</td><td><span class="mapping-pill ready">Matched</span></td><td><button class="soft-btn">Preview</button></td></tr>
+                <tr><td class="metric-name"><strong>Applicants per Country</strong><small>Question #2876</small></td><td>tabStudent Applicant</td><td>nationality · COUNT</td><td>Bar</td><td><span class="mapping-pill ready">Matched</span></td><td><button class="soft-btn">Preview</button></td></tr>
+                <tr><td class="metric-name"><strong>Number of Students per Agent</strong><small>Question #2877</small></td><td>tabStudent Applicant</td><td>agent · COUNT</td><td>Donut</td><td><span class="mapping-pill review">Criterion review</span></td><td><button class="soft-btn">Map</button></td></tr>
+                <tr><td class="metric-name"><strong>Duration from Counselling to Admission</strong><small>Question #2878</small></td><td>Admission + Applicant join</td><td>student_signed_date − pre_course_counseling</td><td>Line</td><td><span class="mapping-pill review">Rule confirmation</span></td><td><button class="soft-btn">Map</button></td></tr>
+                <tr><td class="metric-name"><strong>Financial Issue Resolution Rate</strong><small>Question #2879</small></td><td>Saved question #2810</td><td>Unresolved business definition</td><td>Gauge</td><td><span class="mapping-pill blocked">Blocked</span></td><td><button class="soft-btn">Review</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="migration-footer">
+            <div class="migration-summary"><span class="summary-chip">9 cards scanned</span><span class="summary-chip">6 matched</span><span class="summary-chip">2 review</span><span class="summary-chip">1 blocked</span></div>
+            <div style="display:flex;gap:8px"><button class="soft-btn" id="exportMappingBtn">Export mapping report</button><button class="primary-btn" id="createDashboardBtn">Create draft dashboard</button></div>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <section id="validationView" class="migration-view hidden">
+      <div class="migration-layout" style="grid-template-columns:1fr">
+        <main class="migration-main-card">
+          <div class="migration-hero">
+            <div class="hero-kicker">Result comparison</div>
+            <h2>Validation Centre</h2>
+            <p>Compare values returned by Metabase with values calculated by the Sophia runtime before publishing.</p>
+          </div>
+          <div class="migration-card-header"><h3>Admission Intelligence · validation results</h3><button class="primary-btn" id="runValidationBtn">Run validation</button></div>
+          <div class="migration-table-wrap">
+            <table class="migration-table">
+              <thead><tr><th>Metric</th><th>Metabase</th><th>Sophia</th><th>Difference</th><th>Status</th><th>Evidence</th></tr></thead>
+              <tbody id="validationRows">
+                <tr><td>No. of Student Applicants</td><td>62</td><td>62</td><td>0</td><td><span class="mapping-pill ready">Matched</span></td><td>Student Applicant</td></tr>
+                <tr><td>No. of Shortlisted</td><td>2</td><td>2</td><td>0</td><td><span class="mapping-pill ready">Matched</span></td><td>Status = Approved</td></tr>
+                <tr><td>No. of Enrolled Students</td><td>60</td><td>60</td><td>0</td><td><span class="mapping-pill ready">Matched</span></td><td>Status = Admitted</td></tr>
+                <tr><td>Success Rate</td><td>96.77%</td><td>96.77%</td><td>0</td><td><span class="mapping-pill ready">Matched</span></td><td>60 ÷ 62 × 100</td></tr>
+                <tr><td>Duration from Counselling to Admission</td><td>Varies</td><td>Varies</td><td>Review</td><td><span class="mapping-pill review">Needs rule confirmation</span></td><td>Date calculation</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="migration-footer"><div class="migration-summary"><span class="summary-chip">4 matched</span><span class="summary-chip">1 review</span></div><button class="success-btn">Approve validated metrics</button></div>
+        </main>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast">Saved</div>
+  <div id="modalHost"></div>
+
+  <script>
+    (() => {
+      const state = {
+        selectedCard: null,
+        dragPayload: null,
+        dirtyTimer: null,
+        cards: []
+      };
+
+      const $ = (selector, root = document) => root.querySelector(selector);
+      const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+      const dashboardGrid = $('#dashboardGrid');
+      const canvas = $('#dashboardCanvas');
+      const toast = $('#toast');
+      const propertiesForm = $('#propertiesForm');
+      const rightEmpty = $('#rightEmpty');
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add('show');
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => toast.classList.remove('show'), 2200);
+      }
+
+      function markDirty() {
+        $('#saveState').textContent = '● Saving changes…';
+        clearTimeout(state.dirtyTimer);
+        state.dirtyTimer = setTimeout(() => {
+          $('#saveState').textContent = '● All changes saved';
+        }, 700);
+      }
+
+      function getCardData(card) {
+        return {
+          id: card.dataset.cardId,
+          title: card.dataset.title || $('.card-title', card)?.textContent || 'Untitled component',
+          type: card.dataset.type || 'bar',
+          source: card.dataset.source || 'Student Applicant',
+          x: card.dataset.x || 'academic_year',
+          y: card.dataset.y || 'name',
+          aggregation: card.dataset.aggregation || 'count',
+          width: card.classList.contains('full') ? '12' : card.classList.contains('third') ? '4' : card.classList.contains('kpi-card') ? '3' : '6'
+        };
+      }
+
+      function refreshState() {
+        state.cards = $$('.dashboard-card', dashboardGrid).map(getCardData);
+      }
+
+      function selectCard(card) {
+        $$('.dashboard-card.selected', dashboardGrid).forEach(el => el.classList.remove('selected'));
+        card.classList.add('selected');
+        state.selectedCard = card;
+        rightEmpty.classList.add('hidden');
+        propertiesForm.classList.remove('hidden');
+        $('#propertiesHeading').textContent = card.dataset.title || $('.card-title', card)?.textContent || 'Component';
+        const data = getCardData(card);
+        $('#propTitle').value = data.title;
+        $('#propType').value = data.type;
+        $('#propWidth').value = data.width;
+        $('#propSource').value = [...$('#propSource').options].some(o => o.value === data.source) ? data.source : 'Multiple';
+        $('#propX').value = [...$('#propX').options].some(o => o.value === data.x) ? data.x : 'academic_year';
+        $('#propY').value = [...$('#propY').options].some(o => o.value === data.y) ? data.y : 'name';
+        $('#propAggregation').value = [...$('#propAggregation').options].some(o => o.value === data.aggregation) ? data.aggregation : 'count';
+      }
+
+      function widthClasses(card, width, type) {
+        card.classList.remove('kpi-card', 'full', 'third');
+        if (type === 'kpi' && width === '3') card.classList.add('kpi-card');
+        else if (width === '12') card.classList.add('full');
+        else if (width === '4') card.classList.add('third');
+      }
+
+      function genericSvg(type) {
+        if (type === 'bar') {
+          return `<svg class="chart-svg" viewBox="0 0 460 180"><line class="axis-line" x1="42" y1="145" x2="440" y2="145"/><line class="axis-line" x1="42" y1="20" x2="42" y2="145"/><rect class="bar" x="76" y="88" width="42" height="57"/><rect class="bar" x="148" y="55" width="42" height="90"/><rect class="bar" x="220" y="103" width="42" height="42"/><rect class="bar alt" x="292" y="38" width="42" height="107"/><rect class="bar" x="364" y="72" width="42" height="73"/><text class="chart-label" x="79" y="164">A</text><text class="chart-label" x="151" y="164">B</text><text class="chart-label" x="223" y="164">C</text><text class="chart-label" x="295" y="164">D</text><text class="chart-label" x="367" y="164">E</text></svg>`;
+        }
+        if (type === 'donut') {
+          return `<div class="donut-wrap"><div class="legend"><div class="legend-row"><span class="legend-dot" style="background:#3b76c5"></span><span>Group A</span><strong>40%</strong></div><div class="legend-row"><span class="legend-dot" style="background:#d6a73a"></span><span>Group B</span><strong>30%</strong></div><div class="legend-row"><span class="legend-dot" style="background:#d26767"></span><span>Group C</span><strong>20%</strong></div><div class="legend-row"><span class="legend-dot" style="background:#cbd5e1"></span><span>Other</span><strong>10%</strong></div></div><div class="donut"></div></div>`;
+        }
+        if (type === 'gauge') {
+          return `<div style="min-height:170px;display:grid;place-items:center"><div style="width:210px;height:105px;overflow:hidden;position:relative"><div style="width:210px;height:210px;border-radius:50%;background:conic-gradient(from 270deg,#d05a5a 0 35%,#e0b548 35% 45%,#3c956f 45% 50%,transparent 50% 100%);position:absolute"></div><div style="position:absolute;inset:34px 34px auto;height:142px;border-radius:50%;background:#fff"></div><strong style="position:absolute;left:0;right:0;bottom:8px;text-align:center;font-size:28px">100%</strong></div></div>`;
+        }
+        if (type === 'table' || type === 'insight') {
+          return `<table class="insight-table"><thead><tr><th>Item</th><th>Value</th><th>Status</th></tr></thead><tbody><tr><td>Example metric</td><td>62</td><td><span class="status-pill available">Available</span></td></tr><tr><td>Business rule</td><td>Requires confirmation</td><td><span class="status-pill partial">Partial</span></td></tr></tbody></table>`;
+        }
+        if (type === 'funnel') {
+          return `<div style="display:grid;gap:6px;padding:10px 40px"><div style="height:30px;background:#3b76c5;border-radius:7px;color:#fff;display:grid;place-items:center">Applicants · 62</div><div style="height:30px;background:#5f8fd0;border-radius:7px;color:#fff;display:grid;place-items:center;margin:0 24px">Approved · 61</div><div style="height:30px;background:#d6a73a;border-radius:7px;color:#17263d;display:grid;place-items:center;margin:0 48px">Admitted · 60</div></div>`;
+        }
+        return `<svg class="chart-svg" viewBox="0 0 460 180"><line class="axis-line" x1="42" y1="145" x2="440" y2="145"/><line class="axis-line" x1="42" y1="20" x2="42" y2="145"/><line class="grid-line" x1="42" y1="115" x2="440" y2="115"/><line class="grid-line" x1="42" y1="85" x2="440" y2="85"/><polyline class="chart-line" points="65,120 135,92 205,105 275,66 345,78 415,35"/><circle class="chart-dot" cx="65" cy="120" r="4"/><circle class="chart-dot" cx="135" cy="92" r="4"/><circle class="chart-dot" cx="205" cy="105" r="4"/><circle class="chart-dot" cx="275" cy="66" r="4"/><circle class="chart-dot" cx="345" cy="78" r="4"/><circle class="chart-dot" cx="415" cy="35" r="4"/></svg>`;
+      }
+
+      function createCard(type = 'bar', source = 'Student Applicant') {
+        const id = `card-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const titleByType = {
+          kpi: 'New KPI', line: 'New Trend Chart', bar: 'New Comparison Chart', donut: 'New Distribution Chart',
+          table: 'New Data Table', gauge: 'New Gauge', funnel: 'New Funnel', insight: 'New Insight Panel'
+        };
+        const title = titleByType[type] || 'New Visual';
+        const card = document.createElement('article');
+        card.className = `dashboard-card${type === 'kpi' ? ' kpi-card' : ''}`;
+        card.draggable = true;
+        Object.assign(card.dataset, { cardId: id, type, source, title, x: 'academic_year', y: 'name', aggregation: 'count' });
+        if (type === 'kpi') {
+          card.innerHTML = `<div class="kpi-body"><div class="kpi-head"><div><div class="card-title">${title}</div><div class="card-subtitle">${source}</div></div><div class="kpi-icon">#</div></div><div class="kpi-value">—</div><div class="kpi-caption">Configure the calculation</div></div>`;
+        } else {
+          card.innerHTML = `<div class="card-header"><div class="card-title-wrap"><div class="card-title">${title}</div><div class="card-subtitle">${source}</div></div><button class="card-menu">⋯</button></div><div class="card-body">${genericSvg(type)}</div><div class="card-footer"><span>Source: ${source}</span><span>Draft</span></div>`;
+        }
+        dashboardGrid.insertBefore(card, $('#dropPlaceholder'));
+        bindCard(card);
+        selectCard(card);
+        refreshState();
+        markDirty();
+        showToast(`${title} added to the canvas`);
+        return card;
+      }
+
+      function bindCard(card) {
+        card.addEventListener('click', event => {
+          if (event.target.closest('button')) return;
+          selectCard(card);
+        });
+        card.addEventListener('dragstart', event => {
+          state.dragPayload = { kind: 'existing-card', id: card.dataset.cardId };
+          card.classList.add('dragging');
+          event.dataTransfer.effectAllowed = 'move';
+        });
+        card.addEventListener('dragend', () => card.classList.remove('dragging'));
+        card.addEventListener('dragover', event => event.preventDefault());
+        card.addEventListener('drop', event => {
+          event.preventDefault();
+          const dragged = $('.dashboard-card.dragging', dashboardGrid);
+          if (dragged && dragged !== card) {
+            dashboardGrid.insertBefore(dragged, card);
+            refreshState();
+            markDirty();
+          }
+        });
+      }
+
+      function applyProperties() {
+        const card = state.selectedCard;
+        if (!card) return showToast('Select a component first');
+        const title = $('#propTitle').value.trim() || 'Untitled component';
+        const type = $('#propType').value;
+        const width = $('#propWidth').value;
+        const source = $('#propSource').value;
+        card.dataset.title = title;
+        card.dataset.type = type;
+        card.dataset.source = source;
+        card.dataset.x = $('#propX').value;
+        card.dataset.y = $('#propY').value;
+        card.dataset.aggregation = $('#propAggregation').value;
+        widthClasses(card, width, type);
+        const titleEl = $('.card-title', card);
+        if (titleEl) titleEl.textContent = title;
+        const subtitleEl = $('.card-subtitle', card);
+        if (subtitleEl) subtitleEl.textContent = source;
+        const footerSource = $('.card-footer span', card);
+        if (footerSource) footerSource.textContent = `Source: ${source}`;
+        if (type !== 'kpi') {
+          const body = $('.card-body', card);
+          if (body) body.innerHTML = genericSvg(type);
+        }
+        $('#propertiesHeading').textContent = title;
+        refreshState();
+        markDirty();
+        showToast('Component updated');
+      }
+
+      function removeSelected() {
+        if (!state.selectedCard) return showToast('Select a component first');
+        state.selectedCard.remove();
+        state.selectedCard = null;
+        rightEmpty.classList.remove('hidden');
+        propertiesForm.classList.add('hidden');
+        refreshState();
+        markDirty();
+        showToast('Component removed');
+      }
+
+      function duplicateSelected() {
+        if (!state.selectedCard) return showToast('Select a component first');
+        const clone = state.selectedCard.cloneNode(true);
+        clone.dataset.cardId = `card-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        clone.dataset.title = `${clone.dataset.title || 'Component'} Copy`;
+        const titleEl = $('.card-title', clone);
+        if (titleEl) titleEl.textContent = clone.dataset.title;
+        dashboardGrid.insertBefore(clone, state.selectedCard.nextSibling);
+        bindCard(clone);
+        selectCard(clone);
+        refreshState();
+        markDirty();
+        showToast('Component duplicated');
+      }
+
+      function dashboardConfig() {
+        refreshState();
+        return {
+          dashboard: {
+            name: $('#heroTitle').textContent,
+            criterion: $('#criterionSelect').value,
+            subcriterion: $('#subcriterionSelect').value,
+            subtitle: $('#heroSubtitle').textContent,
+            status: 'Draft'
+          },
+          filters: ['academic_year', 'program', 'intake', 'application_status', 'nationality'],
+          visuals: state.cards
+        };
+      }
+
+      function download(filename, text, type = 'application/json') {
+        const blob = new Blob([text], { type });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      function pythonFromConfig(config) {
+        const safeJson = JSON.stringify(config, null, 2).replace(/'''/g, "''' + \"'\" + '''");
+        return `# Generated by Sophia Analytics Studio Prototype\n# This is an illustrative export, not a production-ready Frappe Server Script.\n\nimport json\n\nDASHBOARD_DEFINITION = json.loads(r'''${safeJson}''')\n\ndef get_dashboard_definition():\n    return DASHBOARD_DEFINITION\n`;
+      }
+
+      function openModal(title, content, downloadAction) {
+        const host = $('#modalHost');
+        host.innerHTML = `<div class="modal-backdrop"><div class="modal"><div class="modal-header"><h3>${title}</h3><button class="icon-btn" data-close-modal>×</button></div><div class="modal-body"><div class="code-box"></div></div><div class="modal-footer"><button class="soft-btn" data-close-modal>Close</button><button class="primary-btn" id="modalDownloadBtn">Download</button></div></div></div>`;
+        $('.code-box', host).textContent = content;
+        $$('[data-close-modal]', host).forEach(btn => btn.addEventListener('click', () => host.innerHTML = ''));
+        $('#modalDownloadBtn').addEventListener('click', downloadAction);
+      }
+
+      $$('.dashboard-card', dashboardGrid).forEach(bindCard);
+      selectCard($('[data-card-id="applicants-year"]', dashboardGrid));
+      refreshState();
+
+      $$('[data-toggle]').forEach(toggle => toggle.addEventListener('click', () => toggle.classList.toggle('on')));
+      $('#applyBtn').addEventListener('click', applyProperties);
+      $('#deleteBtn').addEventListener('click', removeSelected);
+      $('#duplicateBtn').addEventListener('click', duplicateSelected);
+
+      $('#jsonBtn').addEventListener('click', () => {
+        const content = JSON.stringify(dashboardConfig(), null, 2);
+        openModal('Dashboard configuration JSON', content, () => download('admission_intelligence_dashboard.json', content));
+      });
+
+      $('#pythonBtn').addEventListener('click', () => {
+        const content = pythonFromConfig(dashboardConfig());
+        openModal('Generated Python export', content, () => download('admission_intelligence_generated.py', content, 'text/x-python'));
+      });
+
+      $('#previewBtn').addEventListener('click', () => showToast('Preview mode opened in the current canvas'));
+      $('#publishBtn').addEventListener('click', () => showToast('Draft published to Sophia in prototype mode'));
+      $('#addSourceBtn').addEventListener('click', () => showToast('Production version would open the DocType mapping wizard'));
+
+      $$('.chart-palette-item').forEach(item => {
+        item.addEventListener('dragstart', event => {
+          state.dragPayload = { kind: 'new-chart', type: item.dataset.chartType };
+          event.dataTransfer.setData('text/plain', item.dataset.chartType);
+        });
+        item.addEventListener('dblclick', () => createCard(item.dataset.chartType));
+      });
+
+      $$('.source-item').forEach(item => {
+        item.addEventListener('dragstart', event => {
+          state.dragPayload = { kind: 'new-source', source: item.dataset.source };
+          event.dataTransfer.setData('text/plain', item.dataset.source);
+        });
+        item.addEventListener('dblclick', () => createCard('bar', item.dataset.source));
+      });
+
+      canvas.addEventListener('dragover', event => {
+        event.preventDefault();
+        canvas.classList.add('drag-over');
+      });
+      canvas.addEventListener('dragleave', event => {
+        if (!canvas.contains(event.relatedTarget)) canvas.classList.remove('drag-over');
+      });
+      canvas.addEventListener('drop', event => {
+        event.preventDefault();
+        canvas.classList.remove('drag-over');
+        const existing = $('.dashboard-card.dragging', dashboardGrid);
+        if (existing) return;
+        if (state.dragPayload?.kind === 'new-chart') createCard(state.dragPayload.type);
+        if (state.dragPayload?.kind === 'new-source') createCard('bar', state.dragPayload.source);
+        state.dragPayload = null;
+      });
+
+      $('#sourceSearch').addEventListener('input', event => {
+        const value = event.target.value.toLowerCase();
+        $$('.source-item').forEach(item => item.classList.toggle('hidden', !item.textContent.toLowerCase().includes(value)));
+      });
+
+      $('#globalSearch').addEventListener('keydown', event => {
+        if (event.key === 'Enter') showToast(`Search prototype: ${event.target.value || 'all items'}`);
+      });
+
+      $$('.workspace-tab').forEach(tab => tab.addEventListener('click', () => {
+        $$('.workspace-tab').forEach(t => t.classList.toggle('active', t === tab));
+        const view = tab.dataset.workspaceTab;
+        $('#builderView').classList.toggle('hidden', view !== 'builder');
+        $('#migrationView').classList.toggle('hidden', view !== 'migration');
+        $('#validationView').classList.toggle('hidden', view !== 'validation');
+      }));
+
+      $('#scanBtn').addEventListener('click', () => showToast('10 Metabase cards found in prototype scan'));
+      $('#exportMappingBtn').addEventListener('click', () => {
+        const report = 'Card,Metabase Source,ERPNext Mapping,Status\nNo. of Student Applicants,tabStudent Applicant,Student Applicant,Matched\nDuration from Counselling to Admission,Admission + Applicant join,Date calculation,Review\nFinancial Issue Resolution Rate,Saved Question #2810,Unresolved,Blocked\n';
+        download('metabase_mapping_report.csv', report, 'text/csv');
+        showToast('Mapping report exported');
+      });
+      $('#createDashboardBtn').addEventListener('click', () => {
+        $$('.workspace-tab').find(t => t.dataset.workspaceTab === 'builder').click();
+        showToast('Imported cards added to the draft dashboard');
+      });
+      $('#runValidationBtn').addEventListener('click', () => showToast('Validation completed: 4 matched, 1 needs review'));
+    })();
+  </script>
+</body>
+</html>

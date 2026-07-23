@@ -1,0 +1,14 @@
+{
+  "doctype": "Page",
+  "name": "dashboard-studio",
+  "page_name": "dashboard-studio",
+  "module": "Dashboard Studio",
+  "standard": "Yes",
+  "system_page": 0,
+  "title": "Dashboard Studio",
+  "roles": [
+    {
+      "role": "System Manager"
+    }
+  ]
+}

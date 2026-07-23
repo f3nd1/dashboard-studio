@@ -1,0 +1,148 @@
+{
+  "actions": [],
+  "allow_rename": 1,
+  "creation": "2026-07-23 00:00:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "metric_name",
+    "description",
+    "definition_section",
+    "dataset",
+    "dimension_field",
+    "measure_field",
+    "aggregation",
+    "conditions_json",
+    "formula_json",
+    "display_section",
+    "unit",
+    "decimal_places",
+    "evidence_level",
+    "classification",
+    "subclassification",
+    "status"
+  ],
+  "fields": [
+    {
+      "fieldname": "metric_name",
+      "fieldtype": "Data",
+      "label": "Metric Name",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "description",
+      "fieldtype": "Small Text",
+      "label": "Description"
+    },
+    {
+      "fieldname": "definition_section",
+      "fieldtype": "Section Break",
+      "label": "Metric Definition"
+    },
+    {
+      "fieldname": "dataset",
+      "fieldtype": "Link",
+      "label": "Dataset",
+      "options": "Dataset Definition",
+      "reqd": 1
+    },
+    {
+      "fieldname": "dimension_field",
+      "fieldtype": "Data",
+      "label": "Dimension Field"
+    },
+    {
+      "fieldname": "measure_field",
+      "fieldtype": "Data",
+      "label": "Measure Field"
+    },
+    {
+      "fieldname": "aggregation",
+      "fieldtype": "Select",
+      "label": "Aggregation",
+      "options": "count\nsum\naverage\nminimum\nmaximum\npercentage",
+      "reqd": 1
+    },
+    {
+      "fieldname": "conditions_json",
+      "fieldtype": "Code",
+      "label": "Conditions JSON",
+      "options": "JSON"
+    },
+    {
+      "fieldname": "formula_json",
+      "fieldtype": "Code",
+      "label": "Formula JSON",
+      "options": "JSON"
+    },
+    {
+      "fieldname": "display_section",
+      "fieldtype": "Section Break",
+      "label": "Display and Evidence"
+    },
+    {
+      "fieldname": "unit",
+      "fieldtype": "Data",
+      "label": "Unit"
+    },
+    {
+      "default": "0",
+      "fieldname": "decimal_places",
+      "fieldtype": "Int",
+      "label": "Decimal Places"
+    },
+    {
+      "fieldname": "evidence_level",
+      "fieldtype": "Select",
+      "label": "Evidence Level",
+      "options": "Direct Evidence\nCalculated Evidence\nProxy Indicator\nData Completeness\nUnsupported"
+    },
+    {
+      "fieldname": "classification",
+      "fieldtype": "Data",
+      "label": "Classification"
+    },
+    {
+      "fieldname": "subclassification",
+      "fieldtype": "Data",
+      "label": "Subclassification"
+    },
+    {
+      "default": "Draft",
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "Draft\nActive\nInactive",
+      "reqd": 1
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 0,
+  "links": [],
+  "modified": "2026-07-23 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Dashboard Studio",
+  "name": "Metric Definition",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1,
+  "autoname": "field:metric_name",
+  "title_field": "metric_name"
+}

@@ -1,0 +1,4 @@
+include README.md
+include LICENSE
+recursive-include dashboard_studio *.css *.csv *.html *.ico *.js *.json *.md *.png *.py *.svg *.txt
+recursive-exclude dashboard_studio *.pyc

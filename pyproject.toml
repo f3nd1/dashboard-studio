@@ -1,0 +1,22 @@
+[build-system]
+requires = ["flit_core>=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "dashboard_studio"
+authors = [
+    { name = "United Ceres College Pte. Ltd.", email = "replace-me@example.invalid" }
+]
+description = "Visual dashboard migration, validation, design, and publishing for Frappe/ERPNext"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = []
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

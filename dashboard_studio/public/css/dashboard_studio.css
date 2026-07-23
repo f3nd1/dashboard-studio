@@ -1,0 +1,41 @@
+.dashboard-studio-shell {
+  --ds-border: #dfe3e8;
+  --ds-muted: #667085;
+  --ds-surface: #ffffff;
+  --ds-background: #f7f8fa;
+  --ds-primary: #183153;
+  background: var(--ds-background);
+  min-height: 70vh;
+  padding: 20px;
+}
+
+.dashboard-studio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.dashboard-studio-card {
+  background: var(--ds-surface);
+  border: 1px solid var(--ds-border);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.dashboard-studio-card h3 {
+  margin: 0 0 8px;
+  color: var(--ds-primary);
+}
+
+.dashboard-studio-card p {
+  color: var(--ds-muted);
+  margin: 0 0 14px;
+}
+
+.dashboard-studio-status {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--ds-border);
+  border-radius: 10px;
+  background: var(--ds-surface);
+}

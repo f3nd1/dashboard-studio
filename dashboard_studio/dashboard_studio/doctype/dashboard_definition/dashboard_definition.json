@@ -1,0 +1,148 @@
+{
+  "actions": [],
+  "allow_rename": 1,
+  "creation": "2026-07-23 00:00:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "dashboard_name",
+    "description",
+    "classification_section",
+    "classification",
+    "subclassification",
+    "lifecycle_section",
+    "status",
+    "version",
+    "definition_section",
+    "layout_json",
+    "default_filters_json",
+    "components_section",
+    "components",
+    "publication_section",
+    "published_by",
+    "published_on"
+  ],
+  "fields": [
+    {
+      "fieldname": "dashboard_name",
+      "fieldtype": "Data",
+      "label": "Dashboard Name",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "description",
+      "fieldtype": "Small Text",
+      "label": "Description"
+    },
+    {
+      "fieldname": "classification_section",
+      "fieldtype": "Section Break",
+      "label": "Classification"
+    },
+    {
+      "fieldname": "classification",
+      "fieldtype": "Data",
+      "label": "Classification"
+    },
+    {
+      "fieldname": "subclassification",
+      "fieldtype": "Data",
+      "label": "Subclassification"
+    },
+    {
+      "fieldname": "lifecycle_section",
+      "fieldtype": "Section Break",
+      "label": "Lifecycle"
+    },
+    {
+      "default": "Draft",
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "Draft\nTechnical Review\nQA Approval\nPublished\nArchived",
+      "reqd": 1
+    },
+    {
+      "default": "0.1",
+      "fieldname": "version",
+      "fieldtype": "Data",
+      "label": "Version",
+      "reqd": 1
+    },
+    {
+      "fieldname": "definition_section",
+      "fieldtype": "Section Break",
+      "label": "Definition"
+    },
+    {
+      "fieldname": "layout_json",
+      "fieldtype": "Code",
+      "label": "Layout JSON",
+      "options": "JSON"
+    },
+    {
+      "fieldname": "default_filters_json",
+      "fieldtype": "Code",
+      "label": "Default Filters JSON",
+      "options": "JSON"
+    },
+    {
+      "fieldname": "components_section",
+      "fieldtype": "Section Break",
+      "label": "Components"
+    },
+    {
+      "fieldname": "components",
+      "fieldtype": "Table",
+      "label": "Dashboard Components",
+      "options": "Dashboard Component"
+    },
+    {
+      "fieldname": "publication_section",
+      "fieldtype": "Section Break",
+      "label": "Publication"
+    },
+    {
+      "fieldname": "published_by",
+      "fieldtype": "Link",
+      "label": "Published By",
+      "options": "User",
+      "read_only": 1
+    },
+    {
+      "fieldname": "published_on",
+      "fieldtype": "Datetime",
+      "label": "Published On",
+      "read_only": 1
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 0,
+  "links": [],
+  "modified": "2026-07-23 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Dashboard Studio",
+  "name": "Dashboard Definition",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1,
+  "autoname": "field:dashboard_name",
+  "title_field": "dashboard_name"
+}

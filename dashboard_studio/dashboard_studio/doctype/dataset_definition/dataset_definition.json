@@ -1,0 +1,124 @@
+{
+  "actions": [],
+  "allow_rename": 1,
+  "creation": "2026-07-23 00:00:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "dataset_name",
+    "description",
+    "source_section",
+    "source_doctype",
+    "child_doctype",
+    "parent_field",
+    "security_section",
+    "allowed_fields_json",
+    "restricted_fields_json",
+    "default_conditions_json",
+    "drilldown_fields_json",
+    "status"
+  ],
+  "fields": [
+    {
+      "fieldname": "dataset_name",
+      "fieldtype": "Data",
+      "label": "Dataset Name",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "description",
+      "fieldtype": "Small Text",
+      "label": "Description"
+    },
+    {
+      "fieldname": "source_section",
+      "fieldtype": "Section Break",
+      "label": "Source"
+    },
+    {
+      "fieldname": "source_doctype",
+      "fieldtype": "Link",
+      "label": "Source DocType",
+      "options": "DocType",
+      "reqd": 1
+    },
+    {
+      "fieldname": "child_doctype",
+      "fieldtype": "Link",
+      "label": "Child DocType",
+      "options": "DocType"
+    },
+    {
+      "fieldname": "parent_field",
+      "fieldtype": "Data",
+      "label": "Parent Field"
+    },
+    {
+      "fieldname": "security_section",
+      "fieldtype": "Section Break",
+      "label": "Field Controls"
+    },
+    {
+      "fieldname": "allowed_fields_json",
+      "fieldtype": "Code",
+      "label": "Allowed Fields JSON",
+      "options": "JSON",
+      "reqd": 1
+    },
+    {
+      "fieldname": "restricted_fields_json",
+      "fieldtype": "Code",
+      "label": "Restricted Fields JSON",
+      "options": "JSON"
+    },
+    {
+      "fieldname": "default_conditions_json",
+      "fieldtype": "Code",
+      "label": "Default Conditions JSON",
+      "options": "JSON"
+    },
+    {
+      "fieldname": "drilldown_fields_json",
+      "fieldtype": "Code",
+      "label": "Drill-down Fields JSON",
+      "options": "JSON"
+    },
+    {
+      "default": "Draft",
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "Draft\nActive\nInactive",
+      "reqd": 1
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 0,
+  "links": [],
+  "modified": "2026-07-23 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Dashboard Studio",
+  "name": "Dataset Definition",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1,
+  "autoname": "field:dataset_name",
+  "title_field": "dataset_name"
+}

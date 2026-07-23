@@ -1,0 +1,31 @@
+import json
+
+import frappe
+
+from dashboard_studio.analytics.query_engine import build_query_plan
+
+
+@frappe.whitelist()
+def build_metric_plan(metric_name: str):
+    frappe.only_for("System Manager")
+    metric = frappe.get_doc("Metric Definition", metric_name)
+    dataset = frappe.get_doc("Dataset Definition", metric.dataset)
+
+    metric_config = {
+        "dimension": metric.dimension_field,
+        "measure": metric.measure_field,
+        "aggregation": metric.aggregation,
+        "conditions": _load_json(metric.conditions_json, []),
+    }
+    dataset_config = {
+        "source_doctype": dataset.source_doctype,
+        "allowed_fields": _load_json(dataset.allowed_fields_json, []),
+        "restricted_fields": _load_json(dataset.restricted_fields_json, []),
+    }
+    return build_query_plan(metric_config, dataset_config)
+
+
+def _load_json(value, default):
+    if not value:
+        return default
+    return json.loads(value)

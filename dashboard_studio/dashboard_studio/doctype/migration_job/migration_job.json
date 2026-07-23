@@ -1,0 +1,110 @@
+{
+  "actions": [],
+  "allow_rename": 1,
+  "creation": "2026-07-23 00:00:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "migration_name",
+    "source_section",
+    "source_platform",
+    "source_dashboard_id",
+    "status",
+    "definition_section",
+    "imported_definition_json",
+    "validation_summary_json",
+    "mapping_section",
+    "mappings"
+  ],
+  "fields": [
+    {
+      "fieldname": "migration_name",
+      "fieldtype": "Data",
+      "label": "Migration Name",
+      "reqd": 1,
+      "unique": 1
+    },
+    {
+      "fieldname": "source_section",
+      "fieldtype": "Section Break",
+      "label": "Source"
+    },
+    {
+      "default": "Metabase",
+      "fieldname": "source_platform",
+      "fieldtype": "Select",
+      "label": "Source Platform",
+      "options": "Metabase\nManual SQL\nExisting Dashboard\nOther",
+      "reqd": 1
+    },
+    {
+      "fieldname": "source_dashboard_id",
+      "fieldtype": "Data",
+      "label": "Source Dashboard ID"
+    },
+    {
+      "default": "Draft",
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "Draft\nImported\nMapping\nValidation\nReview\nCompleted\nFailed",
+      "reqd": 1
+    },
+    {
+      "fieldname": "definition_section",
+      "fieldtype": "Section Break",
+      "label": "Imported Definition"
+    },
+    {
+      "fieldname": "imported_definition_json",
+      "fieldtype": "Code",
+      "label": "Imported Definition JSON",
+      "options": "JSON"
+    },
+    {
+      "fieldname": "validation_summary_json",
+      "fieldtype": "Code",
+      "label": "Validation Summary JSON",
+      "options": "JSON"
+    },
+    {
+      "fieldname": "mapping_section",
+      "fieldtype": "Section Break",
+      "label": "Mappings"
+    },
+    {
+      "fieldname": "mappings",
+      "fieldtype": "Table",
+      "label": "Migration Mappings",
+      "options": "Migration Mapping"
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 0,
+  "links": [],
+  "modified": "2026-07-23 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Dashboard Studio",
+  "name": "Migration Job",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1,
+  "autoname": "field:migration_name",
+  "title_field": "migration_name"
+}
