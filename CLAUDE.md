@@ -1,4 +1,6 @@
-# Claude Code Instructions — Dashboard Studio
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Purpose
 
@@ -79,13 +81,38 @@ For each task:
 
 ## Commands
 
-Repository-only checks:
-
 ```bash
-python scripts/validate_repository.py
+# Repository-only checks (required files, JSON/Python syntax, secret scan)
+python scripts/validate_repository.py   # also: make validate
+
+# Tests (plain unittest, no Frappe site needed — validators/query engine are pure Python)
+python -m unittest discover -s dashboard_studio/tests
+# Single test
+python -m unittest dashboard_studio.tests.test_validators.TestMetricValidation.test_grouped_count_plan
+
+# Lint (config in pyproject.toml: ruff, line-length 110, py310)
+ruff check dashboard_studio scripts
 ```
 
-Frappe checks must be adapted to the local Bench and site name. Never invent a production site name.
+Do not lint `reference/` — those are Frappe Server Scripts where `frappe` is an injected global; ruff reports hundreds of false F821 errors there.
+
+Frappe checks (`bench` commands, see `docs/DEVELOPMENT_SETUP.md`) must be adapted to the local Bench and site name. Never invent a production site name. There is no Bench in this repository — the app installs into an external Frappe Bench.
+
+## Code structure
+
+Frappe app layout: the Python package is `dashboard_studio/`, and the Frappe *module* of the same name is nested at `dashboard_studio/dashboard_studio/` (standard Frappe convention).
+
+Runtime flow: DocType JSON configs → `analytics/validators.py` (`validate_metric_config`, allowlist/restricted-field enforcement) → `analytics/query_engine.py` (`build_query_plan`, produces a non-executable plan dict) → `execute_query_plan` (intentionally raises `NotImplementedError` — Phase 1 stops at the plan; execution must be added inside Frappe with permission checks and tests).
+
+- `dashboard_studio/dashboard_studio/doctype/` — managed definitions: Dashboard Definition, Dashboard Component (child table), Dataset Definition, Metric Definition, Migration Job/Mapping
+- `dashboard_studio/api/` — whitelisted endpoints (dashboard, metrics, metadata, migration, publishing, health)
+- `dashboard_studio/analytics/` — validators, query-plan builder, result formatter
+- `dashboard_studio/integrations/metabase/` — client/parser/mapper stubs for import
+- `dashboard_studio/integrations/ai/` — AI provider abstraction (proposals only, server-validated)
+- `dashboard_studio/dashboard_studio/page/dashboard_studio/` — Studio Desk Page
+- `prototypes/` — HTML UX references only, not production code
+
+This is a Phase 1 starter scaffold: query execution, Metabase API import, AI provider connection, and drag-and-drop editing are deliberately not implemented (see `PROJECT_STATUS.md`).
 
 ## Security boundaries
 
