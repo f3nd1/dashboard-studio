@@ -48,8 +48,10 @@ def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
     or comma-separated) constrains which fields it may reference. If it is empty,
     the metric is REFUSED — no allowlist means no execution, closing the gap where
     the old path's Dataset allowlist had no DS equivalent. When set, every
-    referenced field (dimension, measure, filter fields) must be listed, enforced
-    by validate_metric_config's existing subset check.
+    referenced field (dimension, filter fields, and an explicit value_field) must
+    be listed. The one exemption: a pure count's default measure ``name`` (the
+    docname / count mechanism, not business data) is auto-allowed so count metrics
+    need not list it.
     """
 
     status = (metric.get("status") or "").strip()
@@ -96,15 +98,25 @@ def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
             "refusing to execute (block-by-default). List the fields it may reference."
         )
 
+    value_field = (metric.get("value_field") or "").strip()
+    measure = value_field or "name"
+    # A pure count's measure is Frappe's docname ("name"), the count mechanism —
+    # not business data — so exempt just that one field from the allowlist rather
+    # than making every count metric list "name". Only when value_field is unset;
+    # an explicit value_field must still be allowlisted.
+    effective_allowed = list(allowed_fields)
+    if not value_field and "name" not in effective_allowed:
+        effective_allowed.append("name")
+
     metric_config = {
         "dimension": dimension,
-        "measure": metric.get("value_field") or "name",
+        "measure": measure,
         "aggregation": "count",
         "conditions": conditions,
     }
     dataset_config = {
         "source_doctype": source_doctype,
-        "allowed_fields": allowed_fields,
+        "allowed_fields": effective_allowed,
         "restricted_fields": [],
     }
     return build_query_plan(metric_config, dataset_config)

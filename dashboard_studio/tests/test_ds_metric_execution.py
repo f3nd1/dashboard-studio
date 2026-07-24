@@ -49,9 +49,10 @@ class TestDSMetricExecution(unittest.TestCase):
             "calculation_type": "Count",
             "source_doctype": "Student Applicant",
             "group_by_field": "academic_year",
-            "value_field": "name",
+            "value_field": "",
             # Block-by-default allowlist: every referenced field must be listed.
-            "allowed_fields": "academic_year\nname\napplication_status",
+            # "name" is NOT listed — a pure count auto-allows it (Gap 2 fix).
+            "allowed_fields": "academic_year\napplication_status",
             "metric_filters": [],
         }
 
@@ -141,13 +142,12 @@ class TestDSMetricExecution(unittest.TestCase):
 
     def test_out_of_allowlist_field_is_rejected(self):
         # group_by references academic_year, but the allowlist omits it.
-        metric = dict(self.metric, allowed_fields="name")
+        metric = dict(self.metric, group_by_field="academic_year", allowed_fields="programme")
         with self.assertRaises(Exception):
             build_plan_from_ds_metric(metric)
 
     def test_comma_separated_allowlist_is_parsed(self):
-        metric = dict(self.metric, allowed_fields="academic_year, name")
-        # academic_year + name are allowlisted -> runs fine.
+        metric = dict(self.metric, allowed_fields="academic_year, application_status")
         self.assertEqual(
             self._run(metric),
             [
@@ -156,6 +156,38 @@ class TestDSMetricExecution(unittest.TestCase):
                 {"academic_year": "2024", "count": 1},
             ],
         )
+
+    # ---- Gap 2: count auto-allows the default measure "name" ----
+    def test_count_with_no_value_field_needs_no_name_in_allowlist(self):
+        # Only the group-by field is allowlisted; "name" is NOT listed, yet the
+        # count runs because a pure count's default measure is auto-allowed.
+        metric = dict(self.metric, value_field="", allowed_fields="academic_year", metric_filters=[])
+        self.assertEqual(
+            self._run(metric),
+            [
+                {"academic_year": "2022", "count": 2},
+                {"academic_year": "2023", "count": 3},
+                {"academic_year": "2024", "count": 1},
+            ],
+        )
+
+    def test_explicit_value_field_must_still_be_allowlisted(self):
+        # The exemption is narrow: an explicit value_field is NOT auto-allowed.
+        metric = dict(
+            self.metric, value_field="score", allowed_fields="academic_year", metric_filters=[]
+        )
+        with self.assertRaises(Exception):
+            build_plan_from_ds_metric(metric)
+
+    def test_filter_field_still_enforced_despite_name_exemption(self):
+        # The "name" exemption must not leak into filters — an out-of-scope filter
+        # field is still blocked.
+        metric = dict(
+            self.metric, value_field="", allowed_fields="academic_year",
+            metric_filters=[{"fieldname": "secret_field", "operator": "=", "value": "x", "filter_type": "Static"}],
+        )
+        with self.assertRaises(Exception):
+            build_plan_from_ds_metric(metric)
 
 
 if __name__ == "__main__":
