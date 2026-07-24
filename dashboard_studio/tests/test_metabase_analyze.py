@@ -69,6 +69,25 @@ class TestAnalyzeSingleStatements(unittest.TestCase):
         self.assertFalse(r["supported"])
         self.assertTrue(any("multiple joins" in reason for reason in r["reasons"]))
 
+    def test_or_clause_flagged_not_mangled(self):
+        # OR cannot map to the engine's AND-only conditions; must be flagged,
+        # never swallowed into a filter value.
+        r = analyze_sql(
+            "SELECT COUNT(*) FROM `tabStudent Applicant` "
+            "WHERE `tabStudent Applicant`.`application_status` = 'Admitted' "
+            "OR `tabStudent Applicant`.`application_status` = 'Approved';"
+        )
+        self.assertFalse(r["supported"])
+        self.assertTrue(any("OR" in reason for reason in r["reasons"]), r["reasons"])
+        self.assertEqual(r["filters"], [])
+
+    def test_unparsable_where_condition_flagged_not_dropped(self):
+        # A function call in WHERE doesn't fit the condition shape; dropping it
+        # silently would migrate a metric that counts ALL rows. Must be flagged.
+        r = analyze_sql("SELECT COUNT(*) FROM `tabX` WHERE LOWER(status) = 'admitted';")
+        self.assertFalse(r["supported"])
+        self.assertTrue(any("WHERE" in reason for reason in r["reasons"]), r["reasons"])
+
     def test_case_expression_flagged(self):
         r = analyze_sql(
             "SELECT SUM(CASE WHEN `tabStudent Applicant`.`application_status`='Admitted' "

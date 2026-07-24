@@ -42,23 +42,35 @@ def _strip_qualifier(expr: str) -> str:
     return expr.strip().strip("`").strip()
 
 
-def _parse_filters(sql: str) -> list[dict]:
+def _parse_filters(sql: str) -> tuple[list[dict], list[str]]:
+    """Parse the WHERE clause into filters, plus reasons for anything unparsable.
+
+    Flag-don't-guess: an OR clause or a condition that doesn't fit the simple
+    ``field <op> value`` shape makes the whole query unsupported — a dropped or
+    mangled condition would migrate a metric that counts the wrong rows.
+    """
     m = re.search(
         r"\bWHERE\b(.+?)(?=\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
         sql,
         re.IGNORECASE | re.DOTALL,
     )
     if not m:
-        return []
-    filters = []
+        return [], []
+    clause = m.group(1)
+    # OR cannot map to the engine's AND-only conditions. Checked textually, so a
+    # literal " OR " inside a string value also flags — conservative by design.
+    if re.search(r"\bOR\b", clause, re.IGNORECASE):
+        return [], ["OR in WHERE clause"]
+    filters, problems = [], []
     # Naive split on AND — sufficient for the simple flat WHERE clauses in scope.
-    for part in re.split(r"\bAND\b", m.group(1), flags=re.IGNORECASE):
+    for part in re.split(r"\bAND\b", clause, flags=re.IGNORECASE):
         cm = _CONDITION.match(part)
         if not cm:
+            problems.append(f"unparsed WHERE condition: {' '.join(part.split())[:60]}")
             continue
         field, op, value = cm.group(1).strip(), cm.group(2).upper(), cm.group(3).strip()
         filters.append({"field": field, "operator": op, "value": value.strip("'\"")})
-    return filters
+    return filters, problems
 
 
 def _parse_group_by(sql: str) -> list[str]:
@@ -112,12 +124,15 @@ def analyze_sql(sql: str) -> dict:
         else:
             reasons.append("join present but not a simple `tab<DocType>` ... ON <a>=<b>")
 
+    filters, filter_problems = _parse_filters(statement)
+    reasons.extend(filter_problems)
+
     return {
         "supported": not reasons,
         "reasons": reasons,
         "doctypes": doctypes,
         "aggregations": aggregations,
-        "filters": _parse_filters(statement),
+        "filters": filters,
         "group_by": _parse_group_by(statement),
         "join": join,
     }
