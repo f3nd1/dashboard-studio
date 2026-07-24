@@ -108,7 +108,9 @@
     header.appendChild(el("span", "dss-card-title", chart.chart_title));
     header.appendChild(el("span", "dss-card-type", chart.chart_type || "—"));
     card.appendChild(header);
-    card.appendChild(el("div", "dss-card-body", chart.source_doctype || (chart.metric || "")));
+    var body = el("div", "dss-card-body");
+    card.appendChild(body);
+    this.renderChartBody(body, chart);
 
     var resize = el("div", "dss-resize");
     card.appendChild(resize);
@@ -121,6 +123,43 @@
     this.dragBehavior(resize, chart, "resize");
 
     this.canvas.appendChild(card);
+  };
+
+  // Draw the chart's actual visual from its metric result rows. Results are
+  // cached per metric so drag/resize refreshes never refetch. Mock sessions read
+  // MOCK_METRIC_RESULTS; live sessions call run_ds_metric once per metric.
+  App.prototype.renderChartBody = function (body, chart) {
+    var charts = root.DSStudioCharts;
+    if (!chart.metric) {
+      body.innerHTML = '<div class="dss-nochart">No metric linked</div>';
+      return;
+    }
+    this._rowsCache = this._rowsCache || {};
+    var cached = this._rowsCache[chart.metric];
+    if (cached !== undefined) {
+      body.innerHTML = cached === null
+        ? '<div class="dss-nochart">Metric failed to run</div>'
+        : charts.render(chart.chart_type, cached).html;
+      return;
+    }
+    var self = this;
+    if (this.state.mock || !hasFrappe()) {
+      var rows = ((root.DSStudioMock || {}).MOCK_METRIC_RESULTS || {})[chart.metric] || [];
+      this._rowsCache[chart.metric] = rows;
+      body.innerHTML = charts.render(chart.chart_type, rows).html;
+      return;
+    }
+    body.innerHTML = '<div class="dss-nochart">Loading…</div>';
+    root.frappe.call({
+      method: "dashboard_studio.api.metrics.run_ds_metric",
+      args: { metric_name: chart.metric },
+    }).then(function (r) {
+      self._rowsCache[chart.metric] = r.message || [];
+      self.refresh();
+    }).catch(function () {
+      self._rowsCache[chart.metric] = null; // remembered failure — no retry loop
+      self.refresh();
+    });
   };
 
   // Pointer-driven move/resize. Converts px deltas to grid columns/rows via the

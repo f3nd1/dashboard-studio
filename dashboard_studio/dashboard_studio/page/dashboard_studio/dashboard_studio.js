@@ -20,6 +20,7 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
     [
       "/assets/dashboard_studio/css/studio.css",
       "/assets/dashboard_studio/js/studio_core.js",
+      "/assets/dashboard_studio/js/studio_charts.js",
       "/assets/dashboard_studio/js/studio_mock.js",
       "/assets/dashboard_studio/js/studio_app.js",
     ],

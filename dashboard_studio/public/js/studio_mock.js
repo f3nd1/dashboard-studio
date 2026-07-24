@@ -36,7 +36,27 @@
     ],
   };
 
-  var api = { MOCK_DASHBOARD: MOCK_DASHBOARD };
+  // ⚠️ MOCK metric results — invented numbers, keyed by the mock metric names
+  // above. Shape matches run_ds_metric's real output: [{<dimension>: v, count: n}].
+  var MOCK_METRIC_RESULTS = {
+    "Total Applicants (MOCK)": [
+      { academic_year: "2022", count: 2 },
+      { academic_year: "2023", count: 3 },
+      { academic_year: "2024", count: 1 },
+    ],
+    "Applicants by Year (MOCK)": [
+      { academic_year: "2022", count: 2 },
+      { academic_year: "2023", count: 3 },
+      { academic_year: "2024", count: 1 },
+    ],
+    "Applicants by Programme (MOCK)": [
+      { program: "Business (MOCK)", count: 3 },
+      { program: "Computing (MOCK)", count: 2 },
+      { program: "Design (MOCK)", count: 1 },
+    ],
+  };
+
+  var api = { MOCK_DASHBOARD: MOCK_DASHBOARD, MOCK_METRIC_RESULTS: MOCK_METRIC_RESULTS };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.DSStudioMock = api;
 })(typeof window !== "undefined" ? window : globalThis);

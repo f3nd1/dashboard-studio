@@ -24,7 +24,17 @@
   padding: 7px 10px; background: #f4f6f9; border-bottom: 1px solid var(--dss-line); cursor: grab; }
 .dss-card-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dss-card-type { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dss-accent); }
-.dss-card-body { padding: 10px; font-size: 12px; color: var(--dss-muted); }
+.dss-card-body { padding: 10px; font-size: 12px; color: var(--dss-muted);
+  position: absolute; top: 32px; bottom: 0; left: 0; right: 0; overflow: hidden; }
+.dss-chart-svg { width: 100%; height: 100%; display: block; }
+.dss-chart-donut { max-height: 100%; margin: 0 auto; transform: rotate(-90deg); }
+.dss-kpi { font-size: 28px; font-weight: 700; color: var(--dss-accent);
+  display: flex; align-items: center; justify-content: center; height: 100%; }
+.dss-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.dss-table th, .dss-table td { text-align: left; padding: 2px 6px;
+  border-bottom: 1px solid var(--dss-line); }
+.dss-nochart { color: var(--dss-muted); font-size: 11px; display: flex;
+  align-items: center; justify-content: center; height: 100%; text-align: center; }
 .dss-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 50%, var(--dss-accent) 50%); }
 
