@@ -89,15 +89,73 @@
     return { ok: true };
   }
 
+  // ---- Mapping view core (pure) ----
+
+  // Mirrors DS Data Mapping's mapping_status options.
+  var MAPPING_STATUSES = ["Suggested", "Confirmed", "Rejected", "Missing"];
+
+  // Click-cycle for a mapping row. "Missing" is set by absence, not clicking,
+  // so it is not in the cycle; any unknown status resets to Suggested.
+  function nextMappingStatus(status) {
+    var cycle = ["Suggested", "Confirmed", "Rejected"];
+    return cycle[(cycle.indexOf(status) + 1) % cycle.length];
+  }
+
+  // DS Data Mapping record shape (table-level; data_source attached server-side).
+  function buildMapping(externalTable, targetDoctype) {
+    return {
+      external_table: externalTable,
+      target_doctype: targetDoctype,
+      mapping_status: "Suggested",
+    };
+  }
+
+  // DS Canvas Node child-row shape.
+  function serializeCanvasNodes(nodes) {
+    return nodes.map(function (n) {
+      return {
+        node_id: n.node_id,
+        node_type: n.node_type,
+        pos_x: Math.round(n.pos_x) || 0,
+        pos_y: Math.round(n.pos_y) || 0,
+      };
+    });
+  }
+
+  // Lay out analyze_sql output as Source Table nodes (left) and candidate
+  // DocTypes as Target DocType nodes (right). analyze_sql returns DocType-ified
+  // names, so the source label restores the physical `tab` prefix.
+  function analysisToNodes(analysis, targetDoctypes) {
+    var nodes = [];
+    ((analysis || {}).doctypes || []).forEach(function (dt, i) {
+      nodes.push({
+        node_id: "src:tab" + dt, node_type: "Source Table",
+        label: "tab" + dt, pos_x: 20, pos_y: 16 + i * 64,
+      });
+    });
+    (targetDoctypes || []).forEach(function (dt, i) {
+      nodes.push({
+        node_id: "tgt:" + dt, node_type: "Target DocType",
+        label: dt, pos_x: 340, pos_y: 16 + i * 64,
+      });
+    });
+    return nodes;
+  }
+
   var api = {
     CHART_TYPES: CHART_TYPES,
     OPERATORS: OPERATORS,
     GRID_COLUMNS: GRID_COLUMNS,
+    MAPPING_STATUSES: MAPPING_STATUSES,
     clampLayout: clampLayout,
     layoutStyle: layoutStyle,
     serializeLayout: serializeLayout,
     applyChartEdit: applyChartEdit,
     validateFilter: validateFilter,
+    nextMappingStatus: nextMappingStatus,
+    buildMapping: buildMapping,
+    serializeCanvasNodes: serializeCanvasNodes,
+    analysisToNodes: analysisToNodes,
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = api;

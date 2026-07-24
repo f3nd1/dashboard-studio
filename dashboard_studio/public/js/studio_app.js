@@ -34,7 +34,12 @@
   function App(mountPoint, options) {
     this.mount = mountPoint;
     this.options = options || {};
-    this.state = { dashboard: null, charts: [], selected: null, mock: false };
+    this.state = {
+      dashboard: null, charts: [], selected: null, mock: false,
+      view: "design",
+      // Mapping view state, built lazily on first open.
+      mapNodes: null, mappings: [], pickedSource: null,
+    };
   }
 
   App.prototype.load = function () {
@@ -77,9 +82,21 @@
 
     var head = el("div", "dss-toolbar");
     head.appendChild(el("h2", "dss-title", (this.state.dashboard && this.state.dashboard.dashboard_title) || "Dashboard"));
-    var saveAll = el("button", "dss-btn dss-btn-primary", "Save layout");
-    saveAll.addEventListener("click", function () { self.saveLayout(); });
-    head.appendChild(saveAll);
+
+    var views = el("div", "dss-viewtabs");
+    ["design", "mapping"].forEach(function (v) {
+      var b = el("button", "dss-btn" + (self.state.view === v ? " dss-btn-primary" : ""),
+        v === "design" ? "Design" : "Mapping");
+      b.addEventListener("click", function () { self.state.view = v; self.render(); });
+      views.appendChild(b);
+    });
+    head.appendChild(views);
+
+    if (this.state.view === "design") {
+      var saveAll = el("button", "dss-btn dss-btn-primary", "Save layout");
+      saveAll.addEventListener("click", function () { self.saveLayout(); });
+      head.appendChild(saveAll);
+    }
     wrap.appendChild(head);
 
     var main = el("div", "dss-main");
@@ -91,8 +108,12 @@
     wrap.appendChild(main);
 
     this.mount.appendChild(wrap);
-    this.state.charts.forEach(function (c) { self.renderCard(c); });
-    this.renderPanel();
+    if (this.state.view === "mapping") {
+      this.renderMapping();
+    } else {
+      this.state.charts.forEach(function (c) { self.renderCard(c); });
+      this.renderPanel();
+    }
   };
 
   App.prototype.renderCard = function (chart) {
@@ -261,6 +282,136 @@
     saveBtn.addEventListener("click", function () {
       if (applyEdit()) self.saveChart(chart);
     });
+  };
+
+  // ---- Mapping view: source tables -> DocTypes, persisted shapes mocked ----
+
+  App.prototype.renderMapping = function () {
+    if (!this.state.mapNodes) {
+      // ⚠️ MOCK: analysis + candidate doctypes come from studio_mock.js this
+      // session. Live wiring (a real Migration Project feeding analyze_sql
+      // output) is a follow-up once a Bench exists.
+      var mock = root.DSStudioMock || {};
+      this.state.mapNodes = core.analysisToNodes(mock.MOCK_ANALYSIS, mock.MOCK_TARGET_DOCTYPES);
+    }
+    this.refreshMapping();
+  };
+
+  App.prototype._node = function (nodeId) {
+    return (this.state.mapNodes || []).filter(function (n) { return n.node_id === nodeId; })[0];
+  };
+
+  App.prototype.renderMapNode = function (node) {
+    var self = this;
+    var isSource = node.node_type === "Source Table";
+    var div = el("div", "dss-node " + (isSource ? "dss-node-src" : "dss-node-tgt") +
+      (this.state.pickedSource === node.node_id ? " is-picked" : ""));
+    div.style.left = node.pos_x + "px";
+    div.style.top = node.pos_y + "px";
+    div.appendChild(el("div", "dss-node-kind", node.node_type));
+    div.appendChild(el("div", "dss-node-label", node.label));
+
+    div.addEventListener("click", function () {
+      if (isSource) {
+        self.state.pickedSource = self.state.pickedSource === node.node_id ? null : node.node_id;
+      } else if (self.state.pickedSource) {
+        var source = self._node(self.state.pickedSource);
+        var externalTable = source.label;
+        var exists = self.state.mappings.some(function (m) {
+          return m.external_table === externalTable && m.target_doctype === node.label;
+        });
+        if (!exists) self.state.mappings.push(core.buildMapping(externalTable, node.label));
+        self.state.pickedSource = null;
+      }
+      self.refreshMapping();
+    });
+
+    // Pixel drag to reposition; positions persist in DS Canvas Node shape.
+    div.addEventListener("mousedown", function (e) {
+      var startX = e.clientX, startY = e.clientY;
+      var baseX = node.pos_x, baseY = node.pos_y;
+      var moved = false;
+      function onMove(ev) {
+        var dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+        if (!moved) return;
+        node.pos_x = Math.max(0, baseX + dx);
+        node.pos_y = Math.max(0, baseY + dy);
+        self.refreshMapping();
+      }
+      function onUp() {
+        root.removeEventListener("mousemove", onMove);
+        root.removeEventListener("mouseup", onUp);
+      }
+      root.addEventListener("mousemove", onMove);
+      root.addEventListener("mouseup", onUp);
+    });
+
+    this.canvas.appendChild(div);
+  };
+
+  // Full rebuild of lines + nodes + panel (same rebuild pattern as the design view).
+  App.prototype.refreshMapping = function () {
+    var self = this;
+    this.canvas.innerHTML = "";
+    this.canvas.classList.add("dss-map-canvas");
+    var svgNS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("class", "dss-map-svg");
+    this.state.mappings.forEach(function (m) {
+      var from = self._node("src:" + m.external_table);
+      var to = self._node("tgt:" + m.target_doctype);
+      if (!from || !to) return;
+      var lineEl = document.createElementNS(svgNS, "line");
+      lineEl.setAttribute("x1", from.pos_x + 150);
+      lineEl.setAttribute("y1", from.pos_y + 20);
+      lineEl.setAttribute("x2", to.pos_x);
+      lineEl.setAttribute("y2", to.pos_y + 20);
+      lineEl.setAttribute("class", "dss-map-line is-" + m.mapping_status.toLowerCase());
+      svg.appendChild(lineEl);
+    });
+    this.canvas.appendChild(svg);
+    this.state.mapNodes.forEach(function (n) { self.renderMapNode(n); });
+    this.renderMappingPanel();
+  };
+
+  App.prototype.renderMappingPanel = function () {
+    var self = this;
+    this.panel.innerHTML = "";
+    this.panel.appendChild(el("h3", "dss-panel-title", "Mappings"));
+    this.panel.appendChild(el("p", "dss-hint",
+      this.state.pickedSource
+        ? "Now click a Target DocType to map it."
+        : "Click a Source Table, then a Target DocType, to draw a mapping. Click a mapping to cycle its status."));
+
+    if (!this.state.mappings.length) {
+      this.panel.appendChild(el("p", "dss-hint", "No mappings yet."));
+    }
+    this.state.mappings.forEach(function (m) {
+      var row = el("div", "dss-map-row is-" + m.mapping_status.toLowerCase(),
+        m.external_table + " → " + m.target_doctype + "  [" + m.mapping_status + "]");
+      row.addEventListener("click", function () {
+        m.mapping_status = core.nextMappingStatus(m.mapping_status);
+        self.refreshMapping();
+      });
+      self.panel.appendChild(row);
+    });
+
+    var save = el("button", "dss-btn dss-btn-primary", "Save mappings");
+    save.addEventListener("click", function () { self.saveMappings(); });
+    this.panel.appendChild(save);
+  };
+
+  App.prototype.saveMappings = function () {
+    // ⚠️ MOCK persistence only: captures the exact DS Data Mapping and
+    // DS Canvas Node payload shapes but writes nothing — server endpoints for
+    // mapping/canvas persistence are a live-Bench follow-up.
+    var payload = {
+      mappings: this.state.mappings,
+      canvas_nodes: core.serializeCanvasNodes(this.state.mapNodes || []),
+    };
+    if (root.console) root.console.log("[Dashboard Studio] mock mapping payload", payload);
+    toast("Captured " + payload.mappings.length + " mapping(s) (mock — not persisted)");
   };
 
   App.prototype.saveChart = function (chart) {

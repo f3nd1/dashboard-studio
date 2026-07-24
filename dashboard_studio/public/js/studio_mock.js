@@ -56,7 +56,28 @@
     ],
   };
 
-  var api = { MOCK_DASHBOARD: MOCK_DASHBOARD, MOCK_METRIC_RESULTS: MOCK_METRIC_RESULTS };
+  // ⚠️ MOCK Metabase analysis — shaped exactly like analyze_sql's real output,
+  // values invented. Feeds the Mapping view when no live import exists.
+  var MOCK_ANALYSIS = {
+    __mock__: true,
+    supported: true,
+    reasons: [],
+    doctypes: ["Student Applicant", "Student Admission UCC"],
+    aggregations: [{ function: "COUNT", argument: "*" }],
+    filters: [{ field: "application_status", operator: "=", value: "Admitted" }],
+    group_by: ["academic_year"],
+    join: { doctype: "Student Admission UCC", on: "`tabStudent Applicant`.`name` = `tabStudent Admission UCC`.`applicant`" },
+  };
+
+  // ⚠️ MOCK candidate target DocTypes (live version would query real DocTypes).
+  var MOCK_TARGET_DOCTYPES = ["Student Applicant", "Student Admission UCC", "Program (MOCK)"];
+
+  var api = {
+    MOCK_DASHBOARD: MOCK_DASHBOARD,
+    MOCK_METRIC_RESULTS: MOCK_METRIC_RESULTS,
+    MOCK_ANALYSIS: MOCK_ANALYSIS,
+    MOCK_TARGET_DOCTYPES: MOCK_TARGET_DOCTYPES,
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.DSStudioMock = api;
 })(typeof window !== "undefined" ? window : globalThis);
