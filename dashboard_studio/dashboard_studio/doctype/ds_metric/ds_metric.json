@@ -11,6 +11,7 @@
   "calculation_type",
   "value_field",
   "group_by_field",
+  "allowed_fields",
   "numerator_metric",
   "denominator_metric",
   "metric_filters",
@@ -56,6 +57,12 @@
    "fieldname": "group_by_field",
    "fieldtype": "Data",
    "label": "Group By Field"
+  },
+  {
+   "fieldname": "allowed_fields",
+   "fieldtype": "Small Text",
+   "label": "Allowed Fields",
+   "description": "Newline- or comma-separated field names this metric may reference on its source DocType. REQUIRED: a metric with no allowed fields is blocked from executing (block-by-default)."
   },
   {
    "fieldname": "numerator_metric",

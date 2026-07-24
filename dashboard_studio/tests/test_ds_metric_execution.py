@@ -50,6 +50,8 @@ class TestDSMetricExecution(unittest.TestCase):
             "source_doctype": "Student Applicant",
             "group_by_field": "academic_year",
             "value_field": "name",
+            # Block-by-default allowlist: every referenced field must be listed.
+            "allowed_fields": "academic_year\nname\napplication_status",
             "metric_filters": [],
         }
 
@@ -127,6 +129,33 @@ class TestDSMetricExecution(unittest.TestCase):
         metric = dict(self.metric, group_by_field="")
         with self.assertRaises(ValueError):
             build_plan_from_ds_metric(metric)
+
+    def test_empty_allowlist_blocks_execution(self):
+        # Block-by-default: no allowed_fields -> refuse to run.
+        metric = dict(self.metric, allowed_fields="")
+        with self.assertRaises(ValueError):
+            build_plan_from_ds_metric(metric)
+        del metric["allowed_fields"]
+        with self.assertRaises(ValueError):
+            build_plan_from_ds_metric(dict(metric))
+
+    def test_out_of_allowlist_field_is_rejected(self):
+        # group_by references academic_year, but the allowlist omits it.
+        metric = dict(self.metric, allowed_fields="name")
+        with self.assertRaises(Exception):
+            build_plan_from_ds_metric(metric)
+
+    def test_comma_separated_allowlist_is_parsed(self):
+        metric = dict(self.metric, allowed_fields="academic_year, name")
+        # academic_year + name are allowlisted -> runs fine.
+        self.assertEqual(
+            self._run(metric),
+            [
+                {"academic_year": "2022", "count": 2},
+                {"academic_year": "2023", "count": 3},
+                {"academic_year": "2024", "count": 1},
+            ],
+        )
 
 
 if __name__ == "__main__":

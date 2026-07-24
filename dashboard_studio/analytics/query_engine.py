@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from dashboard_studio.analytics.validators import validate_metric_config
@@ -43,11 +44,12 @@ def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
     plain dict (``frappe.get_doc(...).as_dict()`` shape); child rows in
     ``metric_filters`` are dicts too.
 
-    SECURITY NOTE: DS Metric carries no field allowlist (there is no DS-side
-    Dataset yet), so the plan is built with an EMPTY allowlist — the allowlist
-    control the old Metric Definition path had is absent here. Flagged for an
-    urgent follow-up; do not run DS Metrics against real audit-relevant data until
-    a DS allowlist exists.
+    FIELD ALLOWLIST (block-by-default): the metric's ``allowed_fields`` (newline-
+    or comma-separated) constrains which fields it may reference. If it is empty,
+    the metric is REFUSED — no allowlist means no execution, closing the gap where
+    the old path's Dataset allowlist had no DS equivalent. When set, every
+    referenced field (dimension, measure, filter fields) must be listed, enforced
+    by validate_metric_config's existing subset check.
     """
 
     status = (metric.get("status") or "").strip()
@@ -87,9 +89,13 @@ def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
             {"field": field, "operator": (row.get("operator") or "").strip(), "value": row.get("value")}
         )
 
-    # Empty allowlist: DS schema has no dataset allowlist yet (see SECURITY NOTE).
-    # validate_metric_config still enforces the operator allowlist and rejects
-    # unsupported operators such as 'like'/'between'.
+    allowed_fields = _split_allowed_fields(metric.get("allowed_fields"))
+    if not allowed_fields:
+        raise ValueError(
+            f"DS Metric '{metric.get('metric_name') or '<unnamed>'}' has no allowed_fields; "
+            "refusing to execute (block-by-default). List the fields it may reference."
+        )
+
     metric_config = {
         "dimension": dimension,
         "measure": metric.get("value_field") or "name",
@@ -98,10 +104,18 @@ def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
     }
     dataset_config = {
         "source_doctype": source_doctype,
-        "allowed_fields": [],
+        "allowed_fields": allowed_fields,
         "restricted_fields": [],
     }
     return build_query_plan(metric_config, dataset_config)
+
+
+def _split_allowed_fields(value: Any) -> list[str]:
+    """Parse DS Metric.allowed_fields (newline- or comma-separated) into a list."""
+    if not value:
+        return []
+    parts = re.split(r"[,\n]", str(value))
+    return [p.strip() for p in parts if p.strip()]
 
 
 def _require_system_manager() -> None:

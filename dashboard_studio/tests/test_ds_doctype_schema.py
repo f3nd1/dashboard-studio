@@ -75,6 +75,7 @@ SPEC = {
         "calculation_type": {"fieldtype": "Select", "options": "Count\nSum\nAverage\nPercentage\nCustom"},
         "value_field": {"fieldtype": "Data"},
         "group_by_field": {"fieldtype": "Data"},
+        "allowed_fields": {"fieldtype": "Small Text"},
         "numerator_metric": {"fieldtype": "Link", "options": "DS Metric"},
         "denominator_metric": {"fieldtype": "Link", "options": "DS Metric"},
         "metric_filters": {"fieldtype": "Table", "options": "DS Metric Filter"},
