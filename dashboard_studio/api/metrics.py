@@ -2,7 +2,7 @@ import json
 
 import frappe
 
-from dashboard_studio.analytics.query_engine import build_query_plan
+from dashboard_studio.analytics.query_engine import build_query_plan, execute_query_plan
 
 
 @frappe.whitelist()
@@ -23,6 +23,18 @@ def build_metric_plan(metric_name: str):
         "restricted_fields": _load_json(dataset.restricted_fields_json, []),
     }
     return build_query_plan(metric_config, dataset_config)
+
+
+@frappe.whitelist()
+def run_metric(metric_name: str):
+    """Build and execute a metric plan in one whitelisted call.
+
+    Only the count-by-single-dimension slice is supported today; anything else
+    raises NotImplementedError from execute_query_plan. build_metric_plan already
+    enforces System Manager and validates the config before this runs.
+    """
+    plan = build_metric_plan(metric_name)
+    return execute_query_plan(plan)
 
 
 def _load_json(value, default):
