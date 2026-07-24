@@ -123,7 +123,7 @@ class TestDSMetricExecution(unittest.TestCase):
         metric["metric_filters"] = [
             {"fieldname": "academic_year", "operator": "like", "value": "202%", "filter_type": "Static"}
         ]
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             build_plan_from_ds_metric(metric)
 
     def test_missing_group_by_is_blocked(self):
@@ -143,7 +143,7 @@ class TestDSMetricExecution(unittest.TestCase):
     def test_out_of_allowlist_field_is_rejected(self):
         # group_by references academic_year, but the allowlist omits it.
         metric = dict(self.metric, group_by_field="academic_year", allowed_fields="programme")
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             build_plan_from_ds_metric(metric)
 
     def test_comma_separated_allowlist_is_parsed(self):
@@ -176,7 +176,7 @@ class TestDSMetricExecution(unittest.TestCase):
         metric = dict(
             self.metric, value_field="score", allowed_fields="academic_year", metric_filters=[]
         )
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             build_plan_from_ds_metric(metric)
 
     def test_filter_field_still_enforced_despite_name_exemption(self):
@@ -186,7 +186,7 @@ class TestDSMetricExecution(unittest.TestCase):
             self.metric, value_field="", allowed_fields="academic_year",
             metric_filters=[{"fieldname": "secret_field", "operator": "=", "value": "x", "filter_type": "Static"}],
         )
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             build_plan_from_ds_metric(metric)
 
     # ---- Gap 1: clearer error message echoes the effective allowlist ----
