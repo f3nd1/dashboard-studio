@@ -5,9 +5,6 @@ app_description = "Visual dashboard migration, validation, design, and publishin
 app_email = "replace-me@example.invalid"
 app_license = "Proprietary"
 
-# Load only minimal shared styling. Feature-specific assets should remain modular.
-app_include_css = "/assets/dashboard_studio/css/dashboard_studio.css"
-
 # Ship the two-level DS roles so they exist on install/migrate. Two levels only
 # (edit / view) — NOT the five-role model in SECURITY_AND_GOVERNANCE.md yet.
 fixtures = [
