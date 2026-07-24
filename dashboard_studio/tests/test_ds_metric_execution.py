@@ -189,6 +189,18 @@ class TestDSMetricExecution(unittest.TestCase):
         with self.assertRaises(Exception):
             build_plan_from_ds_metric(metric)
 
+    # ---- Gap 1: clearer error message echoes the effective allowlist ----
+    def test_typo_error_message_echoes_allowlist(self):
+        metric = dict(self.metric, group_by_field="academic_year", allowed_fields="acadmic_year")
+        try:
+            build_plan_from_ds_metric(metric)
+            self.fail("expected a validation error")
+        except ValueError as exc:
+            msg = str(exc)
+            self.assertIn("academic_year", msg)       # the field that failed
+            self.assertIn("acadmic_year", msg)         # the (mistyped) allowlist, echoed
+            self.assertIn("allowed_fields", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

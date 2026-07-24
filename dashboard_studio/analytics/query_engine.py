@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from dashboard_studio.analytics.validators import validate_metric_config
+from dashboard_studio.analytics.validators import DefinitionValidationError, validate_metric_config
 
 
 def build_query_plan(metric_config: dict[str, Any], dataset_config: dict[str, Any]) -> dict[str, Any]:
@@ -119,7 +119,18 @@ def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
         "allowed_fields": effective_allowed,
         "restricted_fields": [],
     }
-    return build_query_plan(metric_config, dataset_config)
+    try:
+        return build_query_plan(metric_config, dataset_config)
+    except DefinitionValidationError as exc:
+        # Enrich the allowlist-rejection message so a typo (in the field name OR
+        # in the allowlist entry) is obvious by comparison. Field-existence
+        # validation against real DocType metadata is deferred (needs a live Bench).
+        if "not allowlisted" in str(exc):
+            raise ValueError(
+                f"{exc}. This metric's allowed_fields: {allowed_fields or '(none)'}. "
+                "Check for a typo — the referenced field must match an allowlist entry exactly."
+            ) from exc
+        raise
 
 
 def _split_allowed_fields(value: Any) -> list[str]:
