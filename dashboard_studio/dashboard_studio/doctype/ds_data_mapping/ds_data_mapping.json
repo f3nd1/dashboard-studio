@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "data_source",
+  "external_table",
+  "external_field",
+  "target_doctype",
+  "target_field",
+  "mapping_status",
+  "confidence_score",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "data_source",
+   "fieldtype": "Link",
+   "label": "Data Source",
+   "options": "DS Data Source",
+   "reqd": 1
+  },
+  {
+   "fieldname": "external_table",
+   "fieldtype": "Data",
+   "label": "External Table",
+   "reqd": 1
+  },
+  {
+   "fieldname": "external_field",
+   "fieldtype": "Data",
+   "label": "External Field"
+  },
+  {
+   "fieldname": "target_doctype",
+   "fieldtype": "Link",
+   "label": "Target Doctype",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "target_field",
+   "fieldtype": "Data",
+   "label": "Target Field"
+  },
+  {
+   "fieldname": "mapping_status",
+   "fieldtype": "Select",
+   "label": "Mapping Status",
+   "options": "Suggested\nConfirmed\nRejected\nMissing",
+   "default": "Suggested"
+  },
+  {
+   "fieldname": "confidence_score",
+   "fieldtype": "Percent",
+   "label": "Confidence Score"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-07-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Dashboard Studio",
+ "name": "DS Data Mapping",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "All",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

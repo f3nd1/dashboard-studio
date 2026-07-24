@@ -1,0 +1,129 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "metric_name",
+  "status",
+  "source_doctype",
+  "calculation_type",
+  "value_field",
+  "group_by_field",
+  "numerator_metric",
+  "denominator_metric",
+  "metric_filters",
+  "description",
+  "refresh_frequency",
+  "known_limitations",
+  "evidence_level"
+ ],
+ "fields": [
+  {
+   "fieldname": "metric_name",
+   "fieldtype": "Data",
+   "label": "Metric Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nApproved\nDeprecated",
+   "default": "Draft"
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Link",
+   "label": "Source Doctype",
+   "options": "DocType",
+   "reqd": 1
+  },
+  {
+   "fieldname": "calculation_type",
+   "fieldtype": "Select",
+   "label": "Calculation Type",
+   "options": "Count\nSum\nAverage\nPercentage\nCustom"
+  },
+  {
+   "fieldname": "value_field",
+   "fieldtype": "Data",
+   "label": "Value Field"
+  },
+  {
+   "fieldname": "group_by_field",
+   "fieldtype": "Data",
+   "label": "Group By Field"
+  },
+  {
+   "fieldname": "numerator_metric",
+   "fieldtype": "Link",
+   "label": "Numerator Metric",
+   "options": "DS Metric"
+  },
+  {
+   "fieldname": "denominator_metric",
+   "fieldtype": "Link",
+   "label": "Denominator Metric",
+   "options": "DS Metric"
+  },
+  {
+   "fieldname": "metric_filters",
+   "fieldtype": "Table",
+   "label": "Metric Filters",
+   "options": "DS Metric Filter"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "refresh_frequency",
+   "fieldtype": "Select",
+   "label": "Refresh Frequency",
+   "options": "Real-time\nHourly\nDaily\nWeekly"
+  },
+  {
+   "fieldname": "known_limitations",
+   "fieldtype": "Small Text",
+   "label": "Known Limitations"
+  },
+  {
+   "fieldname": "evidence_level",
+   "fieldtype": "Select",
+   "label": "Evidence Level",
+   "options": "Direct Evidence\nCalculated Evidence\nProxy Indicator\nData Completeness\nUnsupported"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-07-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Dashboard Studio",
+ "name": "DS Metric",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "All",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "autoname": "field:metric_name",
+ "title_field": "metric_name"
+}

@@ -1,0 +1,64 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "node_id",
+  "node_type",
+  "pos_x",
+  "pos_y"
+ ],
+ "fields": [
+  {
+   "fieldname": "node_id",
+   "fieldtype": "Data",
+   "label": "Node Id",
+   "reqd": 1
+  },
+  {
+   "fieldname": "node_type",
+   "fieldtype": "Select",
+   "label": "Node Type",
+   "options": "Source Table\nTarget DocType",
+   "reqd": 1
+  },
+  {
+   "fieldname": "pos_x",
+   "fieldtype": "Int",
+   "label": "Pos X"
+  },
+  {
+   "fieldname": "pos_y",
+   "fieldtype": "Int",
+   "label": "Pos Y"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Dashboard Studio",
+ "name": "DS Canvas Node",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "All",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

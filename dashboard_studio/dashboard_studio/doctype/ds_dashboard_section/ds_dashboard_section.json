@@ -1,0 +1,66 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "dashboard",
+  "section_title",
+  "sort_order",
+  "is_collapsed_default"
+ ],
+ "fields": [
+  {
+   "fieldname": "dashboard",
+   "fieldtype": "Link",
+   "label": "Dashboard",
+   "options": "DS Dashboard",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_title",
+   "fieldtype": "Data",
+   "label": "Section Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sort_order",
+   "fieldtype": "Int",
+   "label": "Sort Order",
+   "default": "0"
+  },
+  {
+   "fieldname": "is_collapsed_default",
+   "fieldtype": "Check",
+   "label": "Is Collapsed Default"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-07-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Dashboard Studio",
+ "name": "DS Dashboard Section",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "All",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "section_title"
+}

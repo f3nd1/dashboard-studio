@@ -1,0 +1,120 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "chart_title",
+  "dashboard",
+  "section",
+  "chart_type",
+  "metric",
+  "pos_x",
+  "pos_y",
+  "width",
+  "height",
+  "description",
+  "drill_down_enabled",
+  "chart_filters"
+ ],
+ "fields": [
+  {
+   "fieldname": "chart_title",
+   "fieldtype": "Data",
+   "label": "Chart Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "dashboard",
+   "fieldtype": "Link",
+   "label": "Dashboard",
+   "options": "DS Dashboard",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section",
+   "fieldtype": "Link",
+   "label": "Section",
+   "options": "DS Dashboard Section"
+  },
+  {
+   "fieldname": "chart_type",
+   "fieldtype": "Select",
+   "label": "Chart Type",
+   "options": "KPI Card\nBar Chart\nLine Chart\nDonut Chart\nTable\nTrend Chart\nGauge\nFunnel\nLifecycle\nFlow\nMatrix\nRadar\nDecision Diagram\nNetwork Diagram\nReconciliation Diagram\nMaturity Ladder\nRisk Matrix"
+  },
+  {
+   "fieldname": "metric",
+   "fieldtype": "Link",
+   "label": "Metric",
+   "options": "DS Metric",
+   "reqd": 1
+  },
+  {
+   "fieldname": "pos_x",
+   "fieldtype": "Int",
+   "label": "Pos X"
+  },
+  {
+   "fieldname": "pos_y",
+   "fieldtype": "Int",
+   "label": "Pos Y"
+  },
+  {
+   "fieldname": "width",
+   "fieldtype": "Int",
+   "label": "Width",
+   "default": "4"
+  },
+  {
+   "fieldname": "height",
+   "fieldtype": "Int",
+   "label": "Height",
+   "default": "3"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "drill_down_enabled",
+   "fieldtype": "Check",
+   "label": "Drill Down Enabled"
+  },
+  {
+   "fieldname": "chart_filters",
+   "fieldtype": "Table",
+   "label": "Chart Filters",
+   "options": "DS Chart Filter"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-07-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Dashboard Studio",
+ "name": "DS Chart",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "All",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "chart_title"
+}

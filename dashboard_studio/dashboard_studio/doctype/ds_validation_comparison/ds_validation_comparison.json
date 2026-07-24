@@ -1,0 +1,104 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-07-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "migration_project",
+  "chart",
+  "comparison_date",
+  "original_value",
+  "new_value",
+  "difference_pct",
+  "status",
+  "accepted_reason",
+  "evidence",
+  "reviewed_by"
+ ],
+ "fields": [
+  {
+   "fieldname": "migration_project",
+   "fieldtype": "Link",
+   "label": "Migration Project",
+   "options": "DS Migration Project"
+  },
+  {
+   "fieldname": "chart",
+   "fieldtype": "Link",
+   "label": "Chart",
+   "options": "DS Chart"
+  },
+  {
+   "fieldname": "comparison_date",
+   "fieldtype": "Date",
+   "label": "Comparison Date",
+   "default": "Today"
+  },
+  {
+   "fieldname": "original_value",
+   "fieldtype": "Data",
+   "label": "Original Value"
+  },
+  {
+   "fieldname": "new_value",
+   "fieldtype": "Data",
+   "label": "New Value"
+  },
+  {
+   "fieldname": "difference_pct",
+   "fieldtype": "Percent",
+   "label": "Difference Pct"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Match\nDiscrepancy\nAccepted\nFlagged",
+   "default": "Match"
+  },
+  {
+   "fieldname": "accepted_reason",
+   "fieldtype": "Small Text",
+   "label": "Accepted Reason",
+   "depends_on": "eval:doc.status=='Accepted'"
+  },
+  {
+   "fieldname": "evidence",
+   "fieldtype": "Attach",
+   "label": "Evidence"
+  },
+  {
+   "fieldname": "reviewed_by",
+   "fieldtype": "Link",
+   "label": "Reviewed By",
+   "options": "User"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 0,
+ "links": [],
+ "modified": "2026-07-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Dashboard Studio",
+ "name": "DS Validation Comparison",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "All",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
