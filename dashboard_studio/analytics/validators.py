@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 ALLOWED_AGGREGATIONS = {"count", "sum", "average", "minimum", "maximum", "percentage"}
 ALLOWED_OPERATORS = {"=", "!=", ">", ">=", "<", "<=", "in", "not in", "is set", "is not set"}
+# Frappe fieldname shape. Referenced fields are interpolated into ORM
+# fields/order_by downstream, so anything else is rejected outright.
+FIELD_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class DefinitionValidationError(ValueError):
@@ -50,6 +54,10 @@ def validate_metric_config(config: dict[str, Any], dataset: dict[str, Any]) -> d
         if operator not in ALLOWED_OPERATORS:
             raise DefinitionValidationError(f"Unsupported operator: {operator or '<blank>'}")
         referenced_fields.add(field)
+
+    for field in referenced_fields:
+        if not FIELD_NAME_PATTERN.fullmatch(field):
+            raise DefinitionValidationError(f"Invalid field name: {field!r}")
 
     forbidden = referenced_fields & restricted_fields
     if forbidden:

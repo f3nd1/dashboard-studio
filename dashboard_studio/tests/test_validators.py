@@ -37,6 +37,18 @@ class TestMetricValidation(unittest.TestCase):
                 self.dataset,
             )
 
+    def test_malformed_field_names_are_rejected(self):
+        # Field names are interpolated into ORM fields/order_by downstream, so
+        # anything outside Frappe's fieldname shape must be rejected — even if
+        # the same string appears in the allowlist.
+        for bad in ("name`) -- ", "academic year", "a;b", "a.b", "name)"):
+            dataset = dict(self.dataset, allowed_fields=["name", bad])
+            with self.assertRaises(DefinitionValidationError, msg=repr(bad)):
+                validate_metric_config(
+                    {"dimension": bad, "measure": "name", "aggregation": "count"},
+                    dataset,
+                )
+
     def test_unknown_aggregation_is_rejected(self):
         with self.assertRaises(DefinitionValidationError):
             validate_metric_config(
