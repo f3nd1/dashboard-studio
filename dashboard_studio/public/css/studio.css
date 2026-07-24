@@ -1,0 +1,47 @@
+/* Dashboard Studio — visual editor styles. Scoped under .dss-wrap. */
+.dss-wrap { --dss-line: #dce1e8; --dss-accent: #0d7481; --dss-ink: #1b2733; --dss-muted: #5c6b7d;
+  color: var(--dss-ink); }
+
+.dss-banner { background: #fef4e2; border: 1px solid #f0d69a; color: #8a5a12;
+  padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+
+.dss-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--dss-line); margin-bottom: 14px; }
+.dss-title { font-size: 18px; margin: 0; }
+
+.dss-main { display: grid; grid-template-columns: 1fr 280px; gap: 16px; align-items: start; }
+@media (max-width: 780px) { .dss-main { grid-template-columns: 1fr; } }
+
+.dss-canvas { position: relative; background:
+  linear-gradient(90deg, #f1f4f7 1px, transparent 1px) 0 0 / 8.333% 100%,
+  #fafbfc; border: 1px solid var(--dss-line); border-radius: 10px; overflow: hidden; }
+
+.dss-card { position: absolute; background: #fff; border: 1px solid var(--dss-line);
+  border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06); padding: 0; overflow: hidden;
+  box-sizing: border-box; }
+.dss-card.is-selected { border-color: var(--dss-accent); box-shadow: 0 0 0 2px rgba(13,116,129,.2); }
+.dss-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 7px 10px; background: #f4f6f9; border-bottom: 1px solid var(--dss-line); cursor: grab; }
+.dss-card-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dss-card-type { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dss-accent); }
+.dss-card-body { padding: 10px; font-size: 12px; color: var(--dss-muted); }
+.dss-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--dss-accent) 50%); }
+
+.dss-panel { border: 1px solid var(--dss-line); border-radius: 10px; padding: 14px; background: #fff; }
+.dss-panel-title { font-size: 14px; margin: 0 0 10px; }
+.dss-hint { font-size: 13px; color: var(--dss-muted); }
+.dss-field { display: block; margin-bottom: 10px; }
+.dss-field-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--dss-muted); margin-bottom: 4px; }
+.dss-input { width: 100%; padding: 6px 8px; border: 1px solid var(--dss-line); border-radius: 6px;
+  font: inherit; box-sizing: border-box; }
+textarea.dss-input { min-height: 60px; resize: vertical; }
+.dss-error { color: #b3261e; font-size: 12px; min-height: 16px; }
+.dss-actions { display: flex; gap: 8px; margin-top: 6px; }
+
+.dss-btn { padding: 6px 12px; border: 1px solid var(--dss-line); background: #fff; border-radius: 6px;
+  font: inherit; cursor: pointer; }
+.dss-btn:hover { background: #f4f6f9; }
+.dss-btn-primary { background: var(--dss-accent); border-color: var(--dss-accent); color: #fff; }
+.dss-btn-primary:hover { background: #0a5b66; }

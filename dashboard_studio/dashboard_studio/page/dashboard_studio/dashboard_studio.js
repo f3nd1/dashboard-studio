@@ -6,54 +6,27 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
   });
 
   page.set_primary_action(__("New Dashboard"), () => {
-    frappe.set_route("Form", "Dashboard Definition", "new-dashboard-definition");
+    frappe.new_doc("DS Dashboard");
   });
 
-  const $body = $(page.body);
-  $body.html(`
-    <div class="dashboard-studio-shell">
-      <div class="dashboard-studio-status" data-health-status>
-        ${__("Checking application status...")}
-      </div>
-      <div class="dashboard-studio-grid">
-        <section class="dashboard-studio-card">
-          <h3>${__("Dashboard Definitions")}</h3>
-          <p>${__("Create and manage dashboard layouts and publishing status.")}</p>
-          <button class="btn btn-default btn-sm" data-route="Dashboard Definition">${__("Open")}</button>
-        </section>
-        <section class="dashboard-studio-card">
-          <h3>${__("Dataset Definitions")}</h3>
-          <p>${__("Control approved DocTypes, fields, and drill-down data.")}</p>
-          <button class="btn btn-default btn-sm" data-route="Dataset Definition">${__("Open")}</button>
-        </section>
-        <section class="dashboard-studio-card">
-          <h3>${__("Metric Definitions")}</h3>
-          <p>${__("Define reusable aggregations, conditions, formulas, and evidence levels.")}</p>
-          <button class="btn btn-default btn-sm" data-route="Metric Definition">${__("Open")}</button>
-        </section>
-        <section class="dashboard-studio-card">
-          <h3>${__("Migration Jobs")}</h3>
-          <p>${__("Track imported dashboards, mappings, and result validation.")}</p>
-          <button class="btn btn-default btn-sm" data-route="Migration Job">${__("Open")}</button>
-        </section>
-      </div>
-    </div>
-  `);
+  const mount = document.createElement("div");
+  page.body.appendChild(mount);
+  mount.textContent = __("Loading the visual editor…");
 
-  $body.on("click", "[data-route]", function () {
-    frappe.set_route("List", $(this).attr("data-route"));
-  });
-
-  frappe.call("dashboard_studio.api.health.ping")
-    .then((response) => {
-      const message = response.message || {};
-      $body.find("[data-health-status]").text(
-        message.ok
-          ? __("Dashboard Studio is installed. Phase 1 runtime is not yet implemented.")
-          : __("Dashboard Studio health check failed.")
-      );
-    })
-    .catch(() => {
-      $body.find("[data-health-status]").text(__("Unable to reach the Dashboard Studio backend."));
-    });
+  // Load the framework-free editor assets on demand (no bundler required), then
+  // mount the SPA. Without a `dashboard` route param the app falls back to MOCK
+  // data — see studio_mock.js — so it renders even before real records exist.
+  frappe.require(
+    [
+      "/assets/dashboard_studio/css/studio.css",
+      "/assets/dashboard_studio/js/studio_core.js",
+      "/assets/dashboard_studio/js/studio_mock.js",
+      "/assets/dashboard_studio/js/studio_app.js",
+    ],
+    () => {
+      mount.textContent = "";
+      const dashboard = frappe.get_route()[1] || null; // /app/dashboard-studio/<DS Dashboard name>
+      window.DSStudioApp.mount(mount, { dashboard });
+    }
+  );
 };

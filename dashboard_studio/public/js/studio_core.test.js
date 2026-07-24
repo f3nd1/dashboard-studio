@@ -1,0 +1,40 @@
+/*
+ * Node self-check for studio_core.js — run: node studio_core.test.js
+ * Pure logic only; no browser, no Frappe. This is the frontend's equivalent of
+ * the Python fixture tests: it verifies logic, NOT live-Desk behaviour.
+ */
+"use strict";
+var assert = require("assert");
+var core = require("./studio_core.js");
+
+// clampLayout keeps boxes on the 12-col grid
+assert.deepStrictEqual(
+  core.clampLayout({ pos_x: 20, pos_y: -3, width: 99, height: 0 }),
+  { pos_x: 0, pos_y: 0, width: 12, height: 1 },
+  "clampLayout bounds"
+);
+
+// serializeLayout returns only persistable fields
+assert.deepStrictEqual(
+  core.serializeLayout([{ name: "c1", chart_title: "x", pos_x: 2, pos_y: 1, width: 4, height: 3 }]),
+  [{ name: "c1", pos_x: 2, pos_y: 1, width: 4, height: 3 }],
+  "serializeLayout"
+);
+
+// applyChartEdit validates and does not mutate input
+var original = { chart_title: "Old", chart_type: "Bar Chart", pos_x: 0, pos_y: 0, width: 4, height: 3 };
+var edited = core.applyChartEdit(original, { chart_title: "New", chart_type: "Line Chart" });
+assert.ok(edited.ok, "edit ok");
+assert.strictEqual(edited.chart.chart_title, "New");
+assert.strictEqual(edited.chart.chart_type, "Line Chart");
+assert.strictEqual(original.chart_title, "Old", "input not mutated");
+
+assert.ok(!core.applyChartEdit(original, { chart_title: "  " }).ok, "empty title rejected");
+assert.ok(!core.applyChartEdit(original, { chart_type: "Pie" }).ok, "unknown chart type rejected");
+
+// validateFilter mirrors the engine's operator allowlist
+assert.ok(core.validateFilter({ fieldname: "academic_year", operator: "=" }).ok, "valid filter");
+assert.ok(!core.validateFilter({ fieldname: "x", operator: "like" }).ok, "like rejected");
+assert.ok(!core.validateFilter({ fieldname: "", operator: "=" }).ok, "missing field rejected");
+
+console.log("studio_core.test.js — all assertions passed");
