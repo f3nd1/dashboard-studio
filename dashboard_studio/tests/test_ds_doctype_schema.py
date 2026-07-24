@@ -172,13 +172,21 @@ class TestDSDoctypeSchema(unittest.TestCase):
                 if actual["fieldtype"] in ("Link", "Table"):
                     self.assertIn(actual["options"], known, f"{name}.{fieldname} -> {actual['options']}")
 
-    def test_permissions_are_placeholder_all_role(self):
-        # TEMPORARY: open to any logged-in user. Must become the five real roles
-        # before this touches audit-relevant data.
+    def test_permissions_are_two_level_editor_viewer(self):
+        # Two-level model: Editor (full CRUD) + Viewer (read-only). NOT the five
+        # governance roles yet — that remains a later task.
         for name in SPEC:
-            perms = _load(name)["permissions"]
-            self.assertEqual(len(perms), 1, f"{name} perms")
-            self.assertEqual(perms[0]["role"], "All", f"{name} role")
+            perms = {p["role"]: p for p in _load(name)["permissions"]}
+            self.assertEqual(
+                set(perms), {"Dashboard Studio Editor", "Dashboard Studio Viewer"}, f"{name} roles"
+            )
+            editor = perms["Dashboard Studio Editor"]
+            for flag in ("read", "write", "create", "delete"):
+                self.assertEqual(editor.get(flag), 1, f"{name} editor {flag}")
+            viewer = perms["Dashboard Studio Viewer"]
+            self.assertEqual(viewer.get("read"), 1, f"{name} viewer read")
+            for flag in ("write", "create", "delete"):
+                self.assertNotEqual(viewer.get(flag), 1, f"{name} viewer must not {flag}")
 
 
 if __name__ == "__main__":

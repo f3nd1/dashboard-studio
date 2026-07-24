@@ -1,0 +1,14 @@
+[
+ {
+  "doctype": "Role",
+  "name": "Dashboard Studio Editor",
+  "role_name": "Dashboard Studio Editor",
+  "desk_access": 1
+ },
+ {
+  "doctype": "Role",
+  "name": "Dashboard Studio Viewer",
+  "role_name": "Dashboard Studio Viewer",
+  "desk_access": 1
+ }
+]

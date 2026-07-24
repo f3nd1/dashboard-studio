@@ -115,9 +115,14 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "All",
+   "role": "Dashboard Studio Editor",
    "share": 1,
    "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Dashboard Studio Viewer"
   }
  ],
  "sort_field": "modified",
