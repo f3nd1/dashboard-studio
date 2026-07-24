@@ -2,7 +2,11 @@ import json
 
 import frappe
 
-from dashboard_studio.analytics.query_engine import build_query_plan, execute_query_plan
+from dashboard_studio.analytics.query_engine import (
+    build_plan_from_ds_metric,
+    build_query_plan,
+    execute_query_plan,
+)
 
 
 @frappe.whitelist()
@@ -34,6 +38,21 @@ def run_metric(metric_name: str):
     enforces System Manager and validates the config before this runs.
     """
     plan = build_metric_plan(metric_name)
+    return execute_query_plan(plan)
+
+
+@frappe.whitelist()
+def run_ds_metric(metric_name: str):
+    """Execute a DS Metric record by name (count-by-single-dimension slice).
+
+    Separate from run_metric, which serves the older Metric Definition schema.
+    Reads the DS Metric doc, adapts it to the engine config, and runs it through
+    the same permission check (System Manager) and safety cap already in place.
+    Only Approved metrics run; see build_plan_from_ds_metric for the scope guards.
+    """
+    frappe.only_for("System Manager")
+    metric = frappe.get_doc("DS Metric", metric_name)
+    plan = build_plan_from_ds_metric(metric.as_dict())
     return execute_query_plan(plan)
 
 
