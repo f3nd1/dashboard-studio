@@ -37,6 +37,26 @@ class TestMetricValidation(unittest.TestCase):
                 self.dataset,
             )
 
+    def test_conditions_are_returned_normalized(self):
+        # The validator checks a stripped/lowercased operator, so what it returns
+        # must be that normalized form — not the raw input dict (which could carry
+        # 'IN' casing or extra keys) — since the fetch layer consumes the output.
+        validated = validate_metric_config(
+            {
+                "dimension": "academic_year",
+                "measure": "name",
+                "aggregation": "count",
+                "conditions": [
+                    {"field": " academic_year ", "operator": "IN", "value": ["2023"], "junk": "x"}
+                ],
+            },
+            self.dataset,
+        )
+        self.assertEqual(
+            validated["conditions"],
+            [{"field": "academic_year", "operator": "in", "value": ["2023"]}],
+        )
+
     def test_malformed_field_names_are_rejected(self):
         # Field names are interpolated into ORM fields/order_by downstream, so
         # anything outside Frappe's fieldname shape must be rejected — even if

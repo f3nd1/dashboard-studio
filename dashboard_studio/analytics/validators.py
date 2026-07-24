@@ -44,6 +44,7 @@ def validate_metric_config(config: dict[str, Any], dataset: dict[str, Any]) -> d
     measure = str(config.get("measure") or "").strip()
 
     referenced_fields = {field for field in (dimension, measure) if field}
+    conditions = []
     for condition in config.get("conditions") or []:
         if not isinstance(condition, dict):
             raise DefinitionValidationError("Each condition must be an object")
@@ -54,6 +55,9 @@ def validate_metric_config(config: dict[str, Any], dataset: dict[str, Any]) -> d
         if operator not in ALLOWED_OPERATORS:
             raise DefinitionValidationError(f"Unsupported operator: {operator or '<blank>'}")
         referenced_fields.add(field)
+        # Return the normalized form the check ran against — never the raw input
+        # dict, which may carry unvalidated casing or extra keys.
+        conditions.append({"field": field, "operator": operator, "value": condition.get("value")})
 
     for field in referenced_fields:
         if not FIELD_NAME_PATTERN.fullmatch(field):
@@ -76,5 +80,5 @@ def validate_metric_config(config: dict[str, Any], dataset: dict[str, Any]) -> d
         "dimension": dimension or None,
         "measure": measure or "name",
         "aggregation": aggregation,
-        "conditions": list(config.get("conditions") or []),
+        "conditions": conditions,
     }
