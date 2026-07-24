@@ -56,8 +56,11 @@ def _make_fake_frappe():
         return _FakeDoc(name=name, dashboard_title=name)
 
     def get_all(doctype, **kwargs):
-        if doctype == "DS Chart":
+        if doctype in ("DS Chart", "DS Chart Filter"):
             return []
+        if doctype == "DS Metric":
+            return [{"name": "M1", "metric_name": "M1", "calculation_type": "Count",
+                     "source_doctype": "Student Applicant"}]
         # grouped-count fetch shape for the engine
         return [{"academic_year": "2023", "count": 3}]
 
@@ -137,6 +140,30 @@ class TestApiRoleEnforcement(unittest.TestCase):
         self._as("Some Other Role")
         with self.assertRaises(_PermissionError):
             self.metrics.run_ds_metric("M1")
+
+    # ---- list_ds_metrics (read) ----
+    def test_viewer_can_list_metrics(self):
+        self._as("Dashboard Studio Viewer")
+        self.assertEqual(self.studio.list_ds_metrics()[0]["metric_name"], "M1")
+
+    def test_no_role_cannot_list_metrics(self):
+        self._as("Some Other Role")
+        with self.assertRaises(_PermissionError):
+            self.studio.list_ds_metrics()
+
+    # ---- chart_filters sanitization on write ----
+    def test_save_chart_sanitizes_filter_rows(self):
+        self._as("Dashboard Studio Editor")
+        out = self.studio.save_chart("C1", {
+            "chart_filters": [
+                {"fieldname": "academic_year", "operator": "=", "value": "2023",
+                 "filter_type": "Static", "parent": "HACK", "doctype": "Evil", "owner": "x"},
+                "not-a-dict-row",
+            ],
+        })
+        self.assertEqual(out["chart_filters"], [
+            {"fieldname": "academic_year", "operator": "=", "value": "2023", "filter_type": "Static"},
+        ])
 
     def test_system_manager_superuser_read_and_write(self):
         self._as("System Manager")

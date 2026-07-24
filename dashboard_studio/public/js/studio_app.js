@@ -257,6 +257,68 @@
     descInput.value = chart.description || "";
     this.panel.appendChild(field("Description", descInput));
 
+    // Metric selection — which DS Metric this chart draws.
+    var metricSelect = el("select", "dss-input");
+    this.availableMetrics(function (names) {
+      names.forEach(function (name) {
+        var o = el("option", null, name);
+        o.value = name;
+        if (name === chart.metric) o.selected = true;
+        metricSelect.appendChild(o);
+      });
+      if (chart.metric && names.indexOf(chart.metric) === -1) {
+        var cur = el("option", null, chart.metric);
+        cur.value = chart.metric;
+        cur.selected = true;
+        metricSelect.appendChild(cur);
+      }
+    });
+    this.panel.appendChild(field("Metric", metricSelect));
+
+    // Chart filters (DS Chart Filter rows). Static rows with engine-supported
+    // operators are editable; Dynamic or like/between rows appear read-only and
+    // are preserved unchanged on save — the engine can't execute them yet.
+    chart.chart_filters = chart.chart_filters || [];
+    var filtersWrap = el("div", "dss-filters");
+    filtersWrap.appendChild(el("span", "dss-field-label", "Filters"));
+    chart.chart_filters.forEach(function (row, index) {
+      if (!core.isFilterEditable(row)) {
+        filtersWrap.appendChild(el(
+          "div", "dss-filter-locked",
+          row.fieldname + " " + row.operator + " " + (row.value || "") +
+          "  (" + (row.filter_type || "Static") + " — not yet supported, preserved)"
+        ));
+        return;
+      }
+      var line = el("div", "dss-filter-row");
+      var f = el("input", "dss-input"); f.placeholder = "field"; f.value = row.fieldname || "";
+      f.addEventListener("input", function () { row.fieldname = f.value; });
+      var op = el("select", "dss-input");
+      core.OPERATORS.forEach(function (o) {
+        var opt = el("option", null, o); opt.value = o;
+        if (o === row.operator) opt.selected = true;
+        op.appendChild(opt);
+      });
+      op.addEventListener("change", function () { row.operator = op.value; });
+      if (!row.operator) row.operator = core.OPERATORS[0];
+      var v = el("input", "dss-input"); v.placeholder = "value"; v.value = row.value == null ? "" : row.value;
+      v.addEventListener("input", function () { row.value = v.value; });
+      var rm = el("button", "dss-btn dss-btn-small", "✕");
+      rm.addEventListener("click", function () {
+        chart.chart_filters.splice(index, 1);
+        self.renderPanel();
+      });
+      [f, op, v, rm].forEach(function (n) { line.appendChild(n); });
+      filtersWrap.appendChild(line);
+    });
+    var addFilter = el("button", "dss-btn dss-btn-small", "+ Add filter");
+    addFilter.addEventListener("click", function () {
+      chart.chart_filters.push({ fieldname: "", operator: "=", value: "", filter_type: "Static" });
+      self.renderPanel();
+    });
+    filtersWrap.appendChild(addFilter);
+    this.panel.appendChild(filtersWrap);
+
     var err = el("div", "dss-error");
     this.panel.appendChild(err);
 
@@ -268,9 +330,25 @@
     this.panel.appendChild(actions);
 
     function collect() {
-      return { chart_title: titleInput.value, chart_type: typeSelect.value, description: descInput.value };
+      return {
+        chart_title: titleInput.value,
+        chart_type: typeSelect.value,
+        description: descInput.value,
+        metric: metricSelect.value || chart.metric,
+      };
     }
     function applyEdit() {
+      // Drop editable rows left fully empty, then validate the rest the way the
+      // engine would. Read-only (Dynamic/unsupported) rows pass through as-is.
+      chart.chart_filters = (chart.chart_filters || []).filter(function (row) {
+        return !core.isFilterEditable(row) || (row.fieldname || "").trim() || (row.value || "").trim();
+      });
+      for (var i = 0; i < chart.chart_filters.length; i++) {
+        var row = chart.chart_filters[i];
+        if (!core.isFilterEditable(row)) continue;
+        var check = core.validateFilter(row);
+        if (!check.ok) { err.textContent = check.error; return null; }
+      }
       var res = core.applyChartEdit(chart, collect());
       if (!res.ok) { err.textContent = res.error; return null; }
       err.textContent = "";
@@ -414,6 +492,22 @@
     toast("Captured " + payload.mappings.length + " mapping(s) (mock — not persisted)");
   };
 
+  // Metric names for the picker: mock keys this session; live list cached once.
+  App.prototype.availableMetrics = function (callback) {
+    if (this.state.mock || !hasFrappe()) {
+      callback(Object.keys((root.DSStudioMock || {}).MOCK_METRIC_RESULTS || {}));
+      return;
+    }
+    var self = this;
+    if (this._metricList) { callback(this._metricList); return; }
+    root.frappe.call({ method: "dashboard_studio.api.studio.list_ds_metrics" })
+      .then(function (r) {
+        self._metricList = (r.message || []).map(function (m) { return m.name; });
+        callback(self._metricList);
+      })
+      .catch(function () { callback([]); });
+  };
+
   App.prototype.saveChart = function (chart) {
     if (this.state.mock || !hasFrappe()) {
       toast("Saved “" + chart.chart_title + "” (mock — not persisted)");
@@ -425,8 +519,15 @@
         chart: chart.name,
         patch: JSON.stringify({
           chart_title: chart.chart_title, chart_type: chart.chart_type,
-          description: chart.description, pos_x: chart.pos_x, pos_y: chart.pos_y,
+          description: chart.description, metric: chart.metric,
+          pos_x: chart.pos_x, pos_y: chart.pos_y,
           width: chart.width, height: chart.height,
+          chart_filters: (chart.chart_filters || []).map(function (row) {
+            return {
+              fieldname: row.fieldname, operator: row.operator,
+              value: row.value, filter_type: row.filter_type || "Static",
+            };
+          }),
         }),
       },
     }).then(function () { toast("Saved " + chart.chart_title); });

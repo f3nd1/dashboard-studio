@@ -37,6 +37,17 @@ assert.ok(core.validateFilter({ fieldname: "academic_year", operator: "=" }).ok,
 assert.ok(!core.validateFilter({ fieldname: "x", operator: "like" }).ok, "like rejected");
 assert.ok(!core.validateFilter({ fieldname: "", operator: "=" }).ok, "missing field rejected");
 
+// applyChartEdit passes metric selection through
+var withMetric = core.applyChartEdit(original, { metric: "Applicants by Year (MOCK)" });
+assert.ok(withMetric.ok && withMetric.chart.metric === "Applicants by Year (MOCK)", "metric edit applied");
+
+// isFilterEditable: Static+supported editable; Dynamic and like/between preserved read-only
+assert.ok(core.isFilterEditable({ fieldname: "x", operator: "=", filter_type: "Static" }), "static = editable");
+assert.ok(core.isFilterEditable({ fieldname: "x", operator: "" }), "new empty row editable");
+assert.ok(!core.isFilterEditable({ fieldname: "x", operator: "=", filter_type: "Dynamic" }), "dynamic read-only");
+assert.ok(!core.isFilterEditable({ fieldname: "x", operator: "like", filter_type: "Static" }), "like read-only");
+assert.ok(!core.isFilterEditable({ fieldname: "x", operator: "between", filter_type: "Static" }), "between read-only");
+
 // ---- mapping core ----
 assert.strictEqual(core.nextMappingStatus("Suggested"), "Confirmed", "status cycle 1");
 assert.strictEqual(core.nextMappingStatus("Confirmed"), "Rejected", "status cycle 2");

@@ -48,6 +48,12 @@
   font: inherit; box-sizing: border-box; }
 textarea.dss-input { min-height: 60px; resize: vertical; }
 .dss-error { color: #b3261e; font-size: 12px; min-height: 16px; }
+.dss-filters { margin-bottom: 10px; }
+.dss-filter-row { display: grid; grid-template-columns: 1fr 62px 1fr auto; gap: 4px; margin-bottom: 4px; }
+.dss-filter-row .dss-input { padding: 4px 6px; font-size: 12px; }
+.dss-filter-locked { font-size: 11px; color: var(--dss-muted); background: #f4f6f9;
+  border: 1px dashed var(--dss-line); border-radius: 6px; padding: 5px 8px; margin-bottom: 4px; }
+.dss-btn-small { padding: 3px 8px; font-size: 12px; }
 .dss-actions { display: flex; gap: 8px; margin-top: 6px; }
 
 .dss-viewtabs { display: flex; gap: 6px; margin-left: auto; margin-right: 10px; }

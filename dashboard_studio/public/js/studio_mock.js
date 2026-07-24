@@ -26,6 +26,12 @@
         chart_type: "Line Chart", metric: "Applicants by Year (MOCK)",
         source_doctype: "Student Applicant",
         pos_x: 3, pos_y: 0, width: 6, height: 4, description: "",
+        // One editable Static filter + one Dynamic row that the editor must
+        // show read-only ("not yet supported") and preserve on save.
+        chart_filters: [
+          { fieldname: "application_status", operator: "=", value: "Admitted", filter_type: "Static" },
+          { fieldname: "intake", operator: "=", value: "{{session_intake}}", filter_type: "Dynamic" },
+        ],
       },
       {
         name: "chart-mock-3", chart_title: "Applicants by Programme",

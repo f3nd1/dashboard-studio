@@ -70,11 +70,21 @@
       next.chart_type = patch.chart_type;
     }
     if (patch.description != null) next.description = String(patch.description);
+    if (patch.metric != null) next.metric = String(patch.metric);
     ["pos_x", "pos_y", "width", "height"].forEach(function (k) {
       if (patch[k] != null) next[k] = patch[k];
     });
     Object.assign(next, clampLayout(next));
     return { ok: true, chart: next };
+  }
+
+  // A filter row the editor may modify: Static, with an operator the engine
+  // executes (or none yet). Dynamic rows and like/between rows are preserved
+  // read-only — the engine rejects them, so the editor must not produce them.
+  function isFilterEditable(filter) {
+    var isStatic = (filter.filter_type || "Static") === "Static";
+    var opOk = !filter.operator || OPERATORS.indexOf(filter.operator) !== -1;
+    return isStatic && opOk;
   }
 
   // Validate a single filter row the way the engine would (supported operators
@@ -152,6 +162,7 @@
     serializeLayout: serializeLayout,
     applyChartEdit: applyChartEdit,
     validateFilter: validateFilter,
+    isFilterEditable: isFilterEditable,
     nextMappingStatus: nextMappingStatus,
     buildMapping: buildMapping,
     serializeCanvasNodes: serializeCanvasNodes,
