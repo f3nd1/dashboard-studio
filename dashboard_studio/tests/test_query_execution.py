@@ -71,6 +71,19 @@ class TestCountByAcademicYear(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             execute_query_plan(plan, fetch=self._fetch, permission_check=lambda: None)
 
+    def test_mixed_type_dimension_values_do_not_crash_sort(self):
+        # A dimension can come back int from one source and str from another;
+        # sorting must fall back to string order instead of raising TypeError.
+        def fetch(doctype, dimension, conditions, limit):
+            return [
+                {"academic_year": 2024, "count": 1},
+                {"academic_year": "2022", "count": 2},
+                {"academic_year": None, "count": 1},
+            ]
+
+        result = execute_query_plan(self._plan(), fetch=fetch, permission_check=lambda: None)
+        self.assertEqual([row["academic_year"] for row in result], ["2022", 2024, None])
+
     def test_result_exceeding_max_groups_is_rejected(self):
         plan = self._plan()
         plan["limits"]["max_groups"] = 1  # ceiling below the 3 fixture groups

@@ -224,5 +224,10 @@ def execute_query_plan(
         {dimension: row.get(dimension), "count": int(row.get("count") or 0)} for row in rows
     ]
     # Match the legacy Metabase baseline: ORDER BY <dimension> ASC, NULLs last.
-    result.sort(key=lambda row: (row[dimension] is None, row[dimension]))
+    try:
+        result.sort(key=lambda row: (row[dimension] is None, row[dimension]))
+    except TypeError:
+        # Mixed-type dimension values (e.g. int and str years) are not mutually
+        # comparable; fall back to string order rather than crashing.
+        result.sort(key=lambda row: (row[dimension] is None, str(row[dimension])))
     return result
