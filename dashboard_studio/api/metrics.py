@@ -47,13 +47,17 @@ def run_ds_metric(metric_name: str):
 
     Separate from run_metric, which serves the older Metric Definition schema.
     Reads the DS Metric doc, adapts it to the engine config, and runs it through
-    the same permission check (System Manager) and safety cap already in place.
-    Only Approved metrics run; see build_plan_from_ds_metric for the scope guards.
+    the same safety cap already in place. Running a metric is a read action, so
+    Editor or Viewer (or System Manager) may execute it. Only Approved metrics
+    run; see build_plan_from_ds_metric for the scope guards.
     """
-    frappe.only_for("System Manager")
+    frappe.only_for(("Dashboard Studio Editor", "Dashboard Studio Viewer", "System Manager"))
     metric = frappe.get_doc("DS Metric", metric_name)
     plan = build_plan_from_ds_metric(metric.as_dict())
-    return execute_query_plan(plan)
+    # Authorization already enforced above by the endpoint's role check; the
+    # engine's default check would re-require System Manager and lock out
+    # Editor/Viewer, so pass an explicit no-op here.
+    return execute_query_plan(plan, permission_check=lambda: None)
 
 
 def _load_json(value, default):
