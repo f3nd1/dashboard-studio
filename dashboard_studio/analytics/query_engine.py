@@ -27,6 +27,83 @@ def build_query_plan(metric_config: dict[str, Any], dataset_config: dict[str, An
     }
 
 
+_DS_STATIC = "Static"
+_DS_APPROVED = "Approved"
+
+
+def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
+    """Adapter: turn a DS Metric record into the config the generic engine already runs.
+
+    Connects the DS Metric schema to the proven slice — a single source DocType,
+    single group-by dimension, ``Count``. It does NOT expand capability: any
+    calculation_type other than Count, a missing group_by_field, a Dynamic filter,
+    or an unsupported operator is rejected with a clear error.
+
+    Pure and Frappe-free so it stays unit-testable without a live Bench. Pass a
+    plain dict (``frappe.get_doc(...).as_dict()`` shape); child rows in
+    ``metric_filters`` are dicts too.
+
+    SECURITY NOTE: DS Metric carries no field allowlist (there is no DS-side
+    Dataset yet), so the plan is built with an EMPTY allowlist — the allowlist
+    control the old Metric Definition path had is absent here. Flagged for an
+    urgent follow-up; do not run DS Metrics against real audit-relevant data until
+    a DS allowlist exists.
+    """
+
+    status = (metric.get("status") or "").strip()
+    if status != _DS_APPROVED:
+        raise ValueError(
+            f"DS Metric '{metric.get('metric_name') or '<unnamed>'}' is {status or 'unset'}; "
+            f"only {_DS_APPROVED} metrics can be executed."
+        )
+
+    calc = (metric.get("calculation_type") or "").strip().lower()
+    if calc != "count":
+        raise NotImplementedError(
+            f"DS Metric execution currently supports only calculation_type 'Count', not "
+            f"'{metric.get('calculation_type') or '<blank>'}'."
+        )
+
+    source_doctype = (metric.get("source_doctype") or "").strip()
+    if not source_doctype:
+        raise ValueError("DS Metric is missing source_doctype")
+
+    dimension = (metric.get("group_by_field") or "").strip()
+    if not dimension:
+        raise ValueError("DS Metric is missing group_by_field (required for the count-by-group slice)")
+
+    conditions = []
+    for row in metric.get("metric_filters") or []:
+        filter_type = (row.get("filter_type") or _DS_STATIC).strip()
+        if filter_type != _DS_STATIC:
+            raise NotImplementedError(
+                f"Dynamic metric filters are not supported yet (field '{row.get('fieldname')}'). "
+                "Use Static filters for now."
+            )
+        field = (row.get("fieldname") or "").strip()
+        if not field:
+            raise ValueError("A metric filter is missing its fieldname")
+        conditions.append(
+            {"field": field, "operator": (row.get("operator") or "").strip(), "value": row.get("value")}
+        )
+
+    # Empty allowlist: DS schema has no dataset allowlist yet (see SECURITY NOTE).
+    # validate_metric_config still enforces the operator allowlist and rejects
+    # unsupported operators such as 'like'/'between'.
+    metric_config = {
+        "dimension": dimension,
+        "measure": metric.get("value_field") or "name",
+        "aggregation": "count",
+        "conditions": conditions,
+    }
+    dataset_config = {
+        "source_doctype": source_doctype,
+        "allowed_fields": [],
+        "restricted_fields": [],
+    }
+    return build_query_plan(metric_config, dataset_config)
+
+
 def _require_system_manager() -> None:
     """Default permission check: caller must hold Frappe's System Manager role.
 
