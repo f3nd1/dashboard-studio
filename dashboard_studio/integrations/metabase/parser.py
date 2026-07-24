@@ -68,7 +68,8 @@ def _parse_filters(sql: str) -> tuple[list[dict], list[str]]:
         if not cm:
             problems.append(f"unparsed WHERE condition: {' '.join(part.split())[:60]}")
             continue
-        field, op, value = cm.group(1).strip(), cm.group(2).upper(), cm.group(3).strip()
+        # Lowercase to match the engine's ALLOWED_OPERATORS convention.
+        field, op, value = cm.group(1).strip(), cm.group(2).lower(), cm.group(3).strip()
         filters.append({"field": field, "operator": op, "value": value.strip("'\"")})
     return filters, problems
 

@@ -69,6 +69,16 @@ class TestAnalyzeSingleStatements(unittest.TestCase):
         self.assertFalse(r["supported"])
         self.assertTrue(any("multiple joins" in reason for reason in r["reasons"]))
 
+    def test_filter_operators_are_lowercased(self):
+        # The engine's operator allowlist is lowercase; parsed filters must match
+        # so mapping-view conversions don't mismatch on case.
+        r = analyze_sql(
+            "SELECT COUNT(*) FROM `tabStudent Applicant` "
+            "WHERE `tabStudent Applicant`.`academic_year` IN ('2023', '2024');"
+        )
+        self.assertTrue(r["supported"], r["reasons"])
+        self.assertEqual(r["filters"][0]["operator"], "in")
+
     def test_or_clause_flagged_not_mangled(self):
         # OR cannot map to the engine's AND-only conditions; must be flagged,
         # never swallowed into a filter value.
