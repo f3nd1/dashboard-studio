@@ -76,4 +76,31 @@ assert.strictEqual(nodes[0].label, "tabStudent Applicant", "source label restore
 assert.strictEqual(nodes[2].node_type, "Target DocType");
 assert.ok(nodes[2].pos_x > nodes[0].pos_x, "targets laid out right of sources");
 
+// nodesFromProject: saved positions restored, labels derived from node_id
+var restored = core.nodesFromProject(
+  [{ node_id: "src:tabStudent Applicant", node_type: "Source Table", pos_x: 44, pos_y: 90 }],
+  []
+);
+assert.strictEqual(restored.length, 1, "restores saved node");
+assert.strictEqual(restored[0].label, "tabStudent Applicant", "label strips src: prefix");
+assert.strictEqual(restored[0].pos_x, 44, "saved position kept");
+
+// a mapping with no saved node still appears, laid out by side
+var derived = core.nodesFromProject(
+  [],
+  [{ external_table: "tabStudent Applicant", target_doctype: "Student Applicant" }]
+);
+assert.strictEqual(derived.length, 2, "mapping implies a source and a target node");
+assert.strictEqual(derived[0].node_type, "Source Table");
+assert.strictEqual(derived[1].node_type, "Target DocType");
+assert.ok(derived[1].pos_x > derived[0].pos_x, "targets laid out right of sources");
+
+// a saved node is not duplicated by the mapping that references it
+var mixed = core.nodesFromProject(
+  [{ node_id: "src:tabStudent Applicant", node_type: "Source Table", pos_x: 44, pos_y: 90 }],
+  [{ external_table: "tabStudent Applicant", target_doctype: "Student Applicant" }]
+);
+assert.strictEqual(mixed.length, 2, "saved source + derived target, no duplicate");
+assert.strictEqual(mixed[0].pos_x, 44, "saved position wins over default layout");
+
 console.log("studio_core.test.js — all assertions passed");

@@ -152,6 +152,45 @@
     return nodes;
   }
 
+  // Rebuild the mapping canvas from persisted data: saved node positions first,
+  // then any node implied by a mapping that has no saved position yet (so a
+  // mapping made elsewhere still shows up). Labels come from the node_id.
+  function nodesFromProject(canvasNodes, mappings) {
+    var nodes = [];
+    var seen = {};
+    var counts = { "Source Table": 0, "Target DocType": 0 };
+
+    (canvasNodes || []).forEach(function (n) {
+      var id = n && n.node_id;
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      counts[n.node_type] = (counts[n.node_type] || 0) + 1;
+      nodes.push({
+        node_id: id,
+        node_type: n.node_type,
+        label: String(id).replace(/^(src|tgt):/, ""),
+        pos_x: n.pos_x || 0,
+        pos_y: n.pos_y || 0,
+      });
+    });
+
+    (mappings || []).forEach(function (m) {
+      [
+        ["src:" + m.external_table, "Source Table", m.external_table, 20],
+        ["tgt:" + m.target_doctype, "Target DocType", m.target_doctype, 340],
+      ].forEach(function (spec) {
+        var id = spec[0], type = spec[1], label = spec[2], x = spec[3];
+        if (!label || seen[id]) return;
+        seen[id] = true;
+        var index = counts[type] || 0;
+        counts[type] = index + 1;
+        nodes.push({ node_id: id, node_type: type, label: label, pos_x: x, pos_y: 16 + index * 64 });
+      });
+    });
+
+    return nodes;
+  }
+
   var api = {
     CHART_TYPES: CHART_TYPES,
     OPERATORS: OPERATORS,
@@ -167,6 +206,7 @@
     buildMapping: buildMapping,
     serializeCanvasNodes: serializeCanvasNodes,
     analysisToNodes: analysisToNodes,
+    nodesFromProject: nodesFromProject,
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = api;

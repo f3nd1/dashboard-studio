@@ -36,7 +36,9 @@
     this.options = options || {};
     this.state = {
       dashboard: null, charts: [], selected: null, mock: false,
-      view: "design",
+      // Arriving with ?project= means the caller came from a DS Migration
+      // Project, so open straight into the Mapping view.
+      view: this.options.project ? "mapping" : "design",
       // Mapping view state, built lazily on first open.
       mapNodes: null, mappings: [], pickedSource: null,
     };
@@ -365,14 +367,43 @@
   // ---- Mapping view: source tables -> DocTypes, persisted shapes mocked ----
 
   App.prototype.renderMapping = function () {
-    if (!this.state.mapNodes) {
-      // ⚠️ MOCK: analysis + candidate doctypes come from studio_mock.js this
-      // session. Live wiring (a real Migration Project feeding analyze_sql
-      // output) is a follow-up once a Bench exists.
-      var mock = root.DSStudioMock || {};
-      this.state.mapNodes = core.analysisToNodes(mock.MOCK_ANALYSIS, mock.MOCK_TARGET_DOCTYPES);
+    if (this.state.mapNodes) {
+      this.refreshMapping();
+      return;
     }
+    var self = this;
+    if (this.options.project && hasFrappe()) {
+      this.canvas.innerHTML = '<div class="dss-nochart">Loading migration project…</div>';
+      root.frappe.call({
+        method: "dashboard_studio.api.studio.get_migration_project",
+        args: { project: this.options.project },
+      }).then(function (r) {
+        var data = r.message || {};
+        self.state.mappings = (data.mappings || []).map(function (m) {
+          return {
+            external_table: m.external_table,
+            target_doctype: m.target_doctype,
+            mapping_status: m.mapping_status || "Suggested",
+          };
+        });
+        self.state.mapNodes = core.nodesFromProject(data.canvas_nodes, self.state.mappings);
+        if (!self.state.mapNodes.length) self.state.mapNodes = self.mockNodes();
+        self.refreshMapping();
+      }).catch(function () {
+        self.state.mapNodes = self.mockNodes();
+        self.refreshMapping();
+      });
+      return;
+    }
+    this.state.mapNodes = this.mockNodes();
     this.refreshMapping();
+  };
+
+  // ⚠️ MOCK node set: used with no ?project=, or for a project with nothing
+  // saved yet. Feeding real analyze_sql output into a project is a follow-up.
+  App.prototype.mockNodes = function () {
+    var mock = root.DSStudioMock || {};
+    return core.analysisToNodes(mock.MOCK_ANALYSIS, mock.MOCK_TARGET_DOCTYPES);
   };
 
   App.prototype._node = function (nodeId) {
@@ -481,15 +512,32 @@
   };
 
   App.prototype.saveMappings = function () {
-    // ⚠️ MOCK persistence only: captures the exact DS Data Mapping and
-    // DS Canvas Node payload shapes but writes nothing — server endpoints for
-    // mapping/canvas persistence are a live-Bench follow-up.
-    var payload = {
-      mappings: this.state.mappings,
-      canvas_nodes: core.serializeCanvasNodes(this.state.mapNodes || []),
-    };
-    if (root.console) root.console.log("[Dashboard Studio] mock mapping payload", payload);
-    toast("Captured " + payload.mappings.length + " mapping(s) (mock — not persisted)");
+    var mappings = this.state.mappings;
+    var canvasNodes = core.serializeCanvasNodes(this.state.mapNodes || []);
+
+    // Without a ?project= there is nothing to save against, so keep the mock
+    // path — the payload shape is identical either way.
+    if (!this.options.project || !hasFrappe()) {
+      if (root.console) {
+        root.console.log("[Dashboard Studio] mock mapping payload",
+          { mappings: mappings, canvas_nodes: canvasNodes });
+      }
+      toast("Captured " + mappings.length + " mapping(s) (mock — no migration project)");
+      return;
+    }
+
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.save_migration_mapping_set",
+      args: {
+        project: this.options.project,
+        mappings: JSON.stringify(mappings),
+        canvas_nodes: JSON.stringify(canvasNodes),
+      },
+    }).then(function (r) {
+      var result = r.message || {};
+      toast("Saved " + (result.saved_mappings || 0) + " mapping(s) — project is now " +
+        (result.status || "updated"));
+    });
   };
 
   // Metric names for the picker: mock keys this session; live list cached once.

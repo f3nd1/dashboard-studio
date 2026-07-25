@@ -29,7 +29,10 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
     () => {
       mount.textContent = "";
       const dashboard = frappe.get_route()[1] || null; // /app/dashboard-studio/<DS Dashboard name>
-      window.DSStudioApp.mount(mount, { dashboard });
+      // The route segment is already the dashboard, so a migration project
+      // arrives as a query param: /app/dashboard-studio?project=<name>
+      const project = new URLSearchParams(window.location.search).get("project");
+      window.DSStudioApp.mount(mount, { dashboard, project });
     }
   );
 };
