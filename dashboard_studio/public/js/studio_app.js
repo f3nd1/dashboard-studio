@@ -816,7 +816,13 @@
     }
     rows.forEach(function (row) {
       var tr = el("tr", "is-" + String(row.status || "").toLowerCase());
-      tr.appendChild(el("td", null, row.chart || "—"));
+      var chartCell = el("td");
+      var expand = el("button", "dss-expand",
+        (self.state.expandedComparison === row.name ? "▾ " : "▸ ") + (row.chart || "—"));
+      expand.title = "Show the per-group breakdown";
+      expand.addEventListener("click", function () { self.toggleComparison(row); });
+      chartCell.appendChild(expand);
+      tr.appendChild(chartCell);
       tr.appendChild(el("td", "dss-num", row.original_value === "" ? "—" : row.original_value));
       // A blank target is a missing result, not a zero — say so.
       tr.appendChild(el("td", "dss-num", row.new_value === "" ? "missing" : row.new_value));
@@ -839,6 +845,44 @@
       }
       tr.appendChild(action);
       tbody.appendChild(tr);
+
+      // Per-group breakdown — the detail the summary totals are made of.
+      if (self.state.expandedComparison === row.name) {
+        var detail = el("tr", "dss-detail-row");
+        var cell = el("td");
+        cell.colSpan = 6;
+        var groups = row.comparison_rows;
+        if (!groups) {
+          cell.appendChild(el("div", "dss-hint", "Loading breakdown…"));
+        } else if (!groups.length) {
+          cell.appendChild(el("div", "dss-hint", "No per-group detail recorded for this run."));
+        } else {
+          var inner = el("table", "dss-val-table dss-val-inner");
+          var ihead = el("tr");
+          ["Group", "Source", "Target", "Diff", "Diff %", "Status"].forEach(function (label) {
+            ihead.appendChild(el("th", null, label));
+          });
+          inner.appendChild(ihead);
+          groups.forEach(function (g) {
+            var gtr = el("tr", "is-" + String(g.status || "").toLowerCase());
+            gtr.appendChild(el("td", null, g.group_label));
+            gtr.appendChild(el("td", "dss-num", g.original_value === "" ? "—" : g.original_value));
+            // Blank stays blank: an incomparable value is not a zero.
+            gtr.appendChild(el("td", "dss-num", g.new_value === "" ? "missing" : g.new_value));
+            gtr.appendChild(el("td", "dss-num", g.difference === "" ? "—" : g.difference));
+            gtr.appendChild(el("td", "dss-num", g.difference_pct === "" ? "—" : g.difference_pct));
+            var gs = el("td");
+            gs.appendChild(el("span", "dss-pill is-" + String(g.status || "").toLowerCase(),
+              g.status || "—"));
+            if (g.reason) gs.appendChild(el("span", "dss-val-reason", " " + g.reason));
+            gtr.appendChild(gs);
+            inner.appendChild(gtr);
+          });
+          cell.appendChild(inner);
+        }
+        detail.appendChild(cell);
+        tbody.appendChild(detail);
+      }
     });
     table.appendChild(tbody);
     band.appendChild(table);
@@ -853,6 +897,34 @@
     this.panel.appendChild(el("p", "dss-hint",
       "Accepting a difference is a human decision: it always requires a reason and records " +
       "who accepted it. Nothing is ever marked Accepted automatically."));
+  };
+
+  // Expand a run to show its per-group rows, fetching them once if needed.
+  App.prototype.toggleComparison = function (row) {
+    var self = this;
+    if (this.state.expandedComparison === row.name) {
+      this.state.expandedComparison = null;
+      this.paintValidation();
+      return;
+    }
+    this.state.expandedComparison = row.name;
+    if (row.comparison_rows || !hasFrappe()) {
+      // Mock rows are already attached; nothing to fetch.
+      if (!row.comparison_rows) row.comparison_rows = [];
+      this.paintValidation();
+      return;
+    }
+    this.paintValidation(); // show "Loading breakdown…" immediately
+    root.frappe.call({
+      method: "dashboard_studio.api.validation.get_comparison",
+      args: { comparison: row.name },
+    }).then(function (r) {
+      row.comparison_rows = (r.message || {}).comparison_rows || [];
+      if (self.state.view === "validation") self.paintValidation();
+    }).catch(function () {
+      row.comparison_rows = [];
+      if (self.state.view === "validation") self.paintValidation();
+    });
   };
 
   App.prototype.acceptComparison = function (row) {

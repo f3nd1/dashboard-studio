@@ -269,3 +269,10 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
   padding: 7px 0; border-bottom: 1px solid var(--dss-line); }
 .dss-ver-when { font-variant-numeric: tabular-nums; color: var(--dss-ink-700); }
 .dss-ver-who { color: var(--dss-muted); }
+.dss-expand { background: none; border: 0; font: inherit; font-size: 11px; cursor: pointer;
+  color: var(--dss-navy); font-weight: 700; padding: 0; text-align: left; }
+.dss-expand:hover { color: var(--dss-blue); }
+.dss-detail-row > td { background: var(--dss-surface-2); padding: 0 12px 10px; }
+.dss-val-inner { margin: 4px 0 2px; }
+.dss-val-inner th { font-size: 7px; padding: 6px 8px; }
+.dss-val-inner td { padding: 6px 8px; font-size: 10px; }
