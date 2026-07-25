@@ -84,6 +84,16 @@ assert.strictEqual(nodes[0].label, "tabStudent Applicant", "source label restore
 assert.strictEqual(nodes[2].node_type, "Target DocType");
 assert.ok(nodes[2].pos_x > nodes[0].pos_x, "targets laid out right of sources");
 
+// moveSection
+var ordered = [{ name: "a" }, { name: "b" }, { name: "c" }];
+assert.deepStrictEqual(core.moveSection(ordered, "b", -1), ["b", "a", "c"], "move up");
+assert.deepStrictEqual(core.moveSection(ordered, "b", 1), ["a", "c", "b"], "move down");
+assert.strictEqual(core.moveSection(ordered, "a", -1), null, "first cannot move up");
+assert.strictEqual(core.moveSection(ordered, "c", 1), null, "last cannot move down");
+assert.strictEqual(core.moveSection(ordered, "missing", 1), null, "unknown section");
+assert.deepStrictEqual(ordered.map(function (s) { return s.name; }), ["a", "b", "c"],
+  "input not mutated");
+
 // groupChartsBySection
 var secs = [
   { name: "sec-b", section_title: "Outcomes", sort_order: 2 },

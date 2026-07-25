@@ -100,6 +100,11 @@
     head.appendChild(views);
 
     if (this.state.view === "design") {
+      var addSection = el("button", "dss-btn", "+ Section");
+      addSection.title = "Add a section to group charts";
+      addSection.addEventListener("click", function () { self.addSection(); });
+      head.appendChild(addSection);
+
       var saveAll = el("button", "dss-btn dss-btn-primary", "Save layout");
       saveAll.addEventListener("click", function () { self.saveLayout(); });
       head.appendChild(saveAll);
@@ -254,6 +259,117 @@
     bands.forEach(function (band) { self.renderBand(band); });
   };
 
+  // ---- section management ----
+  //
+  // ponytail: window.prompt for the title. It works in the Desk and the render
+  // harness alike; swap for a Frappe dialog if the interaction ever needs more
+  // than one field.
+
+  // Call a section endpoint, or just mutate local state when there is no
+  // backend — the mock path keeps the view usable without pretending to persist.
+  App.prototype.sectionCall = function (method, args, mockApply, describe) {
+    var self = this;
+    if (this.state.mock || !hasFrappe()) {
+      mockApply();
+      this.refresh();
+      toast(describe + " (mock — not persisted)");
+      return;
+    }
+    root.frappe.call({ method: "dashboard_studio.api.studio." + method, args: args })
+      .then(function () { self.reloadDashboard(describe); })
+      .catch(function () { toast("Could not " + describe.toLowerCase()); });
+  };
+
+  // Re-read the dashboard so section order and chart assignment come back from
+  // the server rather than being guessed at locally.
+  App.prototype.reloadDashboard = function (describe) {
+    var self = this;
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.get_studio_dashboard",
+      args: { dashboard: this.options.dashboard },
+    }).then(function (r) {
+      var data = r.message || {};
+      self.state.charts = data.charts || [];
+      self.state.sections = data.sections || [];
+      if (self.state.view === "design") self.refresh();
+      toast(describe);
+    });
+  };
+
+  App.prototype.addSection = function () {
+    var title = (root.prompt && root.prompt("New section title")) || "";
+    title = title.trim();
+    if (!title) return;
+    var self = this;
+    this.sectionCall(
+      "create_section",
+      { dashboard: this.options.dashboard, section_title: title },
+      function () {
+        self.state.sections = (self.state.sections || []).concat([{
+          name: "mock-sec-" + (self.state.sections.length + 1),
+          section_title: title,
+          sort_order: self.state.sections.length + 1,
+        }]);
+      },
+      "Added section “" + title + "”"
+    );
+  };
+
+  App.prototype.renameSection = function (band) {
+    var title = (root.prompt && root.prompt("Rename section", band.title)) || "";
+    title = title.trim();
+    if (!title || title === band.title) return;
+    var self = this;
+    this.sectionCall(
+      "update_section",
+      { section: band.name, patch: JSON.stringify({ section_title: title }) },
+      function () {
+        (self.state.sections || []).forEach(function (s) {
+          if (s.name === band.name) s.section_title = title;
+        });
+      },
+      "Renamed section to “" + title + "”"
+    );
+  };
+
+  App.prototype.moveSection = function (name, delta) {
+    var order = core.moveSection(this.state.sections, name, delta);
+    if (!order) return; // already at the end it is moving toward
+    var self = this;
+    this.sectionCall(
+      "reorder_sections",
+      { dashboard: this.options.dashboard, order: JSON.stringify(order) },
+      function () {
+        var byName = {};
+        self.state.sections.forEach(function (s) { byName[s.name] = s; });
+        self.state.sections = order.map(function (n) { return byName[n]; });
+      },
+      "Reordered sections"
+    );
+  };
+
+  App.prototype.deleteSection = function (band) {
+    var count = band.charts.length;
+    var warning = "Delete section “" + band.title + "”?" +
+      (count ? "\n\nIts " + count + " chart(s) will be kept and moved to Ungrouped." : "");
+    if (root.confirm && !root.confirm(warning)) return;
+    var self = this;
+    this.sectionCall(
+      "delete_section",
+      { section: band.name },
+      function () {
+        // Mirror the server: keep the charts, just un-assign them.
+        self.state.sections = (self.state.sections || []).filter(function (s) {
+          return s.name !== band.name;
+        });
+        self.state.charts.forEach(function (chart) {
+          if (chart.section === band.name) chart.section = null;
+        });
+      },
+      "Deleted section “" + band.title + "”" + (count ? "; " + count + " chart(s) kept" : "")
+    );
+  };
+
   App.prototype.isBandCollapsed = function (band) {
     var key = band.name || "__ungrouped__";
     var overrides = this.state.collapsedSections || {};
@@ -274,6 +390,23 @@
     });
     head.appendChild(toggle);
     head.appendChild(el("span", "dss-band-count", band.charts.length + " chart(s)"));
+
+    // Ungrouped is a derived bucket, not a record — it has nothing to manage.
+    if (band.name) {
+      var controls = el("div", "dss-band-controls");
+      [
+        ["↑", "Move section up", function () { self.moveSection(band.name, -1); }],
+        ["↓", "Move section down", function () { self.moveSection(band.name, 1); }],
+        ["Rename", "Rename section", function () { self.renameSection(band); }],
+        ["Delete", "Delete section (charts are kept)", function () { self.deleteSection(band); }],
+      ].forEach(function (spec) {
+        var btn = el("button", "dss-btn dss-btn-small", spec[0]);
+        btn.title = spec[1];
+        btn.addEventListener("click", spec[2]);
+        controls.appendChild(btn);
+      });
+      head.appendChild(controls);
+    }
     wrap.appendChild(head);
 
     if (!collapsed) {
