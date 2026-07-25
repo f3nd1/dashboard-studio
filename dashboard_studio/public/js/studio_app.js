@@ -1984,8 +1984,16 @@
     this.canvas.innerHTML = "";
 
     if (this.state.governance) { this.paintGovernance(); return; }
-    if (!hasFrappe() || this.state.mock || !this.currentDashboard()) {
+    if (!hasFrappe() || this.state.mock) {
       this.state.governance = (root.DSStudioMock || {}).MOCK_GOVERNANCE || null;
+      this.paintGovernance();
+      return;
+    }
+    // Same fault as the Migration canvas: a live session with no dashboard open
+    // was served MOCK_GOVERNANCE, which also made paintGovernance's "No
+    // dashboard is open" branch unreachable on a real site.
+    if (!this.currentDashboard()) {
+      this.state.governance = null;
       this.paintGovernance();
       return;
     }
@@ -2153,6 +2161,13 @@
       return;
     }
     var self = this;
+    // A chosen demo session is the ONLY place invented nodes are allowed. Every
+    // other branch below shows what is really there, including nothing.
+    if (this.state.mock) {
+      this.state.mapNodes = this.mockNodes();
+      this.refreshMapping();
+      return;
+    }
     if (this.options.project && hasFrappe()) {
       this.canvas.innerHTML = '<div class="dss-nochart">Loading migration project…</div>';
       root.frappe.call({
@@ -2167,23 +2182,31 @@
             mapping_status: m.mapping_status || "Suggested",
           };
         });
+        // An empty project is empty. Substituting demo nodes here is what put
+        // "(MOCK)" next to a target DocType on a real site.
         self.state.mapNodes = core.nodesFromProject(data.canvas_nodes, self.state.mappings);
-        if (!self.state.mapNodes.length) self.state.mapNodes = self.mockNodes();
         // Keep the loaded state either way, but only repaint if the user is
         // still on the Mapping view — otherwise this wipes the Design canvas.
         if (self.state.view === "mapping") self.refreshMapping();
       }).catch(function () {
-        self.state.mapNodes = self.mockNodes();
-        if (self.state.view === "mapping") self.refreshMapping();
+        // Same rule as the Builder landing: a failed call says so and offers a
+        // retry. Falling back to demo data made a broken call look like a
+        // working migration.
+        if (self.state.view === "mapping") {
+          self.canvasError("Could not load that migration project.", self.renderMapping);
+          self.renderMappingPanel();
+        }
       });
       return;
     }
-    this.state.mapNodes = this.mockNodes();
+    // No ?project= is not a failure — the SQL box above still works, and
+    // analysis is read-only. Say what is missing instead of inventing a canvas.
+    this.state.mapNodes = [];
     this.refreshMapping();
   };
 
-  // ⚠️ MOCK node set: used with no ?project=, or for a project with nothing
-  // saved yet. Feeding real analyze_sql output into a project is a follow-up.
+  // ⚠️ MOCK node set. Reachable ONLY from a deliberately chosen demo session,
+  // where the sample-data banner is already up.
   App.prototype.mockNodes = function () {
     var mock = root.DSStudioMock || {};
     return core.analysisToNodes(mock.MOCK_ANALYSIS, mock.MOCK_TARGET_DOCTYPES);
@@ -2275,6 +2298,13 @@
       svg.appendChild(lineEl);
     });
     this.canvas.appendChild(svg);
+    if (!this.state.mapNodes.length) {
+      this.canvas.appendChild(el("div", "dss-nochart",
+        this.options.project
+          ? "This migration project has nothing mapped yet."
+          : "Opened without a migration project, so there is nothing to load." +
+            " Paste a query above to analyze it; mappings can only be saved from a project."));
+    }
     this.state.mapNodes.forEach(function (n) { self.renderMapNode(n); });
     this.renderMappingPanel();
   };
