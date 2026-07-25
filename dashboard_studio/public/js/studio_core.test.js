@@ -397,4 +397,33 @@ assert.strictEqual(odd.find(o => o.value === 7).label, "7 of 12 (custom)");
 assert.deepStrictEqual(odd.map(o => o.value), [3, 4, 6, 7, 12], "and sorts into place");
 assert.strictEqual(core.widthOptions(null).length, 4, "no width means no custom entry");
 
+// dashboardSources: distinct source DocTypes of the metrics this dashboard's
+// charts use, counted by chart, filtered by the search box.
+var metricsByName = {
+  M1: { source_doctype: "Student Applicant" },
+  M2: { source_doctype: "Student Applicant" },
+  M3: { source_doctype: "Agent" },
+};
+var resolve = function (n) { return metricsByName[n]; };
+var srcCharts = [
+  { metric: "M1" }, { metric: "M2" }, { metric: "M3" },
+  { metric: "" },              // no metric linked yet
+  { metric: "M-unknown" },     // metric not in the list
+];
+var sources = core.dashboardSources(srcCharts, resolve);
+assert.deepStrictEqual(sources.map(s => s.source), ["Agent", "Student Applicant"], "sorted, distinct");
+assert.strictEqual(sources[1].charts, 2, "two charts share Student Applicant");
+assert.strictEqual(sources[1].subtitle, "2 charts");
+assert.strictEqual(sources[0].subtitle, "1 chart", "singular is not '1 charts'");
+assert.strictEqual(sources[0].glyph, "AG", "one-word name takes its first two characters");
+assert.strictEqual(sources[1].glyph, "SA", "two-word name takes initials");
+assert.deepStrictEqual(core.dashboardSources(srcCharts, resolve, "app").map(s => s.source),
+  ["Student Applicant"], "search filters");
+assert.deepStrictEqual(core.dashboardSources(srcCharts, resolve, "  AGE ").map(s => s.source),
+  ["Agent"], "search is trimmed and case-insensitive");
+assert.deepStrictEqual(core.dashboardSources(srcCharts, resolve, "zzz"), [], "no match");
+assert.deepStrictEqual(core.dashboardSources([], resolve), [], "no charts");
+assert.deepStrictEqual(core.dashboardSources(srcCharts, function () { return null; }), [],
+  "a metric list that has not loaded yields nothing, never a guessed source");
+
 console.log("studio_core.test.js — all assertions passed");

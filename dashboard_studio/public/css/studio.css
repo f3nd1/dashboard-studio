@@ -357,6 +357,22 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-analysis.is-ok { background: var(--dss-green-100); border: 1px solid #b7ddcd; color: var(--dss-green); }
 .dss-analysis.is-warn { background: var(--dss-orange-100); border: 1px solid #f0d19a; color: var(--dss-orange); }
 
+/* Data catalogue in the left rail — the mockup's Sources panel. Two-letter
+   glyphs are text, not an icon set. */
+.dss-sources { margin-bottom: 16px; }
+.dss-source-search { margin: 8px 0 6px; }
+.dss-source-list { display: flex; flex-direction: column; gap: 5px; }
+.dss-source-item { display: flex; align-items: center; gap: 9px; padding: 7px 9px;
+  border: 1px solid var(--dss-line); border-radius: var(--dss-r-sm);
+  background: var(--dss-surface); }
+.dss-source-glyph { flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px; background: var(--dss-navy); color: #fff;
+  font-size: 10px; font-weight: 900; letter-spacing: .04em; }
+.dss-source-copy { min-width: 0; display: flex; flex-direction: column; }
+.dss-source-copy strong { font-size: 12px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dss-source-copy small { font-size: 10px; color: var(--dss-muted); }
+
 /* Canvas hero — the mockup's .canvas-hero, in the app's own navy tokens.
    Kicker, title, subtitle. The mockup's two buttons are not built: neither has
    behaviour, and a button that does nothing is worse than no button. */

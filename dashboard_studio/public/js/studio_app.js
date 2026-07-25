@@ -712,6 +712,61 @@
     }
   };
 
+  // Data catalogue: the source DocTypes this dashboard's charts actually draw
+  // on, per the mockup's Sources panel. No add button and no drag handles —
+  // sources are a consequence of the metrics chosen, not something added here.
+  App.prototype.buildSourceCatalogue = function () {
+    var self = this;
+    var box = el("div", "dss-sources");
+    box.appendChild(el("div", "dss-kicker", "Data catalogue"));
+    box.appendChild(el("h3", "dss-palette-title", "Sources"));
+
+    var search = el("input", "dss-input dss-source-search");
+    search.type = "search";
+    search.placeholder = "Search sources";
+    search.setAttribute("aria-label", "Search sources");
+    search.value = this.state.sourceQuery || "";
+    box.appendChild(search);
+
+    var list = el("div", "dss-source-list");
+    box.appendChild(list);
+
+    function paint() {
+      list.innerHTML = "";
+      var rows = core.dashboardSources(
+        self.state.charts,
+        function (name) { return self.metricInfo(name); },
+        self.state.sourceQuery
+      );
+      if (!rows.length) {
+        // Two different nothings: nothing matched the search, versus nothing to
+        // search. Only the second is worth pointing somewhere.
+        list.appendChild(el("p", "dss-hint dss-note", self.state.sourceQuery
+          ? "No source matches “" + self.state.sourceQuery + "”."
+          : "No chart on this dashboard has a metric yet, so there are no sources. " +
+            "Select a card and link a metric in the panel on the right."));
+        return;
+      }
+      rows.forEach(function (row) {
+        var item = el("div", "dss-source-item");
+        item.appendChild(el("span", "dss-source-glyph", row.glyph));
+        var copy = el("span", "dss-source-copy");
+        copy.appendChild(el("strong", null, row.source));
+        copy.appendChild(el("small", null, row.subtitle));
+        item.appendChild(copy);
+        list.appendChild(item);
+      });
+    }
+
+    // Repaint the list only — re-rendering the panel would drop focus mid-type.
+    search.addEventListener("input", function () {
+      self.state.sourceQuery = search.value;
+      paint();
+    });
+    paint();
+    return box;
+  };
+
   // Stage plus what blocks publishing, in every workspace, linking to the place
   // that lists the blockers in full. Nothing is computed here — see
   // core.readinessChip and governance.publish_readiness.
@@ -787,6 +842,8 @@
         "publish into."));
       this.loadSubcriteria();
     }
+
+    wrap.appendChild(this.buildSourceCatalogue());
 
     wrap.appendChild(el("div", "dss-kicker", "Visual catalogue"));
     wrap.appendChild(el("h3", "dss-palette-title", "Charts"));
@@ -1024,6 +1081,7 @@
   };
 
   App.prototype.refresh = function () {
+    if (!this.canvas) return;   // same synchronous-warm case as renderPanel
     var self = this;
     this.canvas.innerHTML = "";
     var bands = core.groupChartsBySection(this.state.charts, this.state.sections);
@@ -1248,6 +1306,11 @@
   // the DS Chart record, instead of hand-editing HTML/CSS/JS.
   App.prototype.renderPanel = function () {
     var self = this;
+    // The metric list can warm SYNCHRONOUSLY in mock mode, from inside
+    // buildPalette — before render() has created the panel and canvas. Guard
+    // here rather than at each caller: every path into the panel comes through
+    // this function, and render() paints it a moment later anyway.
+    if (!this.panel) return;
     this.panel.innerHTML = "";
     var chart = this.state.charts.filter(function (c) { return c.name === self.state.selected; })[0];
     if (!chart) {

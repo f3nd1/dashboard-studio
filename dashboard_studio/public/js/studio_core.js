@@ -293,6 +293,45 @@
     };
   }
 
+  // The left rail's Data catalogue: which source DocTypes this dashboard's
+  // charts actually draw on, and how many charts use each.
+  //
+  // The subtitle is a chart count, NOT a field count. The mockup shows
+  // "43 fields · live", which needs live DocType metadata this app does not
+  // have — inventing it would be a confident wrong number on an audit tool.
+  //
+  // `resolve` maps a metric name to its record; a chart whose metric is not in
+  // the list yet (still loading, or no longer executable) is skipped rather
+  // than filed under a guessed source.
+  function dashboardSources(charts, resolve, query) {
+    var counts = {};
+    (charts || []).forEach(function (chart) {
+      var source = ((resolve && resolve(chart.metric)) || {}).source_doctype;
+      if (!source) return;
+      counts[source] = (counts[source] || 0) + 1;
+    });
+    var needle = String(query || "").trim().toLowerCase();
+    return Object.keys(counts)
+      .filter(function (s) { return !needle || s.toLowerCase().indexOf(needle) !== -1; })
+      .sort()
+      .map(function (source) {
+        return {
+          source: source,
+          glyph: sourceGlyph(source),
+          charts: counts[source],
+          subtitle: counts[source] === 1 ? "1 chart" : counts[source] + " charts",
+        };
+      });
+  }
+
+  // Two letters, from the initials of the first two words, else the first two
+  // characters. Text, not an icon set.
+  function sourceGlyph(name) {
+    var words = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+    return String(name || "?").slice(0, 2).toUpperCase();
+  }
+
   // Width, as the mockup's percentage select over the 12-column grid. No new
   // field: these are DS Chart.width values, labelled as the fraction they are.
   //
@@ -539,6 +578,8 @@
     sortResultRows: sortResultRows,
     readinessChip: readinessChip,
     widthOptions: widthOptions,
+    dashboardSources: dashboardSources,
+    sourceGlyph: sourceGlyph,
     SORT_ORDERS: SORT_ORDERS,
     PICKER_SCALE_THRESHOLD: PICKER_SCALE_THRESHOLD,
     PICKER_RECENT_COUNT: PICKER_RECENT_COUNT,
