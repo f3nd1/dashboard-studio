@@ -57,6 +57,7 @@
       // Every dashboard the user may open, for the toolbar switcher. null = not
       // fetched yet (distinct from [] = fetched, none exist).
       dashboards: null,
+      pickerOpen: false, pickerQuery: "", pickerIndex: 0,
       // Arriving with ?project= means the caller came from a DS Migration
       // Project, so open straight into the Mapping view.
       view: this.options.project ? "mapping" : "design",
@@ -92,6 +93,256 @@
       .catch(function () {
         self.useMock("Could not list dashboards.");
       });
+  };
+
+  // ---- Dashboard picker ----------------------------------------------------
+  //
+  // The dashboard title is the trigger: the thing you want to change is the
+  // thing you click. Scale behaviour (search, grouping) lives in
+  // core.pickerModel so it can be tested without a browser.
+
+  var CHEVRON_PATH = "M4 6l4 4 4-4";
+  var TICK_PATH = "M3.5 8.5l3 3 6-7";
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  // A real 16px icon, not a text glyph — a caret character sitting next to a
+  // bold title reads as stray punctuation.
+  function icon(d, cls) {
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", cls);
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("aria-hidden", "true");
+    var path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "2");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.appendChild(path);
+    return svg;
+  }
+
+  // Status carries real meaning, so the pills are colour-coded — but quietly,
+  // so the eye lands on the dashboard name first. Anything unrecognised falls
+  // back to neutral rather than being coloured by guesswork.
+  function statusClass(status) {
+    if (status === "Published") return "is-published";
+    if (status === "Technical Review" || status === "QA Approval") return "is-review";
+    return "is-draft"; // Draft, Archived, or unset — all neutral
+  }
+
+  App.prototype.buildTitle = function () {
+    var self = this;
+    var title = (this.state.dashboard && this.state.dashboard.dashboard_title) || "Dashboard";
+    var box = el("div", "dss-titlebox");
+
+    // With no live list there is nothing to pick from — a plain heading, not a
+    // control that opens an empty panel.
+    if (this.state.mock || !(this.state.dashboards || []).length) {
+      box.appendChild(el("h2", "dss-title", title));
+      return box;
+    }
+
+    var trigger = el("button", "dss-picker-trigger" + (this.state.pickerOpen ? " is-open" : ""));
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", this.state.pickerOpen ? "true" : "false");
+    trigger.setAttribute("title", "Open a different dashboard");
+    trigger.appendChild(el("h2", "dss-title", title));
+    trigger.appendChild(icon(CHEVRON_PATH, "dss-chevron"));
+    trigger.addEventListener("click", function () {
+      self.togglePicker(!self.state.pickerOpen);
+    });
+    this.pickerTrigger = trigger;
+    box.appendChild(trigger);
+
+    this.pickerHost = el("div", "dss-picker-host");
+    box.appendChild(this.pickerHost);
+    if (this.state.pickerOpen) this.paintPicker();
+    return box;
+  };
+
+  App.prototype.togglePicker = function (open) {
+    this.state.pickerOpen = open;
+    if (!open) {
+      this.state.pickerQuery = "";
+      this.state.pickerIndex = 0;
+    }
+    if (this.pickerTrigger) {
+      this.pickerTrigger.classList.toggle("is-open", open);
+      this.pickerTrigger.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    this.paintPicker();
+    // Closing returns focus to what opened it, so keyboard users are not
+    // dropped back at the top of the document.
+    if (!open && this.pickerTrigger) this.pickerTrigger.focus();
+  };
+
+  App.prototype.paintPicker = function () {
+    var self = this;
+    var host = this.pickerHost;
+    if (!host) return;
+    host.innerHTML = "";
+    if (!this.state.pickerOpen) return;
+
+    var panel = el("div", "dss-picker-panel");
+    panel.setAttribute("role", "listbox");
+    panel.setAttribute("aria-label", "Open dashboard");
+
+    var model = core.pickerModel(this.state.dashboards, { query: this.state.pickerQuery });
+    var search = null;
+
+    // The search box only exists past the threshold — a short list does not
+    // need one, and showing it would imply the list is longer than it is.
+    if (model.searchable) {
+      var searchWrap = el("div", "dss-picker-search");
+      search = el("input", "dss-input");
+      search.type = "search";
+      search.placeholder = "Search dashboards";
+      search.setAttribute("aria-label", "Search dashboards");
+      search.value = this.state.pickerQuery || "";
+      searchWrap.appendChild(search);
+      panel.appendChild(searchWrap);
+    }
+
+    var listHost = el("div", "dss-picker-list");
+    panel.appendChild(listHost);
+
+    var footer = el("div", "dss-picker-footer");
+    panel.appendChild(footer);
+
+    function repaint() {
+      var current = self.state.dashboard && self.state.dashboard.name;
+      model = core.pickerModel(self.state.dashboards, { query: self.state.pickerQuery });
+      listHost.innerHTML = "";
+      footer.innerHTML = "";
+
+      if (!model.shown) {
+        var none = el("div", "dss-picker-empty");
+        none.appendChild(el("p", "dss-hint",
+          'No dashboard matches “' + model.query + '”.'));
+        none.appendChild(self.pickerCreateButton());
+        listHost.appendChild(none);
+      }
+
+      model.groups.forEach(function (group) {
+        if (group.title && group.items.length) {
+          listHost.appendChild(el("div", "dss-picker-group", group.title));
+        }
+        group.items.forEach(function (d) {
+          var isCurrent = d.name === current;
+          var row = el("button", "dss-picker-row" + (isCurrent ? " is-current" : ""));
+          row.setAttribute("role", "option");
+          row.setAttribute("aria-selected", isCurrent ? "true" : "false");
+          // A tick, not just a pale fill: colour alone is not an accessible
+          // signal. The fill stays as reinforcement.
+          var mark = el("span", "dss-picker-mark");
+          if (isCurrent) mark.appendChild(icon(TICK_PATH, "dss-tick"));
+          row.appendChild(mark);
+          row.appendChild(el("span", "dss-picker-name", core.dashboardTitle(d)));
+          row.appendChild(el("span", "dss-picker-pill " + statusClass(d.status),
+            d.status || "Draft"));
+          row.addEventListener("click", function () {
+            self.togglePicker(false);
+            if (!isCurrent) self.openDashboard(d.name);
+          });
+          listHost.appendChild(row);
+        });
+      });
+
+      // While filtering the count says "N of M", so a narrowed list is never
+      // mistaken for a short one.
+      footer.appendChild(el("span", "dss-picker-count",
+        model.shown === model.total
+          ? model.total + (model.total === 1 ? " dashboard" : " dashboards")
+          : model.shown + " of " + model.total));
+      var actions = el("div", "dss-picker-actions");
+      actions.appendChild(self.pickerCreateButton());
+      // Past the threshold the picker stops trying to be a list view and hands
+      // bulk work to the real one.
+      if (model.searchable) {
+        var all = el("button", "dss-picker-link", "View all →");
+        all.addEventListener("click", function () {
+          self.togglePicker(false);
+          if (hasFrappe()) root.frappe.set_route("List", "DS Dashboard");
+          else toast("The DS Dashboard list needs the server.");
+        });
+        actions.appendChild(all);
+      }
+      footer.appendChild(actions);
+    }
+
+    function rows() {
+      return Array.prototype.slice.call(listHost.querySelectorAll(".dss-picker-row"));
+    }
+
+    if (search) {
+      search.addEventListener("input", function () {
+        self.state.pickerQuery = search.value;
+        self.state.pickerIndex = 0;
+        repaint();
+      });
+    }
+
+    panel.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        self.togglePicker(false);
+        return;
+      }
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter") return;
+      var list = rows();
+      if (!list.length) return;
+      if (e.key === "Enter") {
+        // Enter on a row is the row's own click. From the search box it opens
+        // whichever row the arrows last landed on.
+        if (e.target === search) {
+          e.preventDefault();
+          list[Math.min(self.state.pickerIndex || 0, list.length - 1)].click();
+        }
+        return;
+      }
+      e.preventDefault();
+      var at = list.indexOf(document.activeElement);
+      var next = e.key === "ArrowDown"
+        ? (at < 0 ? 0 : (at + 1) % list.length)
+        : (at < 0 ? list.length - 1 : (at - 1 + list.length) % list.length);
+      self.state.pickerIndex = next;
+      list[next].focus();
+    });
+
+    host.appendChild(panel);
+    repaint();
+
+    // Clicking anywhere else closes it, the way every other menu behaves.
+    var away = function (e) {
+      if (panel.contains(e.target) || self.pickerTrigger.contains(e.target)) return;
+      document.removeEventListener("mousedown", away, true);
+      self.togglePicker(false);
+    };
+    document.addEventListener("mousedown", away, true);
+
+    // Opening lands where typing or picking would start: the search box past
+    // the threshold, otherwise the dashboard already open.
+    if (search) {
+      search.focus();
+    } else {
+      var list = rows();
+      var current = listHost.querySelector(".dss-picker-row.is-current");
+      (current || list[0] || panel).focus();
+    }
+  };
+
+  App.prototype.pickerCreateButton = function () {
+    var self = this;
+    var btn = el("button", "dss-picker-link", "+ New dashboard");
+    btn.addEventListener("click", function () {
+      self.togglePicker(false);
+      self.newDashboard();
+    });
+    return btn;
   };
 
   App.prototype.openDashboard = function (name) {
@@ -190,24 +441,7 @@
     }
 
     var head = el("div", "dss-toolbar");
-    var titleBox = el("div", "dss-titlebox");
-    titleBox.appendChild(el("h2", "dss-title",
-      (this.state.dashboard && this.state.dashboard.dashboard_title) || "Dashboard"));
-    // Switch between real dashboards without leaving the editor. Only shown
-    // when there is somewhere to switch to.
-    if (!this.state.mock && (this.state.dashboards || []).length > 1) {
-      var picker = el("select", "dss-input dss-picker");
-      picker.setAttribute("aria-label", "Open dashboard");
-      this.state.dashboards.forEach(function (d) {
-        var opt = el("option", null, d.dashboard_title + " · " + (d.status || "Draft"));
-        opt.value = d.name;
-        if (self.state.dashboard && d.name === self.state.dashboard.name) opt.selected = true;
-        picker.appendChild(opt);
-      });
-      picker.addEventListener("change", function () { self.openDashboard(picker.value); });
-      titleBox.appendChild(picker);
-    }
-    head.appendChild(titleBox);
+    head.appendChild(this.buildTitle());
 
     if (this.state.view === "design") {
       var addSection = el("button", "dss-btn", "+ Section");
