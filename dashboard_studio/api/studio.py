@@ -24,6 +24,13 @@ _EDITABLE_CHART_FIELDS = {
 # The only keys a DS Chart Filter row may carry when written from the editor.
 _FILTER_ROW_FIELDS = ("fieldname", "operator", "value", "filter_type")
 
+# The only keys a DS Canvas Node row may carry when written from the Mapping view.
+_CANVAS_NODE_FIELDS = ("node_id", "node_type", "pos_x", "pos_y")
+
+# DS Data Mapping fields the Mapping view may write. The natural key
+# (data_source, external_table, external_field) is set separately, never patched.
+_MAPPING_VALUE_FIELDS = ("target_doctype", "target_field", "mapping_status")
+
 
 @frappe.whitelist()
 def get_studio_dashboard(dashboard: str):
@@ -65,6 +72,123 @@ def list_ds_metrics():
         fields=["name", "metric_name", "calculation_type", "source_doctype"],
         order_by="metric_name asc",
     )
+
+
+@frappe.whitelist()
+def get_migration_project(project: str):
+    """Return a DS Migration Project with the mappings and canvas layout it needs.
+
+    Mappings are resolved through the project's data_source, not owned by the
+    project — the same mapping is shared by every project on that source (see
+    docs/MIGRATION_PROJECT_LIFECYCLE.md). Canvas node positions are per-project.
+    """
+    frappe.only_for(DS_READ_ROLES)
+    doc = frappe.get_doc("DS Migration Project", project)
+
+    mappings = []
+    if doc.data_source:
+        mappings = frappe.get_all(
+            "DS Data Mapping",
+            filters={"data_source": doc.data_source},
+            fields=[
+                "name", "external_table", "external_field", "target_doctype",
+                "target_field", "mapping_status", "confidence_score",
+            ],
+            order_by="external_table asc",
+        )
+
+    return {
+        "project": doc.as_dict(),
+        "mappings": mappings,
+        "canvas_nodes": [
+            {key: row.get(key) for key in _CANVAS_NODE_FIELDS}
+            for row in (doc.get("canvas_nodes") or [])
+        ],
+    }
+
+
+@frappe.whitelist()
+def save_migration_mapping_set(project: str, mappings=None, canvas_nodes=None):
+    """Persist the Mapping view's one save action: mappings + canvas layout.
+
+    Mappings are upserted against the natural key
+    (data_source, external_table, external_field). Only table-level mappings
+    exist today — the view sends no external_field — so field-level behaviour is
+    deliberately not invented here.
+
+    Canvas nodes are replaced wholesale from sanitized copies (the client always
+    sends the full set), the same pattern save_chart uses for child rows.
+
+    Performs the one automatic lifecycle transition: Not Started -> Mapping on
+    the first successful save. Every later transition is a manual user action.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    mappings = _as_row_list(mappings, "mappings")
+    canvas_nodes = _as_row_list(canvas_nodes, "canvas_nodes")
+
+    doc = frappe.get_doc("DS Migration Project", project)
+    if not doc.data_source:
+        frappe.throw("Set a Data Source on this migration project before saving mappings.")
+
+    saved = 0
+    for row in mappings:
+        external_table = str(row.get("external_table") or "").strip()
+        if not external_table:
+            continue
+        external_field = str(row.get("external_field") or "").strip()
+        values = {key: row.get(key) for key in _MAPPING_VALUE_FIELDS}
+        values["mapping_status"] = values.get("mapping_status") or "Suggested"
+
+        existing = frappe.db.get_value(
+            "DS Data Mapping",
+            {
+                "data_source": doc.data_source,
+                "external_table": external_table,
+                "external_field": external_field,
+            },
+        )
+        if existing:
+            mapping_doc = frappe.get_doc("DS Data Mapping", existing)
+            for key, value in values.items():
+                mapping_doc.set(key, value)
+            mapping_doc.save()
+        else:
+            frappe.get_doc(
+                dict(
+                    doctype="DS Data Mapping",
+                    data_source=doc.data_source,
+                    external_table=external_table,
+                    external_field=external_field,
+                    **values,
+                )
+            ).insert()
+        saved += 1
+
+    doc.set(
+        "canvas_nodes",
+        [
+            {key: row.get(key) for key in _CANVAS_NODE_FIELDS}
+            for row in canvas_nodes
+            if str(row.get("node_id") or "").strip()
+        ],
+    )
+
+    if saved and doc.status == "Not Started":
+        doc.status = "Mapping"
+    doc.save()
+
+    return {"saved_mappings": saved, "status": doc.status}
+
+
+def _as_row_list(value, label):
+    """Accept a JSON string (from frappe.call) or a list; keep only dict rows."""
+    if isinstance(value, str):
+        value = json.loads(value)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        frappe.throw(f"{label} must be a JSON array")
+    return [row for row in value if isinstance(row, dict)]
 
 
 @frappe.whitelist()
