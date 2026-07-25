@@ -131,7 +131,6 @@
 
   var api = {
     SUPPORTED_CHART_TYPES: SUPPORTED,
-    esc: esc,
     inferDimension: inferDimension,
     render: render,
   };
