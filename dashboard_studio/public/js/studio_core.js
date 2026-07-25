@@ -199,6 +199,34 @@
     return row.status === "Discrepancy" || row.status === "Flagged";
   }
 
+  // Parse a reference result pasted from the source system into the row shape
+  // the comparison engine indexes: {<label>, count}. One "label,value" per line,
+  // splitting on the LAST comma so labels may contain commas.
+  //
+  // A blank value is kept blank: an unknown figure must reach the comparison as
+  // unknown, so it is Flagged, rather than being read as zero and matching one.
+  // A line that cannot be read is reported, never guessed at.
+  function parseReferenceRows(text) {
+    var rows = [];
+    var errors = [];
+    String(text == null ? "" : text).split("\n").forEach(function (raw, i) {
+      var line = raw.trim();
+      if (!line) return;
+      var cut = line.lastIndexOf(",");
+      if (cut === -1) {
+        errors.push("line " + (i + 1) + ': no comma — expected "group, value"');
+        return;
+      }
+      var label = line.slice(0, cut).trim();
+      if (!label) {
+        errors.push("line " + (i + 1) + ": no group name before the comma");
+        return;
+      }
+      rows.push({ label: label, count: line.slice(cut + 1).trim() });
+    });
+    return { rows: rows, errors: errors };
+  }
+
   // Move a section one place up or down. Returns the reordered names, or null
   // if the move is a no-op (already at the end it is moving toward), so the
   // caller can skip a pointless save.
@@ -334,6 +362,7 @@
     groupRelationships: groupRelationships,
     validationSummary: validationSummary,
     canAccept: canAccept,
+    parseReferenceRows: parseReferenceRows,
     VALIDATION_STATUSES: VALIDATION_STATUSES,
     moveSection: moveSection,
     mergeMappings: mergeMappings,

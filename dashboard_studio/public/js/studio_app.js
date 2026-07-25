@@ -249,6 +249,7 @@
     // Pasting SQL is how a migration actually starts, so it leads the workspace
     // rather than sitting under the mapping list in the side panel.
     if (this.state.view === "mapping") wrap.appendChild(this.buildSqlImport());
+    if (this.state.view === "validation") wrap.appendChild(this.buildValidationRun());
 
     var main = el("div", "dss-main");
     this.canvas = el("div", "dss-canvas");
@@ -935,6 +936,77 @@
           self.canvas.innerHTML = '<div class="dss-hint">Could not load comparisons.</div>';
         }
       });
+  };
+
+  // Entry point for run_validation. Without this the endpoint existed but there
+  // was no way to start a comparison from the editor — only to read old ones.
+  App.prototype.buildValidationRun = function () {
+    var self = this;
+    var wrap = el("div", "dss-sqlimport");
+    var head = el("div", "dss-sqlimport-head");
+    head.appendChild(el("div", "dss-kicker", "Step 1 — reference result"));
+    head.appendChild(el("h3", "dss-sqlimport-title", "Run a validation"));
+    wrap.appendChild(head);
+    wrap.appendChild(el("p", "dss-hint",
+      "Paste what the source system reports for a chart, one group per line as " +
+      "“group, value”. This app runs the chart's own metric and compares " +
+      "the two group by group. A blank value stays blank — it is flagged as " +
+      "uncomparable, never read as zero."));
+
+    // Only charts that have a metric can be validated: without one there is
+    // nothing for this app to compute and compare against.
+    var charts = (this.state.charts || []).filter(function (c) { return c.metric; });
+    if (!charts.length) {
+      wrap.appendChild(el("p", "dss-hint dss-note",
+        "No chart on this dashboard has a metric, so there is nothing to validate yet."));
+      return wrap;
+    }
+
+    var picker = el("select", "dss-input");
+    picker.setAttribute("aria-label", "Chart to validate");
+    charts.forEach(function (c) {
+      var opt = el("option", null, c.chart_title || c.name);
+      opt.value = c.name;
+      picker.appendChild(opt);
+    });
+    wrap.appendChild(picker);
+
+    var box = el("textarea", "dss-input");
+    box.placeholder = "2022, 62\n2023, 57";
+    box.setAttribute("aria-label", "Reference result");
+    wrap.appendChild(box);
+
+    var note = el("div", "dss-sqlnote");
+    var run = el("button", "dss-btn dss-btn-primary", "Run validation");
+    run.addEventListener("click", function () {
+      var parsed = core.parseReferenceRows(box.value);
+      if (parsed.errors.length) {
+        note.textContent = "Could not read: " + parsed.errors.join("; ");
+        return;
+      }
+      if (!parsed.rows.length) { note.textContent = "Paste a reference result first."; return; }
+      if (!hasFrappe()) {
+        note.textContent = "Running a validation needs the server (not available in sample mode).";
+        return;
+      }
+      note.textContent = "Comparing…";
+      root.frappe.call({
+        method: "dashboard_studio.api.validation.run_validation",
+        args: { chart: picker.value, source_rows: JSON.stringify(parsed.rows) },
+      }).then(function (r) {
+        var result = r.message || {};
+        toast("Validation recorded: " + result.status);
+        self.state.comparisons = null; // refetched by renderValidation
+        self.render();
+      }).catch(function () {
+        note.textContent = "Could not run that validation.";
+      });
+    });
+    var actions = el("div", "dss-sqlimport-actions");
+    actions.appendChild(run);
+    actions.appendChild(note);
+    wrap.appendChild(actions);
+    return wrap;
   };
 
   App.prototype.paintValidation = function () {

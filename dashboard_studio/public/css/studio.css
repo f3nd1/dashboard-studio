@@ -187,6 +187,7 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-sqlimport .dss-hint { max-width: 76ch; }
 .dss-sqlimport textarea.dss-input { min-height: 88px; font-family: ui-monospace, Menlo, monospace;
   font-size: 12px; margin: 11px 0 9px; }
+.dss-sqlimport select.dss-input { width: auto; min-width: 240px; margin-top: 11px; }
 .dss-sqlimport-actions { display: flex; align-items: center; gap: 12px; }
 .dss-sqlnote { font-size: 11px; color: var(--dss-muted); }
 .dss-sqlimport .dss-note { margin-top: 12px; padding-top: 10px; }

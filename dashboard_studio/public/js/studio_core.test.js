@@ -190,4 +190,34 @@ var mixed = core.nodesFromProject(
 assert.strictEqual(mixed.length, 2, "saved source + derived target, no duplicate");
 assert.strictEqual(mixed[0].pos_x, 44, "saved position wins over default layout");
 
+// ---- parseReferenceRows: pasted reference results for the Validation Centre ----
+
+var parsed = core.parseReferenceRows("2022, 2\n2023,3\n\n2024 , 1");
+assert.deepStrictEqual(parsed.rows,
+  [{ label: "2022", count: "2" }, { label: "2023", count: "3" }, { label: "2024", count: "1" }],
+  "one row per non-blank line, both sides trimmed");
+assert.deepStrictEqual(parsed.errors, [], "clean input has no errors");
+
+// A blank value is unknown, not zero — it must survive as a blank so the
+// comparison flags it instead of reporting a match against 0.
+var blank = core.parseReferenceRows("Offered,");
+assert.strictEqual(blank.rows[0].count, "", "blank value stays blank, never 0");
+assert.deepStrictEqual(blank.errors, [], "a blank value is allowed, not an error");
+
+// A label containing a comma still works — the value is after the LAST comma.
+assert.deepStrictEqual(core.parseReferenceRows("Singapore, Central,4").rows,
+  [{ label: "Singapore, Central", count: "4" }], "splits on the last comma");
+
+// A line with no separator cannot be read; report it rather than guessing.
+var bad = core.parseReferenceRows("2022 2\n2023,3");
+assert.strictEqual(bad.rows.length, 1, "readable lines still parse");
+assert.strictEqual(bad.errors.length, 1, "unreadable line reported");
+assert.ok(/line 1/.test(bad.errors[0]), "error names the line: " + bad.errors[0]);
+
+// An empty label is not a usable group.
+assert.strictEqual(core.parseReferenceRows(" ,4").errors.length, 1, "blank label rejected");
+
+assert.deepStrictEqual(core.parseReferenceRows("   "), { rows: [], errors: [] },
+  "empty input is empty, not an error");
+
 console.log("studio_core.test.js — all assertions passed");
