@@ -1,6 +1,8 @@
 # Bar charts label counts as percentages
 
-**Part 1** confirms it on the live site — read-only, Desk access only.
+**Part 1** confirms the *adding* case on the live site — read-only, Desk access only.
+**Part 1B** detects the *dropping* case, the quiet half of the same split. Run both
+on the same tab, back to back.
 **Part 2** proposes the fix. Nothing in the Sophia repository has been touched.
 
 ---
@@ -133,6 +135,131 @@ It is independent of the positional-binding finding in
 
 ---
 
+# Part 1B — detect the dropping case
+
+Part 1 catches the diagram **adding** a `%` that is not there. This catches the
+inverse: the diagram **omitting** a unit the table applies to the same value —
+a real percentage drawn as a bare number, `SGD 1,234.5` drawn as `1234.5`,
+`4/5` drawn as `4`.
+
+Same shape as Part 1: pure DOM reads, Desk access only, nothing written or
+requested.
+
+## Why this needs no API read
+
+An earlier note in the annex said the dropping case would need the metric's
+`unit`, which is not in the DOM. **That was wrong, and the correction matters
+because it is what makes this runnable at all.** The table cell is *rendered by*
+`metricValue`, so a `%`, an `SGD ` prefix, a `/5` suffix or a thousands separator
+in the table cell **is** the unit, already applied. Comparing the table's
+decorated string against the diagram's raw string tests the same thing without
+asking the server anything.
+
+## Step 1
+
+Same tab as Part 1 — do not navigate away. Paste back to back and you get both
+halves of the split for one criterion.
+
+## Step 2
+
+```js
+(() => {
+  const root = document.querySelector('#uccIntelligencePlatform');
+  if (!root) return console.error('Platform not found on this page.');
+  const dash = [...root.querySelectorAll('[data-demo-dashboard]')]
+    .find(d => !d.classList.contains('ucc-hidden'));
+  console.log(`criterion=${dash.dataset.demoDashboard} tab=${dash.dataset.demoActiveTab}`);
+
+  // A table value carrying a unit or separators that metricValue applied.
+  const decorated = v => /%$/.test(v) || /^SGD\s/.test(v) || /\/5$/.test(v) || /,/.test(v);
+  const bare = v => v.replace(/^SGD\s/, '').replace(/%$/, '').replace(/\/5$/, '')
+                     .replace(/,/g, '').trim();
+
+  const rows = [];
+  let unitBearing = 0;
+  dash.querySelectorAll('[data-demo-card]').forEach(card => {
+    const title = (card.querySelector('.card-title, h2') || {}).textContent || card.dataset.demoCard;
+    const diagram = card.querySelector('[data-demo-chart]');
+    if (!diagram) return;
+    const drawn = [
+      ...[...diagram.querySelectorAll('strong, text.value')].map(n => n.textContent.trim()),
+      ...[...diagram.querySelectorAll('.ucc-demo-radar-values span')]
+          .map(n => (n.textContent.split(':')[1] || '').trim()),
+    ].filter(Boolean);
+    const table = [...card.querySelectorAll('[data-demo-chart-table-body] tr')]
+      .map(tr => [((tr.children[0]||{}).textContent||'').trim(),
+                  ((tr.children[1]||{}).textContent||'').trim()]);
+    if (!drawn.length || !table.length) return;
+
+    const withUnits = table.filter(([, v]) => v && v !== '—' && v !== 'missing' && decorated(v));
+    if (!withUnits.length) return;            // plain counts only — not evidence either way
+    unitBearing += withUnits.length;
+
+    const dropped = withUnits.filter(([, v]) => drawn.includes(bare(v)) && !drawn.includes(v));
+    rows.push({
+      chart: title.slice(0, 44),
+      diagram: drawn.slice(0, 4).join(', '),
+      table: withUnits.slice(0, 4).map(r => r[1]).join(', '),
+      verdict: dropped.length ? 'DROPPED' : 'consistent',
+    });
+  });
+
+  if (!unitBearing) {
+    console.log('>>> NO UNIT-BEARING METRICS ON THIS TAB — INCONCLUSIVE, NOT A PASS.');
+    console.log('    Every value here is a plain count, so there is no unit to drop.');
+    console.log('    Try another criterion before drawing any conclusion.');
+    return;
+  }
+  console.table(rows);
+  const bad = rows.filter(r => r.verdict === 'DROPPED');
+  console.log(`\n${bad.length} of ${rows.length} unit-bearing charts drop the unit in the diagram.`);
+  console.log(bad.length
+    ? '>>> CONFIRMED: the diagram omits a unit the table applies to the same value.'
+    : '>>> NOT REPRODUCED on this tab — the diagram carried the unit.');
+})();
+```
+
+## Step 3 — send back
+
+- The `console.table` output.
+- The `>>>` line and the count.
+- Which criterion and tab (the first `console.log` prints it).
+
+## Reading the result
+
+| Result | Meaning |
+|---|---|
+| `CONFIRMED`, N > 0 | Real. Those N charts draw a unit-bearing value with the unit stripped. |
+| `NOT REPRODUCED` | The diagram carried the unit on this tab. Real evidence of absence for **this tab only** — a different chart type may still drop it. |
+| `NO UNIT-BEARING METRICS` | **Not a pass.** Every value on that tab is a plain count, so there was no unit to drop and the test could not have failed. Try another criterion. |
+
+The third verdict is the one to be careful with, and it is why it prints in
+capitals with its own explanation rather than as an empty table. A tab of pure
+counts produces a clean-looking run that proves nothing.
+
+## What it does not catch
+
+- A value the diagram never draws (charts whose labels are hover-only).
+- A unit dropped *and* the number reformatted, so no bare match exists.
+- Cases where the diagram and table happen to show different rows.
+
+All three make it under-report, never over-report. A `DROPPED` verdict is
+therefore trustworthy; a `consistent` one is weaker.
+
+## The test was tested
+
+Run against four seeded pages before being handed over, to prove a null result
+means something:
+
+| Seeded page | Verdict printed |
+|---|---|
+| diagram drops the `%` | `CONFIRMED` |
+| diagram carries the `%` | `NOT REPRODUCED` |
+| plain counts only | `NO UNIT-BEARING METRICS — INCONCLUSIVE, NOT A PASS` |
+| `SGD` + thousands separators dropped | `CONFIRMED` |
+
+---
+
 # Part 2 — fix proposal (nothing built, Sophia untouched)
 
 ## The change
@@ -242,8 +369,13 @@ bare number with no `%` — the inverse mistake, and harder to notice because a
 missing suffix looks like a plain count rather than an obvious contradiction.
 
 The Part 1 snippet detects the **adding** case only, because that is the one the
-table contradicts visibly. The dropping case would need the metric's `unit`,
-which is not in the DOM — it would need an API read to confirm.
+table contradicts visibly.
+
+~~The dropping case would need the metric's `unit`, which is not in the DOM — it
+would need an API read to confirm.~~ **Corrected.** The table cell is rendered by
+`metricValue`, so the unit is already applied and present in the DOM as a `%`,
+an `SGD ` prefix, a `/5` or a thousands separator. Part 1B detects the dropping
+case with DOM reads only.
 
 ## A genuinely separate pair: the KPI strip has two implementations
 
@@ -254,9 +386,28 @@ which is not in the DOM — it would need an API read to confirm.
   `unit==="percent"?"%":""`.
 
 Measured: `96.7742` renders as **`96.774`** through the first and **`96.77`**
-through the second. Whether both ever show the *same* figure depends on whether
-`result.admission_intelligence.kpis` overlaps `result.metrics`, which cannot be
-determined without live data. **Possible, unverified.**
+through the second.
+
+**Update — the overlap is confirmed from source, and it is worse than a rounding
+difference.** `CONFIG['4.1.1']['metrics']` and `admission_intelligence.kpis`
+carry the **same four metric IDs**:
+
+| ID | Label | `CONFIG` path | `admission_intelligence` path |
+|---|---|---|---|
+| `c411-applicants-total` | No. of Student Applicants | generic `evaluate_metric`, source `applicant`, mode `all` | bespoke count in `build_admission_intelligence` |
+| `c411-shortlisted-approved` | No. of Shortlisted | mode `equals` | bespoke |
+| `c411-enrolled-admitted` | No. of Enrolled Students | mode `equals` | bespoke |
+| `c411-success-rate` | Success Rate | mode `ratio_status` | `round(admitted/applicants*100, 2)` |
+
+Both are built by `UCC Analytics - Criterion 4.py` and both ship in the **same
+API response**. So on Criterion 4 the KPI strip renders one computation and the
+charts and tables render a different, independently-written computation of the
+same four figures. The `96.774` / `96.77` pair is the visible symptom, not the
+problem: the rounding differs because the *code* differs.
+
+Two independent implementations of one figure will agree only for as long as
+nobody edits one of them. **Parked deliberately, not closed** — no further
+investigation until the two percentage procedures have been run.
 
 ## A third inconsistency, inside the "correct" function
 
