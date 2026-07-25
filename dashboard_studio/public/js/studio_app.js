@@ -14,6 +14,7 @@
 
   var core = root.DSStudioCore;
   var ROW_H = 44; // px per grid row
+  var PENDING = "__pending__"; // in-flight marker in the metric result cache
 
   function el(tag, cls, text) {
     var node = document.createElement(tag);
@@ -159,6 +160,13 @@
     }
     this._rowsCache = this._rowsCache || {};
     var cached = this._rowsCache[chart.metric];
+    // A request is already out for this metric — every re-render would otherwise
+    // fire another one (each response triggers a full refresh), so N charts on N
+    // metrics would issue O(N^2) calls.
+    if (cached === PENDING) {
+      body.innerHTML = '<div class="dss-nochart">Loading…</div>';
+      return;
+    }
     if (cached !== undefined) {
       body.innerHTML = cached === null
         ? '<div class="dss-nochart">Metric failed to run</div>'
@@ -172,16 +180,19 @@
       body.innerHTML = charts.render(chart.chart_type, rows).html;
       return;
     }
+    this._rowsCache[chart.metric] = PENDING;
     body.innerHTML = '<div class="dss-nochart">Loading…</div>';
     root.frappe.call({
       method: "dashboard_studio.api.metrics.run_ds_metric",
       args: { metric_name: chart.metric },
     }).then(function (r) {
       self._rowsCache[chart.metric] = r.message || [];
-      self.refresh();
+      // Cache the result either way, but only repaint if the user is still
+      // looking at the Design view — otherwise this wipes the Mapping canvas.
+      if (self.state.view === "design") self.refresh();
     }).catch(function () {
       self._rowsCache[chart.metric] = null; // remembered failure — no retry loop
-      self.refresh();
+      if (self.state.view === "design") self.refresh();
     });
   };
 
@@ -388,10 +399,12 @@
         });
         self.state.mapNodes = core.nodesFromProject(data.canvas_nodes, self.state.mappings);
         if (!self.state.mapNodes.length) self.state.mapNodes = self.mockNodes();
-        self.refreshMapping();
+        // Keep the loaded state either way, but only repaint if the user is
+        // still on the Mapping view — otherwise this wipes the Design canvas.
+        if (self.state.view === "mapping") self.refreshMapping();
       }).catch(function () {
         self.state.mapNodes = self.mockNodes();
-        self.refreshMapping();
+        if (self.state.view === "mapping") self.refreshMapping();
       });
       return;
     }
