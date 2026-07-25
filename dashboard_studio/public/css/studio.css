@@ -153,7 +153,32 @@
 .dss-empty .dss-btn { margin: 14px 4px 0; }
 
 .dss-main { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: start; }
-@media (max-width: 780px) { .dss-main { grid-template-columns: 1fr; } }
+/* Builder gains a visual catalogue column on the left. */
+.dss-main-builder { grid-template-columns: 190px 1fr 300px; }
+@media (max-width: 1100px) { .dss-main-builder { grid-template-columns: 1fr 300px; } }
+@media (max-width: 780px) {
+  .dss-main, .dss-main-builder { grid-template-columns: 1fr; }
+}
+
+/* ---- Visual catalogue (Builder left column) ---- */
+.dss-palette { border: 1px solid var(--dss-line); border-radius: var(--dss-r-lg); padding: 14px;
+  background: var(--dss-surface); box-shadow: var(--dss-shadow-sm); }
+.dss-palette-title { font-size: 13px; font-weight: 800; letter-spacing: -.2px; margin: 3px 0 10px; }
+.dss-palette-list { display: grid; gap: 6px; margin-bottom: 12px; }
+.dss-palette-item { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 36px;
+  padding: 6px 9px; border: 1px solid var(--dss-line); border-radius: var(--dss-r-sm);
+  background: var(--dss-surface); cursor: pointer; font: inherit; font-size: 12px;
+  font-weight: 600; color: var(--dss-ink); text-align: left; }
+.dss-palette-item:hover { background: var(--dss-surface-2); border-color: var(--dss-line-dark); }
+.dss-palette-item:focus-visible { outline: 2px solid var(--dss-blue); outline-offset: 1px; }
+.dss-palette-glyph { flex: none; display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px; background: var(--dss-blue-100);
+  color: var(--dss-blue); font-size: 12px; }
+.dss-palette-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Unsaved-layout marker in the toolbar. */
+.dss-savestate { font-size: 11px; font-weight: 700; color: var(--dss-green); white-space: nowrap; }
+.dss-savestate.is-dirty { color: var(--dss-orange); }
 
 /* Workspace tabs — flat, underlined-active bar (prototype .workspace-tabs). */
 .dss-tabs { display: flex; align-items: flex-end; gap: 22px; height: 44px;
@@ -193,15 +218,28 @@
   min-height: var(--dss-cardhead); box-sizing: border-box; padding: 8px 12px;
   border-bottom: 1px solid var(--dss-line); cursor: grab; }
 .dss-card-head:active { cursor: grabbing; }
+.dss-card-title-wrap { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .dss-card-title { font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
+.dss-card-subtitle { font-size: 10px; color: var(--dss-muted); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+/* The header and footer both push the absolutely-positioned body, so each one
+   adjusts the variable the body is positioned against rather than being sized
+   independently — that is what keeps them from overlapping it. */
+.dss-card:has(.dss-card-subtitle) { --dss-cardhead: 48px; }
+.dss-card:has(.dss-card-foot) { --dss-cardfoot: 21px; }
+.dss-card-foot { position: absolute; left: 0; right: 0; bottom: 0; height: 21px;
+  box-sizing: border-box; padding: 0 12px; display: flex; align-items: center;
+  border-top: 1px solid var(--dss-line); background: var(--dss-surface-2);
+  font-size: 9px; font-weight: 600; color: var(--dss-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Chart type reads as a badge, per the reference's status-pill treatment. */
 .dss-card-type { font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .5px;
   color: var(--dss-blue); background: var(--dss-blue-100); border-radius: 999px; padding: 4px 7px;
   white-space: nowrap; flex-shrink: 0; }
 .dss-card-body { padding: 10px 12px 12px; font-size: 12px; color: var(--dss-ink-700);
-  position: absolute; top: var(--dss-cardhead); bottom: 0; left: 0; right: 0; overflow: hidden;
-  box-sizing: border-box; }
+  position: absolute; top: var(--dss-cardhead); bottom: var(--dss-cardfoot, 0px);
+  left: 0; right: 0; overflow: hidden; box-sizing: border-box; }
 
 .dss-chart-svg { width: 100%; height: 100%; display: block; }
 .dss-chart-donut { max-height: 100%; margin: 0 auto; transform: rotate(-90deg); }
@@ -325,6 +363,11 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
   box-shadow: 0 8px 16px rgba(28, 62, 105, .16); }
 .dss-btn-primary:hover { background: var(--dss-navy-deep); transform: translateY(-1px); }
 .dss-btn-small { min-height: 0; padding: 4px 9px; font-size: 11px; }
+.dss-btn-danger { color: var(--dss-red); border-color: #f2caca; }
+.dss-btn-danger:hover { background: var(--dss-red-100); }
+/* Destructive and duplicate sit apart from Apply/Save — a mis-click there costs
+   more than a mis-click on either of those. */
+.dss-card-actions { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--dss-line); }
 /* Must stay AFTER .dss-btn — same specificity, so source order decides. */
 .dss-btn-ghost { background: transparent; border-color: transparent; color: var(--dss-muted); }
 .dss-btn-ghost:hover { background: var(--dss-surface-2); color: var(--dss-ink-700); }

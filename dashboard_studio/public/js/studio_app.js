@@ -16,6 +16,13 @@
   var ROW_H = 44; // px per grid row
   var PENDING = "__pending__"; // in-flight marker in the metric result cache
 
+  // Palette glyphs. Plain characters on purpose — an icon set would be a
+  // dependency, and this app has none.
+  var PALETTE_GLYPHS = {
+    "KPI Card": "#", "Bar Chart": "▥", "Line Chart": "⌁", "Donut Chart": "◌",
+    "Table": "▤", "Trend Chart": "◹", "Funnel": "▽", "Radar": "◈",
+  };
+
   // Workspace header: kicker / title / what this screen is for. The Design view
   // has no entry — its heading is the dashboard title in the toolbar.
   var HEROES = {
@@ -58,6 +65,8 @@
       // fetched yet (distinct from [] = fetched, none exist).
       dashboards: null,
       pickerOpen: false, pickerQuery: "", pickerIndex: 0,
+      // Layout moved/edited in memory but not written back yet.
+      dirty: false,
       // Arriving with ?project= means the caller came from a DS Migration
       // Project, so open straight into the Mapping view.
       view: this.options.project ? "mapping" : "design",
@@ -437,6 +446,10 @@
       self.state.sections = data.sections || [];
       self.state.mock = false;
       self.state.mockReason = null;
+      // Both caches are keyed by metric name but their contents depend on which
+      // backend answered. Loading a real dashboard after the demo must not keep
+      // serving the demo's metrics or its numbers.
+      self.dropMetricCaches();
       self.render();
       // Keep the toolbar switcher populated even when opened straight from a route.
       if (!self.state.dashboards) self.listDashboards();
@@ -523,6 +536,14 @@
     });
   };
 
+  // Metric name -> source, and metric name -> result rows. Both are answered by
+  // whichever backend is live, so switching backend has to drop them.
+  App.prototype.dropMetricCaches = function () {
+    this._metricList = null;
+    this._metricListWarming = false;
+    this._rowsCache = {};
+  };
+
   App.prototype.useMock = function (reason) {
     var mock = (root.DSStudioMock || {}).MOCK_DASHBOARD || { charts: [] };
     this.state.dashboard = mock;
@@ -530,6 +551,7 @@
     this.state.sections = mock.sections || [];
     this.state.mock = true;
     this.state.mockReason = reason || null;
+    this.dropMetricCaches();
     this.render();
   };
 
@@ -546,6 +568,13 @@
 
     var head = el("div", "dss-toolbar");
     head.appendChild(this.buildTitle());
+    // Unsaved-layout marker. saveLayout writes every chart unconditionally, so
+    // without this there is no way to tell whether pressing it does anything.
+    if (this.state.view === "design" && !this.state.mock) {
+      head.appendChild(el("span",
+        "dss-savestate" + (this.state.dirty ? " is-dirty" : ""),
+        this.state.dirty ? "● Unsaved layout changes" : "● All changes saved"));
+    }
 
     if (this.state.view === "design") {
       var addSection = el("button", "dss-btn", "+ Section");
@@ -575,6 +604,16 @@
     });
     wrap.appendChild(tabs);
 
+    // The Builder has no fixed hero — its heading is the dashboard title in the
+    // toolbar — but DS Dashboard.description was being stored and never shown
+    // anywhere. Reuses the hero block rather than adding a second style for it.
+    var dashboardDescription = this.state.dashboard && this.state.dashboard.description;
+    if (this.state.view === "design" && dashboardDescription) {
+      var descBox = el("div", "dss-hero");
+      descBox.appendChild(el("p", "dss-hero-blurb", dashboardDescription));
+      wrap.appendChild(descBox);
+    }
+
     var hero = HEROES[this.state.view];
     if (hero) {
       var heroBox = el("div", "dss-hero");
@@ -590,6 +629,13 @@
     if (this.state.view === "validation") wrap.appendChild(this.buildValidationRun());
 
     var main = el("div", "dss-main");
+    // Visual catalogue, Builder only: the palette has to stay reachable while a
+    // card is selected, so it gets its own column rather than sharing the
+    // properties panel.
+    if (this.state.view === "design") {
+      main.classList.add("dss-main-builder");
+      main.appendChild(this.buildPalette());
+    }
     this.canvas = el("div", "dss-canvas");
     this.canvas.style.minHeight = "480px";
     main.appendChild(this.canvas);
@@ -612,6 +658,77 @@
     }
   };
 
+  // Visual catalogue. Only the types that can actually be drawn are offered —
+  // the other 9 in CHART_TYPES render a stub, so putting them in a "click to
+  // add" palette would be an invitation to create a broken card.
+  //
+  // ponytail: click-to-add, not drag-to-drop. The card lands on the first free
+  // row and is then positioned with the existing drag behaviour. Drag from the
+  // palette needs px->grid mapping onto a drop target; add it if placing cards
+  // one at a time proves annoying. Click also keeps this keyboard-reachable,
+  // which a drag-only palette would not be.
+  App.prototype.buildPalette = function () {
+    var self = this;
+    var wrap = el("aside", "dss-palette");
+    wrap.appendChild(el("div", "dss-kicker", "Visual catalogue"));
+    wrap.appendChild(el("h3", "dss-palette-title", "Charts"));
+
+    var drawable = (root.DSStudioCharts || {}).SUPPORTED_CHART_TYPES || [];
+    var list = el("div", "dss-palette-list");
+    drawable.forEach(function (type) {
+      var item = el("button", "dss-palette-item");
+      item.type = "button";
+      item.title = "Add a " + type + " to this dashboard";
+      item.appendChild(el("span", "dss-palette-glyph", PALETTE_GLYPHS[type] || "▦"));
+      item.appendChild(el("span", "dss-palette-label", type));
+      item.addEventListener("click", function () { self.addChart(type); });
+      list.appendChild(item);
+    });
+    wrap.appendChild(list);
+    wrap.appendChild(el("p", "dss-hint",
+      "Adds a card below the existing ones. Drag it to position, then link a " +
+      "metric in the panel on the right."));
+    return wrap;
+  };
+
+  App.prototype.addChart = function (chartType, copyFrom) {
+    var self = this;
+    var dashboard = this.state.dashboard && this.state.dashboard.name;
+    if (this.state.mock || !hasFrappe() || !dashboard) {
+      toast("Adding a chart needs a live dashboard (not available in sample mode).");
+      return;
+    }
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.create_chart",
+      args: { dashboard: dashboard, chart_type: chartType, copy_from: copyFrom || null },
+    }).then(function (r) {
+      var created = r.message || {};
+      self.reloadDashboard("Added " + (created.chart_title || "chart"));
+      self.state.selected = created.name;
+    }).catch(function () {
+      toast("Could not add that chart.");
+    });
+  };
+
+  App.prototype.deleteChart = function (chart) {
+    var self = this;
+    if (this.state.mock || !hasFrappe()) {
+      toast("Deleting a chart needs a live dashboard (not available in sample mode).");
+      return;
+    }
+    if (!root.confirm('Delete "' + (chart.chart_title || chart.name) +
+        '"? Its metric is kept and stays available to other charts.')) return;
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.delete_chart",
+      args: { chart: chart.name },
+    }).then(function () {
+      self.state.selected = null;
+      self.reloadDashboard("Deleted " + (chart.chart_title || chart.name));
+    }).catch(function () {
+      toast("Could not delete that chart.");
+    });
+  };
+
   App.prototype.renderCard = function (chart, container) {
     var self = this;
     var style = core.layoutStyle(chart);
@@ -622,12 +739,26 @@
     card.style.height = style.heightRows * ROW_H + "px";
 
     var header = el("div", "dss-card-head");
-    header.appendChild(el("span", "dss-card-title", chart.chart_title));
+    var titleWrap = el("div", "dss-card-title-wrap");
+    titleWrap.appendChild(el("span", "dss-card-title", chart.chart_title));
+    // The description was editable but never shown, so nothing on the canvas
+    // said what a card actually measures.
+    if (chart.description) {
+      titleWrap.appendChild(el("span", "dss-card-subtitle", chart.description));
+    }
+    header.appendChild(titleWrap);
     header.appendChild(el("span", "dss-card-type", chart.chart_type || "—"));
     card.appendChild(header);
     var body = el("div", "dss-card-body");
     card.appendChild(body);
     this.renderChartBody(body, chart);
+
+    // Which DocType the numbers come from — evidence provenance belongs on the
+    // card, not only in the properties panel.
+    var source = this.metricSource(chart.metric);
+    if (source) {
+      card.appendChild(el("div", "dss-card-foot", "Source: " + source));
+    }
 
     var resize = el("div", "dss-resize");
     card.appendChild(resize);
@@ -712,6 +843,7 @@
           chart.height = base.height + dRow;
         }
         Object.assign(chart, core.clampLayout(chart));
+        self.state.dirty = true; // layout moved but not yet written back
         self.refresh();
       }
       function onUp() {
@@ -1067,6 +1199,17 @@
     actions.appendChild(saveBtn);
     this.panel.appendChild(actions);
 
+    var cardActions = el("div", "dss-actions dss-card-actions");
+    var dupBtn = el("button", "dss-btn dss-btn-small", "Duplicate");
+    dupBtn.title = "Create a copy of this chart on the same dashboard";
+    dupBtn.addEventListener("click", function () { self.addChart(null, chart.name); });
+    cardActions.appendChild(dupBtn);
+    var delBtn = el("button", "dss-btn dss-btn-small dss-btn-danger", "Delete");
+    delBtn.title = "Remove this chart. Its metric is kept.";
+    delBtn.addEventListener("click", function () { self.deleteChart(chart); });
+    cardActions.appendChild(delBtn);
+    this.panel.appendChild(cardActions);
+
     function collect() {
       var patch = {
         chart_title: titleInput.value,
@@ -1097,6 +1240,7 @@
       if (!res.ok) { err.textContent = res.error; return null; }
       err.textContent = "";
       Object.assign(chart, res.chart);
+      self.state.dirty = true; // Apply changes the in-memory chart only
       self.refresh();
       return chart;
     }
@@ -1944,10 +2088,35 @@
 
   // Metrics for the picker as [{name, source_doctype}]: mock keys this session;
   // live list (already restricted to executable metrics) cached once.
+  // Source DocType for a metric, for the card footer. Synchronous by design —
+  // cards redraw constantly — so it warms the metric list once and repaints
+  // when it lands, rather than blocking the first render on a call.
+  App.prototype.metricSource = function (metricName) {
+    if (!metricName) return null;
+    var self = this;
+    if (!this._metricList) {
+      if (!this._metricListWarming) {
+        this._metricListWarming = true;
+        this.availableMetrics(function () {
+          if (self.state.view === "design") self.refresh();
+        });
+      }
+      return null;
+    }
+    var match = this._metricList.filter(function (m) { return m.name === metricName; })[0];
+    return (match && match.source_doctype) || null;
+  };
+
   App.prototype.availableMetrics = function (callback) {
     if (this.state.mock || !hasFrappe()) {
-      callback(Object.keys((root.DSStudioMock || {}).MOCK_METRIC_RESULTS || {})
-        .map(function (name) { return { name: name }; }));
+      var mock = root.DSStudioMock || {};
+      var sources = {};
+      (mock.MOCK_FIELD_CATALOGUE || []).forEach(function (row) {
+        sources[row.metric_name] = row.source_doctype;
+      });
+      this._metricList = Object.keys(mock.MOCK_METRIC_RESULTS || {})
+        .map(function (name) { return { name: name, source_doctype: sources[name] }; });
+      callback(this._metricList);
       return;
     }
     var self = this;
@@ -2000,7 +2169,11 @@
         method: "dashboard_studio.api.studio.save_chart",
         args: { chart: c.name, patch: JSON.stringify(core.clampLayout(c)) },
       });
-    })).then(function () { toast("Saved layout for " + self.state.charts.length + " charts"); });
+    })).then(function () {
+      self.state.dirty = false;
+      toast("Saved layout for " + self.state.charts.length + " charts");
+      self.render();
+    });
   };
 
   function field(label, input) {
