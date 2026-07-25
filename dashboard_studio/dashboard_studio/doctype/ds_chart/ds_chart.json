@@ -49,8 +49,7 @@
    "fieldname": "metric",
    "fieldtype": "Link",
    "label": "Metric",
-   "options": "DS Metric",
-   "reqd": 1
+   "options": "DS Metric"
   },
   {
    "fieldname": "pos_x",

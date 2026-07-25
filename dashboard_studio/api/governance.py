@@ -125,11 +125,72 @@ def advance_status(dashboard: str, to_status: str):
                 "dashboard would be routed to the wrong section without any error."
             )
 
+    if to_status == PUBLISHED:
+        _refuse_unpublishable_charts(dashboard)
+
     doc.status = to_status
     if to_status == PUBLISHED:
         doc.published_on = frappe.utils.now()
     doc.save()
     return {"dashboard": dashboard, "status": doc.status, "applied": label}
+
+
+#: Comparison outcomes that count as a chart having been checked. Discrepancy and
+#: Flagged do not — Flagged especially, since it means a value could not be
+#: compared at all, and unknown is not the same as agreed.
+_PASSING_COMPARISONS = ("Match", "Accepted")
+
+
+def _refuse_unpublishable_charts(dashboard: str):
+    """Block publishing on charts that are unlinked or unchecked, naming each.
+
+    Both are refusals rather than exclusions. Publishing a dashboard with the
+    offending charts silently dropped would produce something that looks
+    complete and is not, with nobody told — the same failure class as a silent
+    mis-route, and worse on audit evidence than visibly refusing.
+    """
+    charts = frappe.get_all(
+        "DS Chart",
+        filters={"dashboard": dashboard},
+        fields=["name", "chart_title", "metric", "modified"],
+    )
+
+    def label(chart):
+        return chart.get("chart_title") or chart.get("name")
+
+    unlinked = [label(c) for c in charts if not c.get("metric")]
+    if unlinked:
+        frappe.throw(
+            "These charts have no metric, so there is nothing to publish for them: "
+            + ", ".join(sorted(unlinked))
+            + ". Link a metric or delete the chart."
+        )
+
+    # ponytail: one query per chart. Fine at a dashboard's scale (tens); batch on
+    # `chart in [...]` if a dashboard ever carries hundreds.
+    unchecked = []
+    for chart in charts:
+        rows = frappe.get_all(
+            "DS Validation Comparison",
+            filters={"chart": chart["name"]},
+            fields=["status", "comparison_date"],
+        )
+        passing = [r for r in rows if r.get("status") in _PASSING_COMPARISONS]
+        if not passing:
+            unchecked.append(label(chart))
+            continue
+        # A pass from before the chart was last edited proves nothing about it now.
+        edited = frappe.utils.getdate(chart.get("modified"))
+        if not any(frappe.utils.getdate(r.get("comparison_date")) >= edited for r in passing):
+            unchecked.append(label(chart))
+
+    if unchecked:
+        frappe.throw(
+            "These charts have no validation newer than their last edit: "
+            + ", ".join(sorted(unchecked))
+            + ". Run each in the Validation Centre and resolve it to Match, or "
+            "accept the difference with a reason, before publishing."
+        )
 
 
 @frappe.whitelist()

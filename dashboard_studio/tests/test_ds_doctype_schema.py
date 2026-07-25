@@ -68,7 +68,9 @@ SPEC = {
             "Radar", "Decision Diagram", "Network Diagram",
             "Reconciliation Diagram", "Maturity Ladder", "Risk Matrix",
         ])},
-        "metric": {"fieldtype": "Link", "options": "DS Metric", "reqd": 1},
+        # Deliberately NOT reqd: the Builder creates a card first and links a
+        # metric afterwards. Publishing refuses an unlinked chart instead.
+        "metric": {"fieldtype": "Link", "options": "DS Metric"},
         "pos_x": {"fieldtype": "Int"},
         "pos_y": {"fieldtype": "Int"},
         "width": {"fieldtype": "Int", "default": "4"},

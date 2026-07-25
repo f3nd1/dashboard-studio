@@ -42,7 +42,7 @@ Frappe app layout: the Python package is `dashboard_studio/`, and the Frappe *mo
 
 ### Two DocType generations coexist — do not conflate them
 
-- **Old placeholder DocTypes** (`Dashboard Definition`, `Dataset Definition`, `Metric Definition`, `Migration Job`, `Migration Mapping`) — opaque `*_json` Code fields, System-Manager-only perms. **Frozen: do not modify, rename, or remove.** Served by the old-path API (`build_metric_plan`, `run_metric`) which still reads them.
+- **Old placeholder DocTypes** (6, not 5: `Dashboard Definition`, `Dataset Definition`, `Metric Definition`, `Migration Job`, `Migration Mapping`, and `Dashboard Component` — the child table of `Dashboard Definition`, `istable: 1`, easy to miss because nothing references it by name outside that parent) — opaque `*_json` Code fields, System-Manager-only perms. **Frozen: do not modify, rename, or remove.** Served by the old-path API (`build_metric_plan`, `run_metric`) which still reads them. All six ship with the app; none are orphans from another app.
 - **New `DS`-prefixed DocTypes** (11: `DS Dashboard`, `DS Dashboard Section`, `DS Chart`, `DS Chart Filter`, `DS Metric`, `DS Metric Filter`, `DS Data Source`, `DS Data Mapping`, `DS Migration Project`, `DS Canvas Node`, `DS Validation Comparison`) — the real target schema, normalized fields, `Dashboard Studio Editor`/`Viewer` role perms. This is what active work builds on.
 
 ### Analytics runtime (the core, `dashboard_studio/analytics/`)

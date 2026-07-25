@@ -77,12 +77,6 @@ class TestChartApi(unittest.TestCase):
             self.studio.delete_chart("c1")
 
     # ---- create ----
-    # KNOWN BUG — DS Chart.metric is reqd, and create_chart inserts without one.
-    # Confirmed on ucc.local: MandatoryError [DS Chart]: metric. These three fail
-    # correctly now that the fake enforces reqd from the DocType JSON; remove the
-    # markers as part of the fix. Leaving one on after the fix reports an
-    # UNEXPECTED SUCCESS, so they cannot be forgotten.
-    @unittest.expectedFailure
     def test_create_lands_below_existing_charts(self):
         created = self.studio.create_chart("D1", "Bar Chart")
         # c2 occupies rows 4..6, so the first free row is 6.
@@ -92,7 +86,6 @@ class TestChartApi(unittest.TestCase):
         self.assertEqual(created["dashboard"], "D1")
         self.assertIsNone(created["metric"], "a new chart has no metric yet")
 
-    @unittest.expectedFailure
     def test_create_on_empty_dashboard_starts_at_row_zero(self):
         self.assertEqual(self.studio.create_chart("D-empty", "Table")["pos_y"], 0)
 
@@ -101,7 +94,6 @@ class TestChartApi(unittest.TestCase):
             self.studio.create_chart("D1", "Sankey")
         self.assertEqual(len(self.store["DS Chart"]), 3, "nothing created")
 
-    @unittest.expectedFailure
     def test_every_schema_chart_type_is_accepted(self):
         """The picker offers whatever the DocType lists — none may be refused."""
         for chart_type in self.studio._chart_type_options():

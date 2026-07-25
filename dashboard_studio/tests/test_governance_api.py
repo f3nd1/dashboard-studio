@@ -82,7 +82,17 @@ def _make_fake_frappe(store):
     frappe.get_roles = lambda: list(frappe._roles)
     frappe.throw = lambda msg: (_ for _ in ()).throw(_ValidationError(msg))
     frappe.db = types.SimpleNamespace(count=count)
-    frappe.utils = types.SimpleNamespace(now=lambda: "2026-07-25 10:00:00")
+    # getdate mirrors frappe.utils.getdate: parse a date or datetime string to a
+    # date, so "newer than last edit" is compared the same way the real gate does.
+    def getdate(value):
+        import datetime
+        if isinstance(value, datetime.datetime):
+            return value.date()
+        if isinstance(value, datetime.date):
+            return value
+        return datetime.date.fromisoformat(str(value).split(" ")[0])
+
+    frappe.utils = types.SimpleNamespace(now=lambda: "2026-07-25 10:00:00", getdate=getdate)
     return frappe
 
 
@@ -105,14 +115,24 @@ class TestGovernanceApi(unittest.TestCase):
                        "status": "Draft", "subcriterion": "4.1.1"},
             },
             "DS Chart": {
-                "C1": {"name": "C1", "dashboard": "D1", "chart_title": "A", "metric": "M-shared"},
-                "C2": {"name": "C2", "dashboard": "D1", "chart_title": "B", "metric": "M-solo"},
+                "C1": {"name": "C1", "dashboard": "D1", "chart_title": "A", "metric": "M-shared",
+                       "modified": "2026-07-20 09:00:00"},
+                "C2": {"name": "C2", "dashboard": "D1", "chart_title": "B", "metric": "M-solo",
+                       "modified": "2026-07-20 09:00:00"},
                 # A chart on ANOTHER dashboard using the same metric — that is
                 # what makes M-shared shared.
                 "C3": {"name": "C3", "dashboard": "D2", "chart_title": "C", "metric": "M-shared"},
             },
             "DS Dashboard Section": {
                 "S1": {"name": "S1", "dashboard": "D1", "section_title": "Intake"},
+            },
+            # Both D1 charts validated after their last edit, so the publish path
+            # can be tested; each refusal has its own test below.
+            "DS Validation Comparison": {
+                "V-C1": {"name": "V-C1", "chart": "C1", "status": "Match",
+                         "comparison_date": "2026-07-24"},
+                "V-C2": {"name": "V-C2", "chart": "C2", "status": "Accepted",
+                         "comparison_date": "2026-07-24"},
             },
             "Version": {
                 "V1": {"name": "V1", "ref_doctype": "DS Dashboard", "docname": "D1",
@@ -188,6 +208,63 @@ class TestGovernanceApi(unittest.TestCase):
             self.gov.advance_status("D1", "Published")
         self.assertIn("9.9.9", str(caught.exception), "the rejected code is named")
         self.assertEqual(self._status(), "QA Approval")
+
+    # ---- charts must be linked and checked to publish ----
+    #
+    # Both refuse rather than exclude. A dashboard published with the offending
+    # charts silently dropped looks complete and is not, which on audit evidence
+    # is worse than a visible refusal.
+    def _ready_to_publish(self):
+        self.store["DS Dashboard"]["D1"]["status"] = "QA Approval"
+        self._as("Dashboard Studio QA Approver")
+
+    def test_metric_less_chart_blocks_publishing_and_is_named(self):
+        self.store["DS Chart"]["C2"]["metric"] = ""
+        self._ready_to_publish()
+        with self.assertRaises(_ValidationError) as caught:
+            self.gov.advance_status("D1", "Published")
+        self.assertIn("B", str(caught.exception), "the offending chart is named")
+        self.assertEqual(self._status(), "QA Approval")
+
+    def test_chart_with_no_comparison_blocks_publishing_and_is_named(self):
+        del self.store["DS Validation Comparison"]["V-C2"]
+        self._ready_to_publish()
+        with self.assertRaises(_ValidationError) as caught:
+            self.gov.advance_status("D1", "Published")
+        self.assertIn("B", str(caught.exception))
+        self.assertNotIn("A", str(caught.exception), "the validated chart is not named")
+        self.assertEqual(self._status(), "QA Approval")
+
+    def test_comparison_older_than_the_last_edit_does_not_count(self):
+        """A pass from before the chart changed proves nothing about it now."""
+        self.store["DS Chart"]["C1"]["modified"] = "2026-07-25 09:00:00"
+        self.store["DS Validation Comparison"]["V-C1"]["comparison_date"] = "2026-07-24"
+        self._ready_to_publish()
+        with self.assertRaises(_ValidationError) as caught:
+            self.gov.advance_status("D1", "Published")
+        self.assertIn("A", str(caught.exception))
+
+    def test_same_day_comparison_counts(self):
+        self.store["DS Chart"]["C1"]["modified"] = "2026-07-24 18:00:00"
+        self.store["DS Validation Comparison"]["V-C1"]["comparison_date"] = "2026-07-24"
+        self._ready_to_publish()
+        self.assertEqual(self.gov.advance_status("D1", "Published")["status"], "Published")
+
+    def test_discrepancy_and_flagged_do_not_count_as_checked(self):
+        for status in ("Discrepancy", "Flagged"):
+            with self.subTest(status=status):
+                self.store["DS Validation Comparison"]["V-C2"]["status"] = status
+                self.store["DS Dashboard"]["D1"]["status"] = "QA Approval"
+                self._as("Dashboard Studio QA Approver")
+                with self.assertRaises(_ValidationError):
+                    self.gov.advance_status("D1", "Published")
+
+    def test_another_dashboards_unvalidated_chart_does_not_block(self):
+        self.store["DS Chart"]["C9"] = {"name": "C9", "dashboard": "D2",
+                                        "chart_title": "Elsewhere", "metric": "",
+                                        "modified": "2026-07-20 09:00:00"}
+        self._ready_to_publish()
+        self.assertEqual(self.gov.advance_status("D1", "Published")["status"], "Published")
 
     def test_scope_is_not_required_for_earlier_stages(self):
         """A dashboard must stay authorable and reviewable before it is scoped."""

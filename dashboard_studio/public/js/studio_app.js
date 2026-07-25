@@ -66,7 +66,7 @@
       dashboards: null,
       pickerOpen: false, pickerQuery: "", pickerIndex: 0,
       // Layout moved/edited in memory but not written back yet.
-      dirty: false,
+      dirty: false, savedNote: null,
       // Arriving with ?project= means the caller came from a DS Migration
       // Project, so open straight into the Mapping view.
       view: this.options.project ? "mapping" : "design",
@@ -574,8 +574,10 @@
     // without this there is no way to tell whether pressing it does anything.
     if (this.state.view === "design" && !this.state.mock) {
       head.appendChild(el("span",
-        "dss-savestate" + (this.state.dirty ? " is-dirty" : ""),
-        this.state.dirty ? "● Unsaved layout changes" : "● All changes saved"));
+        "dss-savestate" + (this.state.dirty ? " is-dirty" : "") +
+          (this.state.savedNote ? " is-just-saved" : ""),
+        this.state.savedNote ? "● " + this.state.savedNote
+          : this.state.dirty ? "● Unsaved layout changes" : "● All changes saved"));
     }
 
     if (this.state.view === "design") {
@@ -731,6 +733,22 @@
     return wrap;
   };
 
+  // Confirm a write that already succeeded. Without this a scope change — which
+  // persists immediately — moved the indicator from "All changes saved" to "All
+  // changes saved", so a successful silent write looked identical to nothing
+  // happening. The note clears itself so it never reads as permanent state.
+  App.prototype.markSaved = function (note) {
+    var self = this;
+    this.state.dirty = false;
+    this.state.savedNote = note;
+    root.clearTimeout(this._savedTimer);
+    this._savedTimer = root.setTimeout(function () {
+      self.state.savedNote = null;
+      if (self.state.view === "design") self.render();
+    }, 4000);
+    this.render();
+  };
+
   App.prototype.loadSubcriteria = function () {
     var self = this;
     if (this.state.subcriteria || this._subcriteriaWarming || !hasFrappe()) return;
@@ -753,7 +771,7 @@
       self.state.dashboard.subcriterion = result.subcriterion || "";
       self.state.scope = result.scope || null;
       toast(result.scope ? "Scoped to " + result.scope.label : "Scope cleared");
-      self.render();
+      self.markSaved(result.scope ? "Scope saved" : "Scope cleared");
     }).catch(function () {
       toast("Could not set the dashboard scope.");
     });
@@ -2251,9 +2269,8 @@
         args: { chart: c.name, patch: JSON.stringify(core.clampLayout(c)) },
       });
     })).then(function () {
-      self.state.dirty = false;
       toast("Saved layout for " + self.state.charts.length + " charts");
-      self.render();
+      self.markSaved("Layout saved");
     });
   };
 
