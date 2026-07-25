@@ -203,6 +203,86 @@ Given all of that, the two-line deletion is about as small and reversible as a
 change to that file can be, and it is a good candidate for re-establishing a
 clean repo-to-live sync while the diff is trivially reviewable.
 
+---
+
+# Annex — other same-value-two-paths splits
+
+Asked before running Part 1: is there anywhere else the same value is rendered by
+two paths with different rules? **Yes — and the bar bug is one corner of a wider
+split, not an isolated case.** All read from source; none run.
+
+## The root split
+
+`metricRows` builds each row as `[label, value, metric]` (`:2431`):
+
+```js
+rows.push([metric.label, finiteNumber(metric.value,0), metric]);
+```
+
+The metric object — carrying `unit` — is at index **2**. **All fourteen diagram
+renderers ignore it**, using only `row[0]` and `row[1]`. Every other display path
+(`table`, KPI strip, Q&A answers, CSV export) goes through `metricValue`, which
+is unit-aware.
+
+So the diagram can never apply a unit rule, and everything else always does.
+
+## Direction of error, by chart type
+
+| Type | Diagram shows | `metricValue` shows | Error |
+|---|---|---|---|
+| `bar`, `matrix` | `62%` for a count | `62` | **adds** a unit that is not there |
+| `donut`, `funnel`, `trend`, `radar`, `gauge`, `lifecycle`, `admission-*` | `62` for a `unit:"percent"` metric | `62%` | **drops** a unit that is there |
+| any, for `unit:"SGD"` | `1234.5` | `SGD 1,234.5` | drops currency and separators |
+| any, for `unit:"rating"` | `4` | `4/5` | drops the scale |
+| any, large numbers | `1234.5` | `1,234.5` | drops thousands separators |
+
+**The bar bug is the loud half; the quiet half is every other chart type
+under-formatting.** A genuine percentage in a donut or trend chart renders as a
+bare number with no `%` — the inverse mistake, and harder to notice because a
+missing suffix looks like a plain count rather than an obvious contradiction.
+
+The Part 1 snippet detects the **adding** case only, because that is the one the
+table contradicts visibly. The dropping case would need the metric's `unit`,
+which is not in the DOM — it would need an API read to confirm.
+
+## A genuinely separate pair: the KPI strip has two implementations
+
+- Generic (`:2507`): `metricValue(metric)` → `Number(v).toLocaleString()`,
+  default 3 fraction digits.
+- Criterion 4 / 4.1.1 admission (`:2504`):
+  `Number(v).toLocaleString(undefined,{maximumFractionDigits:2})` plus its own
+  `unit==="percent"?"%":""`.
+
+Measured: `96.7742` renders as **`96.774`** through the first and **`96.77`**
+through the second. Whether both ever show the *same* figure depends on whether
+`result.admission_intelligence.kpis` overlaps `result.metrics`, which cannot be
+determined without live data. **Possible, unverified.**
+
+## A third inconsistency, inside the "correct" function
+
+`metricValue` is not internally consistent either (`:2364`):
+
+```js
+if(metric.unit==="percent") return String(value)+"%";     // no separators
+if(metric.unit==="rating")  return String(value)+"/5";    // no separators
+if(metric.unit==="SGD")     return "SGD "+Number(value).toLocaleString();
+return Number(value).toLocaleString();
+```
+
+`1234.5` renders as `1234.5%` as a percentage but `1,234.5` as a count. Cosmetic,
+but it means "go through `metricValue`" is not by itself a guarantee of
+consistency.
+
+## What this implies for the fix
+
+It strengthens the case for **deleting** the heuristic rather than replacing it.
+Adding a unit-aware suffix to `renderBars` alone would fix one corner and leave
+the other thirteen renderers still dropping units — a partial fix that makes the
+inconsistency harder to spot, not easier. If unit-aware diagram labels are ever
+wanted, the change is to pass `row[2]` into all fourteen renderers and route them
+through one shared formatter, which is a Sophia-side refactor well beyond this
+two-line deletion.
+
 ## Sequencing
 
 Independent of everything else. It does not touch chart binding, the publish
