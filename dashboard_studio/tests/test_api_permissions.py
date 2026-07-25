@@ -64,6 +64,8 @@ def _make_fake_frappe():
                  "calculation_type": "Count", "source_doctype": "Student Applicant"},
                 {"name": "M2-draft", "metric_name": "M2-draft", "status": "Draft",
                  "calculation_type": "Count", "source_doctype": "Student Applicant"},
+                {"name": "M3-sum", "metric_name": "M3-sum", "status": "Approved",
+                 "calculation_type": "Sum", "source_doctype": "Student Applicant"},
             ]
             # Honour filters, so endpoints that rely on them are actually tested.
             for key, value in (filters or {}).items():
@@ -154,11 +156,12 @@ class TestApiRoleEnforcement(unittest.TestCase):
         self._as("Dashboard Studio Viewer")
         self.assertEqual(self.studio.list_ds_metrics()[0]["metric_name"], "M1")
 
-    def test_list_metrics_excludes_unapproved(self):
-        # The picker must only offer metrics the engine will actually run.
+    def test_list_metrics_only_offers_executable_metrics(self):
+        # The picker must only offer metrics the engine will actually run:
+        # Approved (not Draft) and Count (not Sum/Average, which it cannot run).
         self._as("Dashboard Studio Viewer")
         names = [m["metric_name"] for m in self.studio.list_ds_metrics()]
-        self.assertEqual(names, ["M1"], "Draft metrics must not be listed")
+        self.assertEqual(names, ["M1"], "only Approved + Count metrics are offered")
 
     def test_no_role_cannot_list_metrics(self):
         self._as("Some Other Role")

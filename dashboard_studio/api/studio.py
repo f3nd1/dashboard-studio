@@ -64,11 +64,16 @@ def get_studio_dashboard(dashboard: str):
 
 @frappe.whitelist()
 def list_ds_metrics():
-    """Approved DS Metrics for the editor's metric picker (read-only)."""
+    """Metrics the editor may point a chart at (read-only).
+
+    Restricted to what the engine can actually execute today: Approved, and
+    calculation_type Count. Offering a Sum/Average metric would let someone
+    build a chart that can only fail at render time.
+    """
     frappe.only_for(DS_READ_ROLES)
     return frappe.get_all(
         "DS Metric",
-        filters={"status": "Approved"},
+        filters={"status": "Approved", "calculation_type": "Count"},
         fields=["name", "metric_name", "calculation_type", "source_doctype"],
         order_by="metric_name asc",
     )

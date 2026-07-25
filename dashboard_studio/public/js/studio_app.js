@@ -271,9 +271,12 @@
     titleInput.value = chart.chart_title || "";
     this.panel.appendChild(field("Title", titleInput));
 
+    // Flag the types that have no rendering from count-by-group data, so the
+    // choice is informed rather than discovered as a stub on the card.
+    var renderable = (root.DSStudioCharts || {}).SUPPORTED_CHART_TYPES || [];
     var typeSelect = el("select", "dss-input");
     core.CHART_TYPES.forEach(function (t) {
-      var o = el("option", null, t);
+      var o = el("option", null, renderable.indexOf(t) === -1 ? t + " — no chart yet" : t);
       o.value = t;
       if (t === chart.chart_type) o.selected = true;
       typeSelect.appendChild(o);
@@ -286,21 +289,43 @@
 
     // Metric selection — which DS Metric this chart draws.
     var metricSelect = el("select", "dss-input");
-    this.availableMetrics(function (names) {
-      names.forEach(function (name) {
-        var o = el("option", null, name);
-        o.value = name;
-        if (name === chart.metric) o.selected = true;
+    this.availableMetrics(function (metrics) {
+      var names = metrics.map(function (m) { return m.name; });
+      metrics.forEach(function (m) {
+        // Show what the metric draws on, so the choice is not name-only.
+        var o = el("option", null, m.source_doctype ? m.name + " — " + m.source_doctype : m.name);
+        o.value = m.name;
+        if (m.name === chart.metric) o.selected = true;
         metricSelect.appendChild(o);
       });
+      // A chart may already point at something the picker no longer offers
+      // (deprecated, or a calculation the engine cannot run) — keep it visible.
       if (chart.metric && names.indexOf(chart.metric) === -1) {
-        var cur = el("option", null, chart.metric);
+        var cur = el("option", null, chart.metric + " — not currently executable");
         cur.value = chart.metric;
         cur.selected = true;
         metricSelect.appendChild(cur);
       }
     });
     this.panel.appendChild(field("Metric", metricSelect));
+
+    // Layout, editable numerically as well as by drag: drag is imprecise and
+    // cannot be driven from the keyboard. Values are clamped by applyChartEdit.
+    var layoutWrap = el("div", "dss-layout-row");
+    layoutWrap.appendChild(el("span", "dss-field-label", "Layout (column, row, width, height)"));
+    var layoutInputs = {};
+    var grid = el("div", "dss-layout-grid");
+    ["pos_x", "pos_y", "width", "height"].forEach(function (key) {
+      var input = el("input", "dss-input");
+      input.type = "number";
+      input.min = key === "width" || key === "height" ? "1" : "0";
+      input.value = chart[key] == null ? "" : chart[key];
+      input.setAttribute("aria-label", key);
+      layoutInputs[key] = input;
+      grid.appendChild(input);
+    });
+    layoutWrap.appendChild(grid);
+    this.panel.appendChild(layoutWrap);
 
     // Chart filters (DS Chart Filter rows). Static rows with engine-supported
     // operators are editable; Dynamic or like/between rows appear read-only and
@@ -357,12 +382,17 @@
     this.panel.appendChild(actions);
 
     function collect() {
-      return {
+      var patch = {
         chart_title: titleInput.value,
         chart_type: typeSelect.value,
         description: descInput.value,
         metric: metricSelect.value || chart.metric,
       };
+      Object.keys(layoutInputs).forEach(function (key) {
+        var raw = layoutInputs[key].value;
+        if (raw !== "") patch[key] = parseInt(raw, 10);
+      });
+      return patch;
     }
     function applyEdit() {
       // Drop editable rows left fully empty, then validate the rest the way the
@@ -579,17 +609,21 @@
     });
   };
 
-  // Metric names for the picker: mock keys this session; live list cached once.
+  // Metrics for the picker as [{name, source_doctype}]: mock keys this session;
+  // live list (already restricted to executable metrics) cached once.
   App.prototype.availableMetrics = function (callback) {
     if (this.state.mock || !hasFrappe()) {
-      callback(Object.keys((root.DSStudioMock || {}).MOCK_METRIC_RESULTS || {}));
+      callback(Object.keys((root.DSStudioMock || {}).MOCK_METRIC_RESULTS || {})
+        .map(function (name) { return { name: name }; }));
       return;
     }
     var self = this;
     if (this._metricList) { callback(this._metricList); return; }
     root.frappe.call({ method: "dashboard_studio.api.studio.list_ds_metrics" })
       .then(function (r) {
-        self._metricList = (r.message || []).map(function (m) { return m.name; });
+        self._metricList = (r.message || []).map(function (m) {
+          return { name: m.name, source_doctype: m.source_doctype };
+        });
         callback(self._metricList);
       })
       .catch(function () { callback([]); });
