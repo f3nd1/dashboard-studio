@@ -2361,8 +2361,16 @@
         var data = r.message || {};
         var analysis = data.analysis || {};
         self.applyAnalysis(analysis, data.suggested_mappings || [], sql);
-      }).catch(function () {
-        note.textContent = "Could not analyze that query.";
+        // The "Analyzing…" state had no success path — only .catch wrote to the
+        // note — so a query that parsed perfectly looked exactly like a hang.
+        // The full report is in the panel; this says which one to read.
+        var found = (analysis.doctypes || []).length;
+        note.textContent = analysis.supported
+          ? "Analyzed: " + found + " table(s) found, " +
+            (data.suggested_mappings || []).length + " mapping(s) suggested — see the panel."
+          : "Analyzed, but not translated — see the reasons in the panel.";
+      }).catch(function (err) {
+        note.textContent = refusalMessage(err, "Could not analyze that query.");
       });
     });
     var actions = el("div", "dss-sqlimport-actions");
