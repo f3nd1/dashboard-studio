@@ -10,7 +10,9 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
   });
 
   const mount = document.createElement("div");
-  page.body.appendChild(mount);
+  // page.body is a jQuery object in Frappe's page API, not a raw DOM node —
+  // use .append() (which accepts the raw element), never .appendChild().
+  page.body.append(mount);
   mount.textContent = __("Loading the visual editor…");
 
   // Load the framework-free editor assets on demand (no bundler required), then
