@@ -1,6 +1,9 @@
 # Criterion / subcriterion scope — design
 
-**Status:** design only. Nothing built. Decision required before any code.
+**Status:** approved and built. See `dashboard_studio/edutrust.py` for the list,
+`DS Dashboard.subcriterion` for the field, and `api/governance.advance_status`
+for the publish gate. One correction was applied to §4 after review — see the
+box there.
 **Question:** how does a DS Dashboard record say which EduTrust criterion and
 subcriterion it belongs to, and what does that imply for the publish contract?
 
@@ -113,10 +116,25 @@ DocType.**
 
 ```
 DS Dashboard.subcriterion   Select
-  4.1.1 · Pre-Course Counselling, Selection and Admissions
-  4.2.1 · Student Contract
-  ... (32 options, canonical codes)
+  (blank)      <- scope is optional while authoring
+  1.1.1
+  1.2.1
+  ... (32 options, canonical codes, NO labels)
 ```
+
+> **Correction applied after review.** An earlier draft of this section proposed
+> option strings like `4.1.1 · Pre-Course Counselling…` and claimed they carried
+> the display title "at no extra storage and with no second copy of policy
+> metadata". **That was wrong about Frappe.** A `Select` has no key/label split —
+> unlike a `Link`, the chosen option string is written to the column verbatim. A
+> labelled option would put a copy of Sophia's title in every DS Dashboard
+> record, and a retitle upstream would strand every existing record against an
+> option that no longer matches — precisely the drift this document argues
+> against two paragraphs earlier.
+>
+> **Options are bare codes. Titles are resolved at display time** from
+> `edutrust.SUBCRITERIA` and returned by `get_studio_dashboard` and
+> `list_subcriteria`. The records hold only the code.
 
 The criterion is **derived from the code prefix** (`4.1.1` → `criterion_4`), not
 stored. It is deterministic, so a second field would only create the opportunity
@@ -128,8 +146,7 @@ Your reasoning for avoiding a DocType is right and I am not challenging it. But
 two fields specifically re-introduce the §2 failure: they let someone pair
 criterion 5 with 4.1.1, and Sophia will silently render the wrong section. One
 field makes an invalid pair **unrepresentable** rather than merely discouraged —
-the pair *is* the value. It also carries the display title (§3) for free, at no
-extra storage and with no second copy of policy metadata.
+the pair *is* the value, because the criterion is the code's own prefix.
 
 ### Why this beats a DS Criterion DocType
 

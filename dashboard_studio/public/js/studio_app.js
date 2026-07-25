@@ -442,6 +442,8 @@
     }).then(function (r) {
       var data = r.message || {};
       self.state.dashboard = data.dashboard;
+      // Resolved server-side from the stored code — never persisted here.
+      self.state.scope = data.scope || null;
       self.state.charts = data.charts || [];
       self.state.sections = data.sections || [];
       self.state.mock = false;
@@ -608,9 +610,18 @@
     // toolbar — but DS Dashboard.description was being stored and never shown
     // anywhere. Reuses the hero block rather than adding a second style for it.
     var dashboardDescription = this.state.dashboard && this.state.dashboard.description;
-    if (this.state.view === "design" && dashboardDescription) {
+    var scope = this.state.scope;
+    if (this.state.view === "design" && (dashboardDescription || scope)) {
       var descBox = el("div", "dss-hero");
-      descBox.appendChild(el("p", "dss-hero-blurb", dashboardDescription));
+      // Kicker above the description, per the reference mockup. Reads
+      // "Criterion 4 · 4.1.1 · Pre-Course Counselling…" from resolved labels.
+      if (scope) {
+        descBox.appendChild(el("div", "dss-kicker",
+          scope.label + " · " + scope.subcriterion_title));
+      }
+      if (dashboardDescription) {
+        descBox.appendChild(el("p", "dss-hero-blurb", dashboardDescription));
+      }
       wrap.appendChild(descBox);
     }
 
@@ -670,6 +681,35 @@
   App.prototype.buildPalette = function () {
     var self = this;
     var wrap = el("aside", "dss-palette");
+
+    // Dashboard scope. The record stores only the EduTrust code; the label comes
+    // from the server so a retitle upstream never strands a stored string.
+    if (!this.state.mock && this.state.dashboard) {
+      wrap.appendChild(el("div", "dss-kicker", "Dashboard scope"));
+      wrap.appendChild(el("h3", "dss-palette-title", "EduTrust subcriterion"));
+      var scopeSelect = el("select", "dss-input");
+      scopeSelect.setAttribute("aria-label", "EduTrust subcriterion");
+      var current = this.state.dashboard.subcriterion || "";
+      var none = el("option", null, "— Not scoped —");
+      none.value = "";
+      if (!current) none.selected = true;
+      scopeSelect.appendChild(none);
+      (this.state.subcriteria || []).forEach(function (s) {
+        var o = el("option", null, s.label + " · " + s.subcriterion_title);
+        o.value = s.subcriterion;
+        if (s.subcriterion === current) o.selected = true;
+        scopeSelect.appendChild(o);
+      });
+      scopeSelect.addEventListener("change", function () {
+        self.setScope(scopeSelect.value);
+      });
+      wrap.appendChild(scopeSelect);
+      wrap.appendChild(el("p", "dss-hint dss-note",
+        "Required before publishing — an unscoped dashboard has no section to " +
+        "publish into."));
+      this.loadSubcriteria();
+    }
+
     wrap.appendChild(el("div", "dss-kicker", "Visual catalogue"));
     wrap.appendChild(el("h3", "dss-palette-title", "Charts"));
 
@@ -689,6 +729,34 @@
       "Adds a card below the existing ones. Drag it to position, then link a " +
       "metric in the panel on the right."));
     return wrap;
+  };
+
+  App.prototype.loadSubcriteria = function () {
+    var self = this;
+    if (this.state.subcriteria || this._subcriteriaWarming || !hasFrappe()) return;
+    this._subcriteriaWarming = true;
+    root.frappe.call({ method: "dashboard_studio.api.studio.list_subcriteria" })
+      .then(function (r) {
+        self.state.subcriteria = r.message || [];
+        if (self.state.view === "design") self.render();
+      })
+      .catch(function () { self._subcriteriaWarming = false; });
+  };
+
+  App.prototype.setScope = function (code) {
+    var self = this;
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.set_dashboard_scope",
+      args: { dashboard: this.state.dashboard.name, subcriterion: code || null },
+    }).then(function (r) {
+      var result = r.message || {};
+      self.state.dashboard.subcriterion = result.subcriterion || "";
+      self.state.scope = result.scope || null;
+      toast(result.scope ? "Scoped to " + result.scope.label : "Scope cleared");
+      self.render();
+    }).catch(function () {
+      toast("Could not set the dashboard scope.");
+    });
   };
 
   App.prototype.addChart = function (chartType, copyFrom) {

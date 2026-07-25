@@ -17,6 +17,8 @@ import json
 import os
 import unittest
 
+from dashboard_studio.edutrust import SUBCRITERIA
+
 DOCTYPE_DIR = os.path.join(
     os.path.dirname(__file__), "..", "dashboard_studio", "doctype"
 )
@@ -39,6 +41,11 @@ SPEC = {
                    "options": "Draft\nTechnical Review\nQA Approval\nPublished\nArchived",
                    "default": "Draft"},
         "description": {"fieldtype": "Small Text"},
+        # Codes only, never labels: a Select stores the chosen option verbatim,
+        # so a label in the option would copy Sophia's title into every record.
+        # Pinned to edutrust.SUBCRITERIA so the two can never drift apart.
+        "subcriterion": {"fieldtype": "Select",
+                         "options": "\n".join([""] + sorted(SUBCRITERIA))},
         "publish_target": {"fieldtype": "Select", "options": "UCC Intelligence Platform\nSophia\nOther"},
         "reviewer": {"fieldtype": "Link", "options": "User"},
         "review_comments": {"fieldtype": "Small Text"},

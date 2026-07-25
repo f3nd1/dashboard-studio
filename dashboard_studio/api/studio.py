@@ -2,6 +2,8 @@ import json
 
 import frappe
 
+from dashboard_studio.edutrust import SUBCRITERIA, describe
+
 # Access model (System Manager always allowed as superuser).
 #
 # QA Approver can READ everything — approving work you cannot see is meaningless
@@ -72,6 +74,32 @@ def create_dashboard(dashboard_title: str):
 
 
 @frappe.whitelist()
+def set_dashboard_scope(dashboard: str, subcriterion: str = None):
+    """Set (or clear) a dashboard's EduTrust subcriterion.
+
+    Narrow on purpose: scope is the only DS Dashboard field the Builder writes,
+    and a general patch endpoint would expose status and published_on, which the
+    governance workflow owns.
+
+    Only the code is stored. Titles are resolved for display, so a retitle on the
+    receiving platform never strands records against stale text.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    code = (subcriterion or "").strip()
+    if code and code not in SUBCRITERIA:
+        frappe.throw(f"Unknown EduTrust subcriterion: {code}")
+    frappe.db.set_value("DS Dashboard", dashboard, "subcriterion", code)
+    return {"dashboard": dashboard, "subcriterion": code, "scope": describe(code)}
+
+
+@frappe.whitelist()
+def list_subcriteria():
+    """The EduTrust codes a dashboard may be scoped to, with their titles."""
+    frappe.only_for(DS_READ_ROLES)
+    return [describe(code) for code in sorted(SUBCRITERIA)]
+
+
+@frappe.whitelist()
 def get_studio_dashboard(dashboard: str):
     """Return a DS Dashboard and its DS Chart records for the visual editor."""
     frappe.only_for(DS_READ_ROLES)
@@ -106,7 +134,13 @@ def get_studio_dashboard(dashboard: str):
         fields=["name", "section_title", "sort_order", "is_collapsed_default"],
         order_by="sort_order asc, section_title asc",
     )
-    return {"dashboard": doc.as_dict(), "charts": charts, "sections": sections}
+    # Resolved here, not stored: the record holds only the code.
+    return {
+        "dashboard": doc.as_dict(),
+        "scope": describe(doc.get("subcriterion") or ""),
+        "charts": charts,
+        "sections": sections,
+    }
 
 
 @frappe.whitelist()

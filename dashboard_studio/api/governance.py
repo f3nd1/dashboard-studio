@@ -14,6 +14,7 @@ already enabled via track_changes on the DS DocTypes, are surfaced instead.
 import frappe
 
 from dashboard_studio.api.studio import DS_READ_ROLES
+from dashboard_studio.edutrust import SUBCRITERIA
 
 QA_ROLE = "Dashboard Studio QA Approver"
 EDITOR_ROLE = "Dashboard Studio Editor"
@@ -104,6 +105,25 @@ def advance_status(dashboard: str, to_status: str):
             f"'{label}' requires one of: {', '.join(allowed)}. "
             "Publishing is separated from editing on purpose."
         )
+
+    # Scope is optional while authoring and required to publish: an unscoped
+    # dashboard has nowhere to go on the Sophia side, and a code Sophia does not
+    # know does not fail there — it falls back to the criterion's default section
+    # and renders the wrong subcriterion's data under the right heading. Refuse
+    # here, naming the code, rather than let that reach a published dashboard.
+    if to_status == PUBLISHED:
+        scope = (doc.get("subcriterion") or "").strip()
+        if not scope:
+            frappe.throw(
+                "This dashboard has no EduTrust subcriterion, so it cannot be "
+                "published — there is no section for it on the receiving platform."
+            )
+        if scope not in SUBCRITERIA:
+            frappe.throw(
+                f"Unknown EduTrust subcriterion '{scope}'. It is not one of the "
+                f"{len(SUBCRITERIA)} codes the receiving platform serves, so the "
+                "dashboard would be routed to the wrong section without any error."
+            )
 
     doc.status = to_status
     if to_status == PUBLISHED:

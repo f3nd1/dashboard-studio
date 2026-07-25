@@ -99,7 +99,10 @@ class TestGovernanceApi(unittest.TestCase):
         # FIXTURE ONLY — invented dashboard and charts.
         self.store = {
             "DS Dashboard": {
-                "D1": {"name": "D1", "dashboard_title": "Admission (MOCK)", "status": "Draft"},
+                # Scoped, so the publish path can be tested; the unscoped refusal has
+                # its own tests below.
+                "D1": {"name": "D1", "dashboard_title": "Admission (MOCK)",
+                       "status": "Draft", "subcriterion": "4.1.1"},
             },
             "DS Chart": {
                 "C1": {"name": "C1", "dashboard": "D1", "chart_title": "A", "metric": "M-shared"},
@@ -163,6 +166,37 @@ class TestGovernanceApi(unittest.TestCase):
         result = self.gov.advance_status("D1", "Published")
         self.assertEqual(result["status"], "Published")
         self.assertTrue(self.store["DS Dashboard"]["D1"]["published_on"])
+
+    # ---- scope is required to publish ----
+    #
+    # Sophia resolves an unknown subcriterion by falling back to the criterion's
+    # default section, so a wrong or missing code renders the wrong data under
+    # the right heading with no error. Publishing is where that gets refused.
+    def test_unscoped_dashboard_cannot_be_published(self):
+        self.store["DS Dashboard"]["D1"]["status"] = "QA Approval"
+        self.store["DS Dashboard"]["D1"]["subcriterion"] = ""
+        self._as("Dashboard Studio QA Approver")
+        with self.assertRaises(_ValidationError):
+            self.gov.advance_status("D1", "Published")
+        self.assertEqual(self._status(), "QA Approval", "the move did not apply")
+
+    def test_unknown_subcriterion_cannot_be_published_and_is_named(self):
+        self.store["DS Dashboard"]["D1"]["status"] = "QA Approval"
+        self.store["DS Dashboard"]["D1"]["subcriterion"] = "9.9.9"
+        self._as("Dashboard Studio QA Approver")
+        with self.assertRaises(_ValidationError) as caught:
+            self.gov.advance_status("D1", "Published")
+        self.assertIn("9.9.9", str(caught.exception), "the rejected code is named")
+        self.assertEqual(self._status(), "QA Approval")
+
+    def test_scope_is_not_required_for_earlier_stages(self):
+        """A dashboard must stay authorable and reviewable before it is scoped."""
+        self.store["DS Dashboard"]["D1"]["subcriterion"] = ""
+        self._as("Dashboard Studio Editor")
+        self.gov.advance_status("D1", "Technical Review")
+        self.assertEqual(self._status(), "Technical Review")
+        self.gov.advance_status("D1", "QA Approval")
+        self.assertEqual(self._status(), "QA Approval")
 
     def test_system_manager_may_publish_as_superuser(self):
         self.store["DS Dashboard"]["D1"]["status"] = "QA Approval"
