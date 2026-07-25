@@ -117,11 +117,16 @@
   var MOCK_FIELD_CATALOGUE = [
     { metric: "M1", metric_name: "Applicants by Year (MOCK)", status: "Approved",
       source_doctype: "Student Applicant", fields: ["academic_year", "application_status"],
+      calculation_type: "Count", group_by_field: "academic_year", value_field: "name",
       executable: true },
     { metric: "M2", metric_name: "By Nationality (MOCK)", status: "Approved",
-      source_doctype: "Student Applicant", fields: ["nationality"], executable: true },
+      source_doctype: "Student Applicant", fields: ["nationality"],
+      calculation_type: "Count", group_by_field: "nationality", value_field: "name",
+      executable: true },
     { metric: "M3", metric_name: "Unconfigured metric (MOCK)", status: "Draft",
-      source_doctype: "Student Applicant", fields: [], executable: false },
+      source_doctype: "Student Applicant", fields: [],
+      calculation_type: "Count", group_by_field: "", value_field: "name",
+      executable: false },
   ];
 
   // ⚠️ MOCK comparisons — shaped exactly like DS Validation Comparison records.

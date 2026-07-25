@@ -387,4 +387,14 @@ assert.strictEqual(many.text, "Draft · no subcriterion set, +2 more");
 assert.ok(many.detail.indexOf("3 charts not validated") !== -1,
   "the hover detail carries every blocker, not just the named one");
 
+// Width presets map to grid columns; an off-preset width from drag-resize must
+// survive opening the panel.
+assert.deepStrictEqual(core.widthOptions(6).map(o => o.label), ["25%", "33%", "50%", "100%"]);
+assert.strictEqual(core.widthOptions(6).find(o => o.value === 6).label, "50%");
+var odd = core.widthOptions(7);
+assert.strictEqual(odd.length, 5, "an off-preset width is offered too");
+assert.strictEqual(odd.find(o => o.value === 7).label, "7 of 12 (custom)");
+assert.deepStrictEqual(odd.map(o => o.value), [3, 4, 6, 7, 12], "and sorts into place");
+assert.strictEqual(core.widthOptions(null).length, 4, "no width means no custom entry");
+
 console.log("studio_core.test.js — all assertions passed");

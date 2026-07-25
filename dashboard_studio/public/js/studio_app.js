@@ -1271,7 +1271,18 @@
       if (t === chart.chart_type) o.selected = true;
       typeSelect.appendChild(o);
     });
-    this.panel.appendChild(field("Chart type", typeSelect));
+    // Width as the mockup's percentage select. No new field — these are
+    // DS Chart.width values on the 12-column grid, labelled as the fraction they
+    // are. It replaces the width box in the layout grid rather than sitting
+    // beside it: two controls writing one value is a bug farm.
+    var widthSelect = el("select", "dss-input");
+    core.widthOptions(chart.width).forEach(function (o) {
+      var opt = el("option", null, o.label);
+      opt.value = String(o.value);
+      if (o.value === Number(chart.width)) opt.selected = true;
+      widthSelect.appendChild(opt);
+    });
+    this.panel.appendChild(twoUp(field("Visual type", typeSelect), field("Width", widthSelect)));
 
     var descInput = el("textarea", "dss-input");
     descInput.value = chart.description || "";
@@ -1287,6 +1298,26 @@
       orderSelect.appendChild(opt);
     });
     this.panel.appendChild(field("Result order", orderSelect));
+
+    // What the metric defines, shown as values rather than disabled inputs.
+    // Source, dimension, measure and aggregation belong to the APPROVED
+    // DS Metric — a chart selects a metric and controls presentation. Rendering
+    // them as inputs, even disabled ones, would imply they are a chart's to set.
+    var info = this.metricInfo(chart.metric) || {};
+    var derived = el("div", "dss-derived");
+    [["Data source", info.source_doctype],
+     ["Dimension / X-axis", info.group_by_field],
+     ["Measure / Y-axis", info.value_field],
+     ["Aggregation", info.calculation_type]].forEach(function (pair) {
+      var row = el("div", "dss-derived-row");
+      row.appendChild(el("span", "dss-field-label", pair[0]));
+      row.appendChild(el("span", "dss-derived-value" + (pair[1] ? "" : " is-unset"),
+        pair[1] || (chart.metric ? "—" : "no metric linked")));
+      derived.appendChild(row);
+    });
+    derived.appendChild(el("p", "dss-prop-help",
+      "From the linked metric. Change these on the DS Metric, where they are approved."));
+    this.panel.appendChild(derived);
 
     // Metric selection — which DS Metric this chart draws.
     var metricSelect = el("select", "dss-input");
@@ -1331,10 +1362,12 @@
     // Layout, editable numerically as well as by drag: drag is imprecise and
     // cannot be driven from the keyboard. Values are clamped by applyChartEdit.
     var layoutWrap = el("div", "dss-layout-row");
-    layoutWrap.appendChild(el("span", "dss-field-label", "Layout (column, row, width, height)"));
+    layoutWrap.appendChild(el("span", "dss-field-label", "Position and height (column, row, height)"));
     var layoutInputs = {};
     var grid = el("div", "dss-layout-grid");
-    ["pos_x", "pos_y", "width", "height"].forEach(function (key) {
+    // ponytail: width moved to the select above. Drag-resize still sets any
+    // width, and widthOptions keeps an off-preset one selectable.
+    ["pos_x", "pos_y", "height"].forEach(function (key) {
       var input = el("input", "dss-input");
       input.type = "number";
       input.min = key === "width" || key === "height" ? "1" : "0";
@@ -1418,6 +1451,7 @@
         description: descInput.value,
         metric: metricSelect.value || chart.metric,
         sort_order: orderSelect.value,
+        width: parseInt(widthSelect.value, 10),
       };
       if (sectionSelect) patch.section = sectionSelect.value || null;
       Object.keys(layoutInputs).forEach(function (key) {
@@ -2340,7 +2374,7 @@
   // Source DocType for a metric, for the card footer. Synchronous by design —
   // cards redraw constantly — so it warms the metric list once and repaints
   // when it lands, rather than blocking the first render on a call.
-  App.prototype.metricSource = function (metricName) {
+  App.prototype.metricInfo = function (metricName) {
     if (!metricName) return null;
     var self = this;
     if (!this._metricList) {
@@ -2348,12 +2382,16 @@
         this._metricListWarming = true;
         this.availableMetrics(function () {
           if (self.state.view === "design") self.refresh();
+          self.renderPanel();          // the derived fields land with the list
         });
       }
       return null;
     }
-    var match = this._metricList.filter(function (m) { return m.name === metricName; })[0];
-    return (match && match.source_doctype) || null;
+    return this._metricList.filter(function (m) { return m.name === metricName; })[0] || null;
+  };
+
+  App.prototype.metricSource = function (metricName) {
+    return (this.metricInfo(metricName) || {}).source_doctype || null;
   };
 
   App.prototype.availableMetrics = function (callback) {
@@ -2363,8 +2401,17 @@
       (mock.MOCK_FIELD_CATALOGUE || []).forEach(function (row) {
         sources[row.metric_name] = row.source_doctype;
       });
+      var byName = {};
+      (mock.MOCK_FIELD_CATALOGUE || []).forEach(function (row) { byName[row.metric_name] = row; });
       this._metricList = Object.keys(mock.MOCK_METRIC_RESULTS || {})
-        .map(function (name) { return { name: name, source_doctype: sources[name] }; });
+        .map(function (name) {
+          var row = byName[name] || {};
+          return {
+            name: name, source_doctype: sources[name],
+            calculation_type: row.calculation_type,
+            group_by_field: row.group_by_field, value_field: row.value_field,
+          };
+        });
       callback(this._metricList);
       return;
     }
@@ -2372,9 +2419,9 @@
     if (this._metricList) { callback(this._metricList); return; }
     root.frappe.call({ method: "dashboard_studio.api.studio.list_ds_metrics" })
       .then(function (r) {
-        self._metricList = (r.message || []).map(function (m) {
-          return { name: m.name, source_doctype: m.source_doctype };
-        });
+        // Kept whole: the properties panel reads calculation_type,
+        // group_by_field and value_field off the same record.
+        self._metricList = r.message || [];
         callback(self._metricList);
       })
       .catch(function () { callback([]); });
@@ -2429,6 +2476,14 @@
       self.markSaved("Layout saved");
     });
   };
+
+  // Two controls on one line, as the mockup's .property-row.
+  function twoUp(left, right) {
+    var row = el("div", "dss-prop-row");
+    row.appendChild(left);
+    row.appendChild(right);
+    return row;
+  }
 
   function field(label, input) {
     var wrap = el("label", "dss-field");

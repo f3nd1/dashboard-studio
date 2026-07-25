@@ -293,6 +293,24 @@
     };
   }
 
+  // Width, as the mockup's percentage select over the 12-column grid. No new
+  // field: these are DS Chart.width values, labelled as the fraction they are.
+  //
+  // Drag-resize can leave a width the presets do not contain, so the current
+  // value is always offered — otherwise opening the panel on a 7-wide card and
+  // saving would silently resize it.
+  var WIDTH_PRESETS = [[3, "25%"], [4, "33%"], [6, "50%"], [12, "100%"]];
+
+  function widthOptions(current) {
+    var width = Number(current);
+    var out = WIDTH_PRESETS.map(function (p) { return { value: p[0], label: p[1] }; });
+    if (width > 0 && !WIDTH_PRESETS.some(function (p) { return p[0] === width; })) {
+      out.push({ value: width, label: width + " of 12 (custom)" });
+      out.sort(function (a, b) { return a.value - b.value; });
+    }
+    return out;
+  }
+
   // The toolbar readiness chip: one line answering "what stage am I at, and what
   // is blocking me", from the server's publish_readiness payload.
   //
@@ -520,6 +538,7 @@
     dashboardFormUrl: dashboardFormUrl,
     sortResultRows: sortResultRows,
     readinessChip: readinessChip,
+    widthOptions: widthOptions,
     SORT_ORDERS: SORT_ORDERS,
     PICKER_SCALE_THRESHOLD: PICKER_SCALE_THRESHOLD,
     PICKER_RECENT_COUNT: PICKER_RECENT_COUNT,

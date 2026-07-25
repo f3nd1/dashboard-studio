@@ -161,7 +161,13 @@ def list_ds_metrics():
     return frappe.get_all(
         "DS Metric",
         filters={"status": "Approved", "calculation_type": "Count"},
-        fields=["name", "metric_name", "calculation_type", "source_doctype"],
+        # group_by_field/value_field are what the properties panel shows as the
+        # metric's dimension and measure. Read here rather than through a new
+        # endpoint — this list is already fetched once per session.
+        fields=[
+            "name", "metric_name", "calculation_type", "source_doctype",
+            "group_by_field", "value_field",
+        ],
         order_by="metric_name asc",
     )
 
