@@ -826,6 +826,15 @@
       if ((entry.recent || []).length) {
         card.appendChild(el("div", "dss-cat-recent", entry.recent.join(" · ")));
       }
+      // The records themselves live in Frappe's own list view — link to it
+      // rather than rebuilding a record browser here.
+      if (hasFrappe()) {
+        var open = el("button", "dss-btn dss-btn-small", "Open list");
+        open.addEventListener("click", function () {
+          root.frappe.set_route("List", entry.doctype);
+        });
+        card.appendChild(open);
+      }
       grid.appendChild(card);
     });
     recordsBand.appendChild(grid);
@@ -880,8 +889,20 @@
       } else {
         card.appendChild(el("div", "dss-field-warn", "No allowed fields — cannot run"));
       }
+      if (hasFrappe()) {
+        var edit = el("button", "dss-btn dss-btn-small", "Edit metric");
+        edit.addEventListener("click", function () {
+          root.frappe.set_route("Form", "DS Metric", row.metric);
+        });
+        card.appendChild(edit);
+      }
       this.panel.appendChild(card);
     }, this);
+
+    // Say plainly what is NOT shown, rather than showing an invented version of it.
+    this.panel.appendChild(el("p", "dss-hint dss-note",
+      "Field types and a Restricted/Blocked classification are not shown: the " +
+      "allowlist is the control this app enforces, and there is no denylist to read."));
   };
 
   // ---- Validation Centre: source vs target, with human-only acceptance ----

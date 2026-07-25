@@ -271,6 +271,8 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-field-card { border: 1px solid var(--dss-line); border-radius: var(--dss-r-sm); padding: 10px 12px;
   margin-bottom: 8px; background: var(--dss-surface-2); }
 .dss-field-card.is-blocked { border-color: #f2caca; background: var(--dss-red-100); }
+.dss-cat-card .dss-btn, .dss-field-card .dss-btn { margin-top: 9px; }
+.dss-note { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--dss-line); }
 .dss-field-warn { font-size: 10px; font-weight: 700; color: var(--dss-red); margin-top: 6px; }
 
 /* ---- Validation Centre ---- */
