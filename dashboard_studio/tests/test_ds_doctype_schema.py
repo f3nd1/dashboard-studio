@@ -34,7 +34,10 @@ FILTER_FIELDS = {
 SPEC = {
     "DS Dashboard": (0, "field:dashboard_title", "dashboard_title", {
         "dashboard_title": {"fieldtype": "Data", "reqd": 1, "unique": 1},
-        "status": {"fieldtype": "Select", "options": "Draft\nIn Review\nApproved\nPublished\nArchived", "default": "Draft"},
+        # Four-stage governance workflow, plus Archived for superseded dashboards.
+        "status": {"fieldtype": "Select",
+                   "options": "Draft\nTechnical Review\nQA Approval\nPublished\nArchived",
+                   "default": "Draft"},
         "description": {"fieldtype": "Small Text"},
         "publish_target": {"fieldtype": "Select", "options": "UCC Intelligence Platform\nSophia\nOther"},
         "reviewer": {"fieldtype": "Link", "options": "User"},
@@ -179,21 +182,29 @@ class TestDSDoctypeSchema(unittest.TestCase):
                 if actual["fieldtype"] in ("Link", "Table"):
                     self.assertIn(actual["options"], known, f"{name}.{fieldname} -> {actual['options']}")
 
-    def test_permissions_are_two_level_editor_viewer(self):
-        # Two-level model: Editor (full CRUD) + Viewer (read-only). NOT the five
-        # governance roles yet — that remains a later task.
+    def test_permissions_are_editor_viewer_and_qa_approver(self):
+        # Editor has full CRUD; Viewer and QA Approver are read-only. QA Approver
+        # must be able to READ what it approves, but must never gain write —
+        # separating approval from editing is the reason the role exists.
         for name in SPEC:
             perms = {p["role"]: p for p in _load(name)["permissions"]}
             self.assertEqual(
-                set(perms), {"Dashboard Studio Editor", "Dashboard Studio Viewer"}, f"{name} roles"
+                set(perms),
+                {
+                    "Dashboard Studio Editor",
+                    "Dashboard Studio Viewer",
+                    "Dashboard Studio QA Approver",
+                },
+                f"{name} roles",
             )
             editor = perms["Dashboard Studio Editor"]
             for flag in ("read", "write", "create", "delete"):
                 self.assertEqual(editor.get(flag), 1, f"{name} editor {flag}")
-            viewer = perms["Dashboard Studio Viewer"]
-            self.assertEqual(viewer.get("read"), 1, f"{name} viewer read")
-            for flag in ("write", "create", "delete"):
-                self.assertNotEqual(viewer.get(flag), 1, f"{name} viewer must not {flag}")
+            for read_only in ("Dashboard Studio Viewer", "Dashboard Studio QA Approver"):
+                block = perms[read_only]
+                self.assertEqual(block.get("read"), 1, f"{name} {read_only} read")
+                for flag in ("write", "create", "delete"):
+                    self.assertNotEqual(block.get(flag), 1, f"{name} {read_only} must not {flag}")
 
 
 if __name__ == "__main__":

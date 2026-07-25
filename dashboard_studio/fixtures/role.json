@@ -10,5 +10,11 @@
   "name": "Dashboard Studio Viewer",
   "role_name": "Dashboard Studio Viewer",
   "desk_access": 1
+ },
+ {
+  "doctype": "Role",
+  "name": "Dashboard Studio QA Approver",
+  "role_name": "Dashboard Studio QA Approver",
+  "desk_access": 1
  }
 ]

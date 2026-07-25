@@ -5,8 +5,9 @@ app_description = "Visual dashboard migration, validation, design, and publishin
 app_email = "replace-me@example.invalid"
 app_license = "Proprietary"
 
-# Ship the two-level DS roles so they exist on install/migrate. Two levels only
-# (edit / view) — NOT the five-role model in SECURITY_AND_GOVERNANCE.md yet.
+# Ship the DS roles so they exist on install/migrate: Editor and Viewer, plus
+# QA Approver, which exists to separate duties — an Editor can move a dashboard
+# up to QA Approval but cannot publish its own work.
 fixtures = [
-    {"dt": "Role", "filters": [["role_name", "in", ["Dashboard Studio Editor", "Dashboard Studio Viewer"]]]}
+    {"dt": "Role", "filters": [["role_name", "in", ["Dashboard Studio Editor", "Dashboard Studio Viewer", "Dashboard Studio QA Approver"]]]}
 ]

@@ -2,8 +2,17 @@ import json
 
 import frappe
 
-# Two-level access model (System Manager always allowed as superuser).
-DS_READ_ROLES = ("Dashboard Studio Editor", "Dashboard Studio Viewer", "System Manager")
+# Access model (System Manager always allowed as superuser).
+#
+# QA Approver can READ everything — approving work you cannot see is meaningless
+# — but is deliberately NOT in the write set: it approves and publishes, it does
+# not edit. That separation is the reason the role exists.
+DS_READ_ROLES = (
+    "Dashboard Studio Editor",
+    "Dashboard Studio Viewer",
+    "Dashboard Studio QA Approver",
+    "System Manager",
+)
 DS_WRITE_ROLES = ("Dashboard Studio Editor", "System Manager")
 
 # Fields the visual editor is allowed to write back to a DS Chart. Layout plus

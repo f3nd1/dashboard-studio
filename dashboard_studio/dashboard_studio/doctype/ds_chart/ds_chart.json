@@ -115,6 +115,11 @@
    "read": 1,
    "report": 1,
    "role": "Dashboard Studio Viewer"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Dashboard Studio QA Approver"
   }
  ],
  "sort_field": "modified",
