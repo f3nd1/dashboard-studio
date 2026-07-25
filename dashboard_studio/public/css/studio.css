@@ -96,14 +96,24 @@
 .dss-picker-group-label { font-size: 9px; font-weight: 800; text-transform: uppercase;
   letter-spacing: .14em; color: var(--dss-muted); }
 .dss-picker-group-rule { flex: 1; height: 1px; background: var(--dss-line); }
-.dss-picker-row { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 44px;
-  padding: 0 10px; border: 0; border-radius: var(--dss-r-sm); background: none; cursor: pointer;
-  text-align: left; font: inherit; color: var(--dss-ink); }
-.dss-picker-row:hover { background: var(--dss-surface-2); }
-.dss-picker-row:focus-visible { outline: 2px solid var(--dss-blue); outline-offset: -2px; }
+/* Row + edit link are siblings, not nested: an <a> inside a <button> is invalid
+   HTML. The wrapper carries the background so the fill spans both. */
+.dss-picker-item { display: flex; align-items: center; border-radius: var(--dss-r-sm); }
+.dss-picker-item:hover { background: var(--dss-surface-2); }
 /* The pale fill reinforces the tick; it is never the only signal. */
-.dss-picker-row.is-current { background: var(--dss-blue-100); }
-.dss-picker-row.is-current .dss-picker-name { color: var(--dss-navy); font-weight: 700; }
+.dss-picker-item.is-current { background: var(--dss-blue-100); }
+.dss-picker-item.is-current .dss-picker-name { color: var(--dss-navy); font-weight: 700; }
+.dss-picker-row { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0;
+  min-height: 44px; padding: 0 4px 0 10px; border: 0; border-radius: var(--dss-r-sm);
+  background: none; cursor: pointer; text-align: left; font: inherit; color: var(--dss-ink); }
+.dss-picker-row:focus-visible { outline: 2px solid var(--dss-blue); outline-offset: -2px; }
+/* Quiet until wanted — the row's job is switching, this one is a side door. */
+.dss-picker-edit { flex: none; display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; margin-right: 6px; border-radius: var(--dss-r-sm);
+  color: var(--dss-muted); }
+.dss-picker-edit:hover { background: var(--dss-surface-3); color: var(--dss-blue); }
+.dss-picker-edit:focus-visible { outline: 2px solid var(--dss-blue); outline-offset: -2px; }
+.dss-pencil { width: 14px; height: 14px; }
 .dss-picker-mark { flex: none; width: 15px; height: 15px; color: var(--dss-blue); }
 /* The name dominates; the pill is smaller and quieter so the eye settles once. */
 .dss-picker-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
@@ -125,10 +135,6 @@
   padding: 9px 12px; border-top: 1px solid var(--dss-line); background: #fbfcfe; }
 .dss-picker-count { font-size: 11px; font-weight: 600; color: var(--dss-muted);
   white-space: nowrap; }
-/* Keycap hints, shown only once the list is long enough to need arrowing. */
-.dss-picker-kbd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
-  color: var(--dss-muted); border: 1px solid var(--dss-line); border-radius: 5px;
-  padding: 2px 5px; background: var(--dss-surface); }
 /* Pushed to the right edge, away from the count. */
 .dss-picker-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .dss-picker-link { border: 0; background: none; padding: 6px 8px; cursor: pointer;

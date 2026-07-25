@@ -5,13 +5,8 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
     single_column: true,
   });
 
-  let app = null;
-  // Creates a real DS Dashboard and opens it in the editor. Deliberately not
-  // frappe.new_doc() — that navigates away to the standard form and leaves the
-  // studio behind.
-  page.set_primary_action(__("New Dashboard"), () => {
-    if (app) app.newDashboard();
-  });
+  // No primary action here: creating a dashboard lives in the picker's own
+  // "+ New dashboard", and a header button duplicated it.
 
   const mount = document.createElement("div");
   // page.body is a jQuery object in Frappe's page API, not a raw DOM node —
@@ -37,7 +32,7 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
       // The route segment is already the dashboard, so a migration project
       // arrives as a query param: /app/dashboard-studio?project=<name>
       const project = new URLSearchParams(window.location.search).get("project");
-      app = window.DSStudioApp.mount(mount, { dashboard, project });
+      window.DSStudioApp.mount(mount, { dashboard, project });
     }
   );
 };

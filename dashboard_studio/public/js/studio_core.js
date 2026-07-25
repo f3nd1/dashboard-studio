@@ -287,6 +287,13 @@
     };
   }
 
+  // The DS Dashboard record form for a dashboard. Names are titles (the DocType
+  // is autonamed field:dashboard_title), so they routinely contain spaces and
+  // may contain a slash — both have to be encoded or the path breaks.
+  function dashboardFormUrl(name) {
+    return "/app/ds-dashboard/" + encodeURIComponent(name);
+  }
+
   // Every row the picker will render, in display order. This is what the
   // keyboard walks — group headers are labels, not stops. A dashboard listed
   // under both Recent and All appears twice, because it is two rows on screen.
@@ -437,6 +444,7 @@
     pickerModel: pickerModel,
     pickerRows: pickerRows,
     dashboardTitle: dashboardTitle,
+    dashboardFormUrl: dashboardFormUrl,
     PICKER_SCALE_THRESHOLD: PICKER_SCALE_THRESHOLD,
     PICKER_RECENT_COUNT: PICKER_RECENT_COUNT,
     VALIDATION_STATUSES: VALIDATION_STATUSES,

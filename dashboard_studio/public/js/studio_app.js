@@ -107,6 +107,7 @@
   // Geometry taken from prototypes/ds_picker_revised.html.
   var CHEVRON_PATH = "M4 6.5 8 10.5l4-4";
   var TICK_PATH = "M3.5 8.5 6.5 11.5 12.5 5";
+  var PENCIL_PATH = "M11.4 2.6a1.5 1.5 0 0 1 2.1 2.1L6.2 12 3 13l1-3.2 7.4-7.2z";
 
   // A real 16px icon, not a text glyph — a caret character sitting next to a
   // bold title reads as stray punctuation.
@@ -282,7 +283,13 @@
         }
         group.items.forEach(function (d) {
           var isCurrent = d.name === current;
-          var row = el("button", "dss-picker-row" + (isCurrent ? " is-current" : ""));
+          // Wrapper, because the edit link cannot live inside the row: nesting
+          // an <a> in a <button> is invalid and browsers handle it however they
+          // like. As siblings they each get their own click, with nothing to
+          // suppress.
+          var item = el("div", "dss-picker-item" + (isCurrent ? " is-current" : ""));
+
+          var row = el("button", "dss-picker-row");
           row.setAttribute("role", "option");
           row.setAttribute("aria-selected", isCurrent ? "true" : "false");
           // A tick, not just a pale fill: colour alone is not an accessible
@@ -296,7 +303,23 @@
             self.togglePicker(false);
             if (!isCurrent) self.openDashboard(d.name);
           });
-          listHost.appendChild(row);
+          item.appendChild(row);
+
+          // The record form holds what the Studio does not expose — description,
+          // publish target, reviewer, review comments. A real link rather than
+          // window.open, so ctrl/middle-click behave as expected and the person
+          // keeps their place here.
+          var edit = el("a", "dss-picker-edit");
+          edit.href = core.dashboardFormUrl(d.name);
+          edit.target = "_blank";
+          edit.rel = "noopener";
+          edit.title = "Edit this dashboard's record (opens a new tab)";
+          edit.setAttribute("aria-label",
+            "Edit the record for " + core.dashboardTitle(d) + " (opens a new tab)");
+          edit.appendChild(icon(PENCIL_PATH, "dss-pencil", "1.6"));
+          item.appendChild(edit);
+
+          listHost.appendChild(item);
         });
       });
 
@@ -306,23 +329,19 @@
         model.shown === model.total
           ? model.total + (model.total === 1 ? " dashboard" : " dashboards")
           : model.shown + " of " + model.total));
-      // Keycap hints while browsing a long list, where arrowing through it is a
-      // realistic way to use it. Not while searching — there the keyboard is
-      // already in the search box.
-      if (model.searchable && !model.query) {
-        footer.appendChild(el("span", "dss-picker-kbd", "↑↓"));
-        footer.appendChild(el("span", "dss-picker-kbd", "esc"));
-      }
-
-      // One link, never two — 392px does not hold both, and each state has an
-      // obvious single next step. Past the threshold that is "get out to the
-      // real list", because the picker should not grow into one; on a short
-      // list, or when a search found nothing, it is "make one".
+      // "+ New dashboard" stays put in every state. The reference mockup swaps
+      // it out for "View all →" on a long list, but that was only safe while a
+      // "New Dashboard" button existed in the page header; without it, the swap
+      // would strand creation behind a trip to the record list for exactly the
+      // people with the most dashboards.
       //
-      // Creating is not lost at scale: the Desk page keeps a primary "New
-      // Dashboard" action in its header, which is where the reference mockup
-      // puts it too.
+      // Both links plus the ↑↓/esc keycaps overflow 392px, so the keycaps went:
+      // they only advertise behaviour that works either way, whereas the link
+      // is the only way to do the thing.
       var actions = el("div", "dss-picker-actions");
+      actions.appendChild(self.pickerCreateButton());
+      // Past the threshold the picker stops trying to be a list view and hands
+      // bulk work to the real one.
       if (model.searchable && model.shown) {
         var all = el("button", "dss-picker-link", "View all →");
         all.addEventListener("click", function () {
@@ -331,8 +350,6 @@
           else toast("The DS Dashboard list needs the server.");
         });
         actions.appendChild(all);
-      } else {
-        actions.appendChild(self.pickerCreateButton());
       }
       footer.appendChild(actions);
     }
@@ -393,7 +410,7 @@
       search.focus();
     } else {
       var list = rows();
-      var current = listHost.querySelector(".dss-picker-row.is-current");
+      var current = listHost.querySelector(".dss-picker-item.is-current .dss-picker-row");
       (current || list[0] || panel).focus();
     }
   };

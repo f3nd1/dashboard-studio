@@ -296,4 +296,14 @@ assert.strictEqual(empty.total, 0);
 assert.strictEqual(empty.searchable, false);
 assert.strictEqual(core.pickerRows(empty).length, 0);
 
+// ---- dashboardFormUrl: link out to the DS Dashboard record form ----
+//
+// DS Dashboard is autonamed field:dashboard_title, so every name is a human
+// title and spaces are the norm, not the edge case.
+assert.strictEqual(core.dashboardFormUrl("Admission Overview"),
+  "/app/ds-dashboard/Admission%20Overview", "spaces are encoded");
+assert.strictEqual(core.dashboardFormUrl("Fees / Refunds"),
+  "/app/ds-dashboard/Fees%20%2F%20Refunds",
+  "a slash is encoded, not left to split the path");
+
 console.log("studio_core.test.js — all assertions passed");
