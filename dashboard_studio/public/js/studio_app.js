@@ -794,14 +794,15 @@
     if (cached !== undefined) {
       body.innerHTML = cached === null
         ? '<div class="dss-nochart">Metric failed to run</div>'
-        : charts.render(chart.chart_type, cached).html;
+        : charts.render(chart.chart_type, core.sortResultRows(cached, chart.sort_order)).html;
       return;
     }
     var self = this;
     if (this.state.mock || !hasFrappe()) {
       var rows = ((root.DSStudioMock || {}).MOCK_METRIC_RESULTS || {})[chart.metric] || [];
       this._rowsCache[chart.metric] = rows;
-      body.innerHTML = charts.render(chart.chart_type, rows).html;
+      body.innerHTML = charts.render(
+        chart.chart_type, core.sortResultRows(rows, chart.sort_order)).html;
       return;
     }
     this._rowsCache[chart.metric] = PENDING;
@@ -1087,6 +1088,17 @@
     descInput.value = chart.description || "";
     this.panel.appendChild(field("Description", descInput));
 
+    // Display order. Ascending is what the engine returns, so a chart saved
+    // before this field existed keeps the order it has always had.
+    var orderSelect = el("select", "dss-input");
+    core.SORT_ORDERS.forEach(function (o) {
+      var opt = el("option", null, o);
+      opt.value = o;
+      if (o === (chart.sort_order || "Ascending")) opt.selected = true;
+      orderSelect.appendChild(opt);
+    });
+    this.panel.appendChild(field("Result order", orderSelect));
+
     // Metric selection — which DS Metric this chart draws.
     var metricSelect = el("select", "dss-input");
     this.availableMetrics(function (metrics) {
@@ -1216,6 +1228,7 @@
         chart_type: typeSelect.value,
         description: descInput.value,
         metric: metricSelect.value || chart.metric,
+        sort_order: orderSelect.value,
       };
       if (sectionSelect) patch.section = sectionSelect.value || null;
       Object.keys(layoutInputs).forEach(function (key) {

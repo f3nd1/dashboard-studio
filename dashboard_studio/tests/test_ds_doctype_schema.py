@@ -68,6 +68,10 @@ SPEC = {
         "height": {"fieldtype": "Int", "default": "3"},
         "description": {"fieldtype": "Small Text"},
         "drill_down_enabled": {"fieldtype": "Check"},
+        # Display order for this chart's rows. "Ascending" is what the engine has
+        # always produced, so it is the default and existing charts are unchanged.
+        "sort_order": {"fieldtype": "Select", "default": "Ascending",
+                       "options": "\n".join(["Ascending", "Descending", "Highest first"])},
         "chart_filters": {"fieldtype": "Table", "options": "DS Chart Filter"},
     }),
     "DS Chart Filter": (1, None, None, FILTER_FIELDS),

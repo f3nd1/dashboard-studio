@@ -70,6 +70,12 @@
       next.chart_type = patch.chart_type;
     }
     if (patch.description != null) next.description = String(patch.description);
+    if (patch.sort_order != null) {
+      if (SORT_ORDERS.indexOf(patch.sort_order) === -1) {
+        return { ok: false, error: "Unknown result order: " + patch.sort_order };
+      }
+      next.sort_order = patch.sort_order;
+    }
     if (patch.metric != null) next.metric = String(patch.metric);
     // section may legitimately be cleared back to Ungrouped, so "" and null count.
     if ("section" in patch) next.section = patch.section || null;
@@ -287,6 +293,43 @@
     };
   }
 
+  // Display order for one chart's result rows (DS Chart.sort_order).
+  //
+  // Presentation only. It never changes a value, only the order they are drawn
+  // in, so it is applied at render rather than in the query engine: the engine
+  // is scoped to a DS Metric, and one approved metric is drawn by many charts
+  // that may each want a different order. Anything unrecognised — including a
+  // chart saved before the field existed — sorts ascending, which is exactly
+  // what execute_query_plan already returns, so no existing chart moves.
+  var SORT_ORDERS = ["Ascending", "Descending", "Highest first"];
+
+  function sortResultRows(rows, order) {
+    var list = (rows || []).slice(); // never reorder the shared result cache
+    if (!list.length) return list;
+    var dimension = dimensionKey(list[0]);
+
+    if (order === "Highest first") {
+      return list.sort(function (a, b) { return (b.count || 0) - (a.count || 0); });
+    }
+    // Nulls last in both directions: a missing dimension is not a low value.
+    var descending = order === "Descending";
+    return list.sort(function (a, b) {
+      var left = a[dimension], right = b[dimension];
+      if (left == null || right == null) return (left == null) - (right == null);
+      // Mixed types (2024 and "2023") are not reliably comparable; compare as
+      // text rather than throwing, matching the engine's own fallback.
+      if (typeof left !== typeof right) { left = String(left); right = String(right); }
+      if (left === right) return 0;
+      return (left < right ? -1 : 1) * (descending ? -1 : 1);
+    });
+  }
+
+  // The dimension is whichever key is not the count — the shape the engine returns.
+  function dimensionKey(row) {
+    var keys = Object.keys(row || {}).filter(function (k) { return k !== "count"; });
+    return keys[0];
+  }
+
   // The DS Dashboard record form for a dashboard. Names are titles (the DocType
   // is autonamed field:dashboard_title), so they routinely contain spaces and
   // may contain a slash — both have to be encoded or the path breaks.
@@ -445,6 +488,8 @@
     pickerRows: pickerRows,
     dashboardTitle: dashboardTitle,
     dashboardFormUrl: dashboardFormUrl,
+    sortResultRows: sortResultRows,
+    SORT_ORDERS: SORT_ORDERS,
     PICKER_SCALE_THRESHOLD: PICKER_SCALE_THRESHOLD,
     PICKER_RECENT_COUNT: PICKER_RECENT_COUNT,
     VALIDATION_STATUSES: VALIDATION_STATUSES,

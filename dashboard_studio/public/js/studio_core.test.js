@@ -306,4 +306,58 @@ assert.strictEqual(core.dashboardFormUrl("Fees / Refunds"),
   "/app/ds-dashboard/Fees%20%2F%20Refunds",
   "a slash is encoded, not left to split the path");
 
+// ---- sortResultRows: DS Chart.sort_order applied to metric result rows ----
+
+var YEARS = [
+  { academic_year: "2022", count: 5 },
+  { academic_year: "2024", count: 11 },
+  { academic_year: "2023", count: 2 },
+];
+
+// Default must reproduce what the engine already returns: dimension ascending.
+["Ascending", "", null, undefined, "nonsense"].forEach(function (mode) {
+  assert.deepStrictEqual(
+    core.sortResultRows(YEARS, mode).map(function (r) { return r.academic_year; }),
+    ["2022", "2023", "2024"],
+    "unset/unknown order (" + mode + ") falls back to ascending — no chart changes today");
+});
+
+assert.deepStrictEqual(
+  core.sortResultRows(YEARS, "Descending").map(function (r) { return r.academic_year; }),
+  ["2024", "2023", "2022"], "Descending reverses the dimension");
+
+assert.deepStrictEqual(
+  core.sortResultRows(YEARS, "Highest first").map(function (r) { return r.count; }),
+  [11, 5, 2], "Highest first orders by count, not by dimension");
+
+// Must not mutate the caller's array — rows are cached and shared between charts,
+// so two charts on one metric with different orders would corrupt each other.
+var original = YEARS.map(function (r) { return r.academic_year; });
+core.sortResultRows(YEARS, "Descending");
+assert.deepStrictEqual(YEARS.map(function (r) { return r.academic_year; }), original,
+  "input array is left untouched");
+
+// Mixed-type dimension values must not throw — the Python engine has the same
+// fallback, and a chart that cannot sort must still draw.
+var mixed = [{ y: 2024, count: 1 }, { y: "2023", count: 2 }, { y: null, count: 3 }];
+assert.strictEqual(core.sortResultRows(mixed, "Ascending").length, 3,
+  "mixed types still return every row");
+assert.strictEqual(core.sortResultRows(mixed, "Ascending")[2].y, null,
+  "a null dimension sorts last, matching the engine");
+
+// applyChartEdit must carry the field, and refuse a value the DocType rejects —
+// otherwise the panel could save a Select value Frappe will not accept.
+var edited = core.applyChartEdit(
+  { chart_title: "X", chart_type: "Bar Chart", pos_x: 0, pos_y: 0, width: 4, height: 3 },
+  { sort_order: "Highest first" });
+assert.strictEqual(edited.ok, true);
+assert.strictEqual(edited.chart.sort_order, "Highest first");
+assert.strictEqual(
+  core.applyChartEdit({ chart_title: "X", chart_type: "Bar Chart" },
+    { sort_order: "Random" }).ok,
+  false, "an order outside the DocType's options is rejected");
+
+assert.deepStrictEqual(core.sortResultRows([], "Descending"), [], "empty stays empty");
+assert.deepStrictEqual(core.sortResultRows(null, "Descending"), [], "null is not a crash");
+
 console.log("studio_core.test.js — all assertions passed");

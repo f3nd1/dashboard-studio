@@ -29,6 +29,7 @@ _EDITABLE_CHART_FIELDS = {
     "width",
     "height",
     "drill_down_enabled",
+    "sort_order",
 }
 
 # The only keys a DS Chart Filter row may carry when written from the editor.
@@ -81,6 +82,7 @@ def get_studio_dashboard(dashboard: str):
         fields=[
             "name", "chart_title", "chart_type", "metric", "section",
             "pos_x", "pos_y", "width", "height", "description", "drill_down_enabled",
+            "sort_order",
         ],
         order_by="pos_y asc, pos_x asc",
     )

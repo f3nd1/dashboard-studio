@@ -16,6 +16,7 @@
   "height",
   "description",
   "drill_down_enabled",
+  "sort_order",
   "chart_filters"
  ],
  "fields": [
@@ -82,6 +83,14 @@
    "fieldname": "drill_down_enabled",
    "fieldtype": "Check",
    "label": "Drill Down Enabled"
+  },
+  {
+   "fieldname": "sort_order",
+   "fieldtype": "Select",
+   "label": "Result Order",
+   "options": "Ascending\nDescending\nHighest first",
+   "default": "Ascending",
+   "description": "Order the rows are drawn in. Ascending matches what the engine returns."
   },
   {
    "fieldname": "chart_filters",
