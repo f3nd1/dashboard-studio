@@ -82,6 +82,8 @@ Two-level roles (`Dashboard Studio Editor`/`Viewer`, System Manager as superuser
 ## Working rules (project direction — still in force)
 
 - Store dashboard logic as managed records and structured JSON, not chart-specific Python. Never build the product as one large Server Script or Custom HTML Block.
+- **Metric definition stays on DS Metric — settled, do not reopen.** Source DocType, dimension, measure and aggregation belong to the *approved* DS Metric, never to DS Chart. The Sophia mockup draws them as per-chart properties; where the mockup and the governance model conflict, the governance model wins. DS Metric's approval gate is the only thing standing between an unreviewed number and a published EduTrust dashboard, and per-chart metric config would route around it. A chart selects a metric and controls presentation (title, type, layout, result order, filters) — nothing else.
+- **Chart filters stay scoped per chart.** Dashboard-level filters are deferred; if they return it will be as a UI that fans out to per-chart filters, not as a new dashboard-level filter store.
 - Never execute arbitrary user- or AI-generated SQL. AI may *propose* structured configs; the server validates; a user approves.
 - Metabase migration must include source mapping and result comparison before publishing.
 - Keep `reference/` (production legacy: the Custom Block + seven Criterion Server Scripts) and `prototypes/` (UX references only) unchanged unless explicitly asked.
