@@ -112,8 +112,6 @@
   text-transform: uppercase; letter-spacing: .9px; }
 .dss-empty-title { font-size: 20px; font-weight: 800; letter-spacing: -.3px; margin: 6px 0 8px; }
 .dss-empty .dss-btn { margin: 14px 4px 0; }
-.dss-btn-ghost { background: transparent; border-color: transparent; color: var(--dss-muted); }
-.dss-btn-ghost:hover { background: var(--dss-surface-2); color: var(--dss-ink-700); }
 
 .dss-main { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: start; }
 @media (max-width: 780px) { .dss-main { grid-template-columns: 1fr; } }
@@ -288,6 +286,9 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
   box-shadow: 0 8px 16px rgba(28, 62, 105, .16); }
 .dss-btn-primary:hover { background: var(--dss-navy-deep); transform: translateY(-1px); }
 .dss-btn-small { min-height: 0; padding: 4px 9px; font-size: 11px; }
+/* Must stay AFTER .dss-btn — same specificity, so source order decides. */
+.dss-btn-ghost { background: transparent; border-color: transparent; color: var(--dss-muted); }
+.dss-btn-ghost:hover { background: var(--dss-surface-2); color: var(--dss-ink-700); }
 
 /* ---- Data & DocTypes ---- */
 .dss-cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));

@@ -73,6 +73,8 @@
   // in the route.
   App.prototype.load = function () {
     var self = this;
+    // Only reachable outside the Desk (the standalone render harness) — inside
+    // Frappe, frappe.require loaded this file, so frappe exists by definition.
     if (!hasFrappe()) {
       this.useMock("No Frappe backend is reachable from this page.");
       return;
@@ -91,7 +93,7 @@
         }
       })
       .catch(function () {
-        self.useMock("Could not list dashboards.");
+        self.renderError("Could not load the list of dashboards.");
       });
   };
 
@@ -361,7 +363,7 @@
       // Keep the toolbar switcher populated even when opened straight from a route.
       if (!self.state.dashboards) self.listDashboards();
     }).catch(function () {
-      self.useMock("Could not open dashboard " + name + ".");
+      self.renderError("Could not open “" + name + "”. It may have been renamed or deleted.");
     });
   };
 
@@ -375,29 +377,53 @@
       .catch(function () { /* switcher is optional; the dashboard is already open */ });
   };
 
-  // No dashboards exist yet: invite creating one rather than silently showing
-  // invented records.
-  App.prototype.renderEmpty = function () {
-    var self = this;
+  // One card, centred: used for both "nothing exists yet" and "the server said
+  // no". Neither is a reason to show invented records.
+  App.prototype.renderNotice = function (title, message, actions) {
     this.mount.innerHTML = "";
     var wrap = el("div", "dss-wrap");
     var box = el("div", "dss-empty");
     box.appendChild(el("div", "dss-empty-kicker", "Dashboard Studio"));
-    box.appendChild(el("h2", "dss-empty-title", "No dashboards yet"));
-    box.appendChild(el("p", "dss-hint",
-      "Create your first dashboard to start adding charts. It is saved as a real " +
-      "DS Dashboard record straight away."));
-    var create = el("button", "dss-btn dss-btn-primary", "Create dashboard");
-    create.addEventListener("click", function () { self.newDashboard(); });
-    box.appendChild(create);
-    var preview = el("button", "dss-btn dss-btn-ghost", "Preview with sample data");
-    preview.title = "Loads invented sample records. Nothing is saved.";
-    preview.addEventListener("click", function () {
-      self.useMock("Sample-data preview — you chose this from the empty state.");
-    });
-    box.appendChild(preview);
+    box.appendChild(el("h2", "dss-empty-title", title));
+    box.appendChild(el("p", "dss-hint", message));
+    actions.forEach(function (a) { box.appendChild(a); });
     wrap.appendChild(box);
     this.mount.appendChild(wrap);
+  };
+
+  // The demo, offered as a deliberate choice and never as a default.
+  App.prototype.demoButton = function (reason) {
+    var self = this;
+    var btn = el("button", "dss-btn dss-btn-ghost", "Explore the demo");
+    btn.title = "Loads invented sample records. Nothing is saved.";
+    btn.addEventListener("click", function () { self.useMock(reason); });
+    return btn;
+  };
+
+  // No dashboards exist yet: invite creating one.
+  App.prototype.renderEmpty = function () {
+    var self = this;
+    var create = el("button", "dss-btn dss-btn-primary", "Create your first dashboard");
+    create.addEventListener("click", function () { self.newDashboard(); });
+    this.renderNotice(
+      "No dashboards yet",
+      "There are no DS Dashboard records to open. Creating one saves a real " +
+      "record straight away, and the editor opens on it.",
+      [create, this.demoButton("You chose the demo from the empty state.")]
+    );
+  };
+
+  // Something went wrong talking to the server. Say so — falling back to sample
+  // data here is what made a broken connection look like a working studio.
+  App.prototype.renderError = function (message) {
+    var self = this;
+    var retry = el("button", "dss-btn dss-btn-primary", "Try again");
+    retry.addEventListener("click", function () {
+      self.state.dashboards = null;
+      self.load();
+    });
+    this.renderNotice("Could not load your dashboards", message,
+      [retry, this.demoButton("You chose the demo after a failed load.")]);
   };
 
   App.prototype.newDashboard = function () {
