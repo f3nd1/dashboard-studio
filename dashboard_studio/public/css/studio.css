@@ -1,110 +1,201 @@
-/* Dashboard Studio — visual editor styles. Scoped under .dss-wrap. */
-.dss-wrap { --dss-line: #dce1e8; --dss-accent: #0d7481; --dss-ink: #1b2733; --dss-muted: #5c6b7d;
-  color: var(--dss-ink); }
+/* Dashboard Studio — visual editor styles. Scoped under .dss-wrap.
+ *
+ * Visual language adapted from prototypes/dashboard_studio_hybrid_ai_prototype_v2.html
+ * (palette, type scale, radii, elevation, button/pill treatment). Only the LOOK is
+ * taken from it — none of that prototype's structure (workspace tabs, Copilot
+ * panel, six-role model, Sophia branding) is adopted here.
+ *
+ * Inter is declared but not bundled: no webfont is loaded (this app stays
+ * dependency-free), so it is used only if the host already has it, otherwise the
+ * system UI stack applies.
+ */
+.dss-wrap {
+  /* Brand + accent */
+  --dss-navy: #17345d;
+  --dss-navy-deep: #102341;
+  --dss-blue: #3b76c5;
+  --dss-blue-100: #eaf2ff;
+  /* Ink scale */
+  --dss-ink: #142033;
+  --dss-ink-700: #455268;
+  --dss-muted: #728097;
+  /* Surfaces + lines */
+  --dss-surface: #ffffff;
+  --dss-surface-2: #f6f8fb;
+  --dss-surface-3: #eef2f7;
+  --dss-line: #dfe6ef;
+  --dss-line-dark: #cbd5e1;
+  /* Semantic pairs (tint background + saturated foreground) */
+  --dss-green: #23815f; --dss-green-100: #e7f7f0;
+  --dss-red: #b94a4a;   --dss-red-100: #fff0f0;
+  --dss-orange: #b86f16; --dss-orange-100: #fff3e2;
+  --dss-purple: #6c5ac7; --dss-purple-100: #f1eeff;
+  /* Shape + elevation */
+  --dss-r-lg: 18px;
+  --dss-r-md: 12px;
+  --dss-r-sm: 9px;
+  --dss-shadow: 0 12px 28px rgba(15, 31, 58, .08);
+  --dss-shadow-sm: 0 2px 6px rgba(15, 31, 58, .06);
+  /* Card header height — .dss-card-body is positioned against this, so the two
+     must never drift apart. */
+  --dss-cardhead: 34px;
 
-.dss-banner { background: #fef4e2; border: 1px solid #f0d69a; color: #8a5a12;
-  padding: 8px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+  color: var(--dss-ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
 
+.dss-wrap button, .dss-wrap input, .dss-wrap select, .dss-wrap textarea { font: inherit; }
+
+.dss-banner { background: var(--dss-orange-100); border: 1px solid #f0d19a; color: var(--dss-orange);
+  padding: 10px 13px; border-radius: var(--dss-r-md); font-size: 12px; font-weight: 600;
+  margin-bottom: 14px; }
+
+/* ---- Header ---- */
 .dss-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding-bottom: 12px; border-bottom: 1px solid var(--dss-line); margin-bottom: 14px; }
-.dss-title { font-size: 18px; margin: 0; }
+  padding-bottom: 14px; border-bottom: 1px solid var(--dss-line); margin-bottom: 18px; }
+.dss-title { font-size: 19px; font-weight: 800; letter-spacing: -.3px; margin: 0; }
 
-.dss-main { display: grid; grid-template-columns: 1fr 280px; gap: 16px; align-items: start; }
+.dss-main { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: start; }
 @media (max-width: 780px) { .dss-main { grid-template-columns: 1fr; } }
 
-.dss-canvas { position: relative; background:
-  linear-gradient(90deg, #f1f4f7 1px, transparent 1px) 0 0 / 8.333% 100%,
-  #fafbfc; border: 1px solid var(--dss-line); border-radius: 10px; overflow: hidden; }
+.dss-viewtabs { display: flex; gap: 6px; margin-left: auto; margin-right: 10px; }
 
-.dss-card { position: absolute; background: #fff; border: 1px solid var(--dss-line);
-  border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06); padding: 0; overflow: hidden;
-  box-sizing: border-box; }
-.dss-card.is-selected { border-color: var(--dss-accent); box-shadow: 0 0 0 2px rgba(13,116,129,.2); }
-.dss-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px;
-  padding: 7px 10px; background: #f4f6f9; border-bottom: 1px solid var(--dss-line); cursor: grab; }
-.dss-card-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dss-card-type { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--dss-accent);
+/* ---- Canvas + chart cards ---- */
+.dss-canvas { position: relative; background:
+  linear-gradient(90deg, var(--dss-surface-3) 1px, transparent 1px) 0 0 / 8.333% 100%,
+  var(--dss-surface-2); border: 1px solid var(--dss-line); border-radius: var(--dss-r-lg);
+  overflow: hidden; }
+
+.dss-card { position: absolute; background: var(--dss-surface); border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-md); box-shadow: var(--dss-shadow-sm); padding: 0; overflow: hidden;
+  box-sizing: border-box; transition: box-shadow .15s ease, border-color .15s ease; }
+.dss-card:hover { box-shadow: var(--dss-shadow); }
+.dss-card.is-selected { border-color: var(--dss-blue);
+  box-shadow: 0 0 0 3px rgba(59, 118, 197, .18), var(--dss-shadow); }
+.dss-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: var(--dss-cardhead); box-sizing: border-box; padding: 8px 12px;
+  border-bottom: 1px solid var(--dss-line); cursor: grab; }
+.dss-card-head:active { cursor: grabbing; }
+.dss-card-title { font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+/* Chart type reads as a badge, per the reference's status-pill treatment. */
+.dss-card-type { font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--dss-blue); background: var(--dss-blue-100); border-radius: 999px; padding: 4px 7px;
   white-space: nowrap; flex-shrink: 0; }
-.dss-card-body { padding: 10px; font-size: 12px; color: var(--dss-muted);
-  position: absolute; top: 32px; bottom: 0; left: 0; right: 0; overflow: hidden; }
+.dss-card-body { padding: 10px 12px 12px; font-size: 12px; color: var(--dss-ink-700);
+  position: absolute; top: var(--dss-cardhead); bottom: 0; left: 0; right: 0; overflow: hidden;
+  box-sizing: border-box; }
+
 .dss-chart-svg { width: 100%; height: 100%; display: block; }
 .dss-chart-donut { max-height: 100%; margin: 0 auto; transform: rotate(-90deg); }
 /* Square-viewBox charts (radar) must not be stretched by the card's aspect. */
 .dss-chart-square { max-height: 100%; margin: 0 auto; display: block; }
-.dss-kpi { font-size: 28px; font-weight: 700; color: var(--dss-accent);
+.dss-kpi { font-size: 30px; font-weight: 900; letter-spacing: -.7px; color: var(--dss-navy);
   display: flex; align-items: center; justify-content: center; height: 100%; }
 .dss-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.dss-table th, .dss-table td { text-align: left; padding: 2px 6px;
+.dss-table th, .dss-table td { text-align: left; padding: 6px 7px;
   border-bottom: 1px solid var(--dss-line); }
-.dss-nochart { color: var(--dss-muted); font-size: 11px; display: flex;
-  align-items: center; justify-content: center; height: 100%; text-align: center; }
+.dss-table th { font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--dss-muted); }
+.dss-nochart { color: var(--dss-muted); font-size: 11px; line-height: 1.5; display: flex;
+  align-items: center; justify-content: center; height: 100%; text-align: center; padding: 0 6px; }
+/* Resize grip — size is a hit target, keep it. */
 .dss-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
-  background: linear-gradient(135deg, transparent 50%, var(--dss-accent) 50%); }
+  background: linear-gradient(135deg, transparent 50%, var(--dss-line-dark) 50%); }
+.dss-card:hover .dss-resize { background: linear-gradient(135deg, transparent 50%, var(--dss-blue) 50%); }
 
-/* Sections: each band owns its own canvas, so coordinates stay section-local. */
-.dss-bandwrap { display: flex; flex-direction: column; gap: 12px; }
-.dss-band { border: 1px solid var(--dss-line); border-radius: 10px; overflow: hidden; background: #fff; }
-.dss-band-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px;
-  background: #f4f6f9; border-bottom: 1px solid var(--dss-line); }
-.dss-band-toggle { background: none; border: 0; font: inherit; font-weight: 600; font-size: 13px;
-  cursor: pointer; color: var(--dss-ink); padding: 2px 4px; }
-.dss-band-toggle:hover { color: var(--dss-accent); }
-.dss-band-count { font-size: 11px; color: var(--dss-muted); margin-left: auto; }
-.dss-band-controls { display: flex; gap: 4px; }
-.dss-band-controls .dss-btn { padding: 2px 7px; font-size: 11px; }
+/* ---- Sections: each band owns its own canvas, so coordinates stay section-local ---- */
+.dss-bandwrap { display: flex; flex-direction: column; gap: 14px; }
+.dss-band { border: 1px solid var(--dss-line); border-radius: var(--dss-r-lg); overflow: hidden;
+  background: var(--dss-surface); box-shadow: var(--dss-shadow-sm); }
+.dss-band-head { display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  background: var(--dss-surface-2); border-bottom: 1px solid var(--dss-line); }
+.dss-band-toggle { background: none; border: 0; font: inherit; font-weight: 800; font-size: 12px;
+  cursor: pointer; color: var(--dss-navy); padding: 2px 4px; letter-spacing: -.1px; }
+.dss-band-toggle:hover { color: var(--dss-blue); }
+.dss-band-count { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--dss-muted); margin-left: auto; }
+.dss-band-controls { display: flex; gap: 5px; }
+.dss-band-controls .dss-btn { padding: 3px 8px; font-size: 11px; min-height: 0; }
 .dss-band-canvas { border: 0; border-radius: 0; }
 
-.dss-panel { border: 1px solid var(--dss-line); border-radius: 10px; padding: 14px; background: #fff; }
-.dss-panel-title { font-size: 14px; margin: 0 0 10px; }
-.dss-hint { font-size: 13px; color: var(--dss-muted); }
-.dss-field { display: block; margin-bottom: 10px; }
-.dss-field-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-  color: var(--dss-muted); margin-bottom: 4px; }
-.dss-input { width: 100%; padding: 6px 8px; border: 1px solid var(--dss-line); border-radius: 6px;
-  font: inherit; box-sizing: border-box; }
-textarea.dss-input { min-height: 60px; resize: vertical; }
-.dss-error { color: #b3261e; font-size: 12px; min-height: 16px; }
-.dss-filters { margin-bottom: 10px; }
-.dss-filter-row { display: grid; grid-template-columns: 1fr 62px 1fr auto; gap: 4px; margin-bottom: 4px; }
-.dss-filter-row .dss-input { padding: 4px 6px; font-size: 12px; }
-.dss-filter-locked { font-size: 11px; color: var(--dss-muted); background: #f4f6f9;
-  border: 1px dashed var(--dss-line); border-radius: 6px; padding: 5px 8px; margin-bottom: 4px; }
-.dss-btn-small { padding: 3px 8px; font-size: 12px; }
-.dss-sqlimport { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--dss-line); }
+/* ---- Side panel (diagram editor / mapping) ---- */
+.dss-panel { border: 1px solid var(--dss-line); border-radius: var(--dss-r-lg); padding: 16px;
+  background: var(--dss-surface); box-shadow: var(--dss-shadow-sm); }
+.dss-panel-title { font-size: 13px; font-weight: 800; margin: 0 0 14px; letter-spacing: -.2px; }
+.dss-hint { font-size: 12px; line-height: 1.5; color: var(--dss-muted); }
+.dss-field { display: block; margin-bottom: 12px; }
+.dss-field-label { display: block; font-size: 9px; font-weight: 900; text-transform: uppercase;
+  letter-spacing: .9px; color: var(--dss-muted); margin-bottom: 5px; }
+.dss-input { width: 100%; padding: 8px 10px; border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-sm); background: var(--dss-surface); color: var(--dss-ink);
+  font: inherit; font-size: 12px; box-sizing: border-box; transition: border-color .15s ease,
+  box-shadow .15s ease; }
+.dss-input:focus { outline: none; border-color: var(--dss-blue);
+  box-shadow: 0 0 0 3px rgba(59, 118, 197, .15); }
+textarea.dss-input { min-height: 62px; resize: vertical; }
+.dss-error { color: var(--dss-red); font-size: 11px; font-weight: 600; min-height: 16px; }
+
+.dss-filters { margin-bottom: 12px; }
+.dss-filter-row { display: grid; grid-template-columns: 1fr 62px 1fr auto; gap: 5px; margin-bottom: 5px; }
+.dss-filter-row .dss-input { padding: 5px 7px; font-size: 11px; }
+.dss-filter-locked { font-size: 10px; line-height: 1.45; color: var(--dss-muted);
+  background: var(--dss-surface-2); border: 1px dashed var(--dss-line-dark);
+  border-radius: var(--dss-r-sm); padding: 7px 9px; margin-bottom: 5px; }
+
+.dss-sqlimport { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--dss-line); }
 .dss-sqlimport textarea.dss-input { min-height: 62px; font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px; margin-bottom: 6px; }
-.dss-sqlnote { font-size: 11px; color: var(--dss-muted); min-height: 14px; margin-bottom: 6px; }
-.dss-analysis { font-size: 11px; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
-.dss-analysis.is-ok { background: #e7f3ef; border: 1px solid #b7ddcd; color: #146b47; }
-.dss-analysis.is-warn { background: #fdf1e3; border: 1px solid #f0d19a; color: #8a5a12; }
-.dss-layout-row { margin-bottom: 10px; }
-.dss-layout-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
-.dss-layout-grid .dss-input { padding: 4px 6px; font-size: 12px; }
-.dss-actions { display: flex; gap: 8px; margin-top: 6px; }
+  font-size: 11px; margin-bottom: 7px; }
+.dss-sqlnote { font-size: 10px; color: var(--dss-muted); min-height: 14px; margin-bottom: 7px; }
+.dss-analysis { font-size: 10px; line-height: 1.5; border-radius: var(--dss-r-md); padding: 9px 11px;
+  margin-bottom: 10px; font-weight: 600; }
+.dss-analysis.is-ok { background: var(--dss-green-100); border: 1px solid #b7ddcd; color: var(--dss-green); }
+.dss-analysis.is-warn { background: var(--dss-orange-100); border: 1px solid #f0d19a; color: var(--dss-orange); }
 
-.dss-viewtabs { display: flex; gap: 6px; margin-left: auto; margin-right: 10px; }
+.dss-layout-row { margin-bottom: 12px; }
+.dss-layout-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.dss-layout-grid .dss-input { padding: 5px 7px; font-size: 11px; text-align: center; }
+.dss-actions { display: flex; gap: 8px; margin-top: 10px; }
 
-/* Mapping view */
-.dss-map-canvas { background: #fafbfc; }
+/* ---- Mapping view ---- */
+.dss-map-canvas { background: var(--dss-surface-2); }
 .dss-map-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.dss-map-line { stroke: var(--dss-muted); stroke-width: 2; }
-.dss-map-line.is-confirmed { stroke: #1c8a5c; }
-.dss-map-line.is-rejected { stroke: #b3261e; stroke-dasharray: 4 3; }
-.dss-node { position: absolute; width: 150px; background: #fff; border: 1px solid var(--dss-line);
-  border-radius: 8px; padding: 6px 10px; cursor: pointer; user-select: none;
-  box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-.dss-node-src { border-left: 3px solid var(--dss-accent); }
-.dss-node-tgt { border-left: 3px solid #6b5cc4; }
-.dss-node.is-picked { box-shadow: 0 0 0 2px rgba(13,116,129,.35); }
-.dss-node-kind { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--dss-muted); }
-.dss-node-label { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dss-map-row { font-size: 12px; padding: 6px 8px; border: 1px solid var(--dss-line); border-radius: 6px;
-  margin-bottom: 6px; cursor: pointer; }
-.dss-map-row.is-confirmed { border-color: #1c8a5c; }
-.dss-map-row.is-rejected { border-color: #b3261e; color: var(--dss-muted); text-decoration: line-through; }
+.dss-map-line { stroke: var(--dss-line-dark); stroke-width: 2; }
+.dss-map-line.is-confirmed { stroke: var(--dss-green); }
+.dss-map-line.is-rejected { stroke: var(--dss-red); stroke-dasharray: 4 3; }
+/* Node width is functional: refreshMapping anchors connection lines at pos_x + 150. */
+.dss-node { position: absolute; width: 150px; box-sizing: border-box; background: var(--dss-surface);
+  border: 1px solid var(--dss-line); border-radius: var(--dss-r-md); padding: 8px 11px;
+  cursor: pointer; user-select: none; box-shadow: var(--dss-shadow-sm);
+  transition: box-shadow .15s ease, transform .15s ease; }
+.dss-node:hover { box-shadow: var(--dss-shadow); }
+.dss-node-src { border-left: 3px solid var(--dss-blue); }
+.dss-node-tgt { border-left: 3px solid var(--dss-purple); }
+.dss-node.is-picked { border-color: var(--dss-blue);
+  box-shadow: 0 0 0 3px rgba(59, 118, 197, .22), var(--dss-shadow); }
+.dss-node-kind { font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--dss-muted); }
+.dss-node-label { font-size: 12px; font-weight: 800; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; margin-top: 2px; }
 
-.dss-btn { padding: 6px 12px; border: 1px solid var(--dss-line); background: #fff; border-radius: 6px;
-  font: inherit; cursor: pointer; }
-.dss-btn:hover { background: #f4f6f9; }
-.dss-btn-primary { background: var(--dss-accent); border-color: var(--dss-accent); color: #fff; }
-.dss-btn-primary:hover { background: #0a5b66; }
+.dss-map-row { font-size: 11px; font-weight: 600; padding: 8px 10px; border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-sm); margin-bottom: 6px; cursor: pointer; background: var(--dss-surface-2);
+  transition: border-color .15s ease, background .15s ease; }
+.dss-map-row:hover { background: var(--dss-surface-3); }
+.dss-map-row.is-confirmed { border-color: var(--dss-green); background: var(--dss-green-100);
+  color: var(--dss-green); }
+.dss-map-row.is-rejected { border-color: #f2caca; background: var(--dss-red-100);
+  color: var(--dss-red); text-decoration: line-through; }
+
+/* ---- Buttons ---- */
+.dss-btn { min-height: 34px; padding: 7px 12px; border: 1px solid var(--dss-line);
+  background: var(--dss-surface); color: var(--dss-ink-700); border-radius: var(--dss-r-sm);
+  font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  transition: .15s ease; }
+.dss-btn:hover { background: var(--dss-surface-2); }
+.dss-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(59, 118, 197, .3); }
+.dss-btn-primary { background: var(--dss-navy); border-color: var(--dss-navy); color: #fff;
+  box-shadow: 0 8px 16px rgba(28, 62, 105, .16); }
+.dss-btn-primary:hover { background: var(--dss-navy-deep); transform: translateY(-1px); }
+.dss-btn-small { min-height: 0; padding: 4px 9px; font-size: 11px; }
