@@ -87,6 +87,100 @@ def list_ds_metrics():
     )
 
 
+# The only DS Dashboard Section fields the editor may write.
+_EDITABLE_SECTION_FIELDS = ("section_title", "is_collapsed_default")
+
+
+@frappe.whitelist()
+def create_section(dashboard: str, section_title: str):
+    """Add a section to a dashboard, ordered after the existing ones."""
+    frappe.only_for(DS_WRITE_ROLES)
+    title = (section_title or "").strip()
+    if not title:
+        frappe.throw("Section title is required.")
+
+    orders = [
+        row.sort_order or 0
+        for row in frappe.get_all(
+            "DS Dashboard Section", filters={"dashboard": dashboard}, fields=["sort_order"]
+        )
+    ]
+    doc = frappe.get_doc(
+        {
+            "doctype": "DS Dashboard Section",
+            "dashboard": dashboard,
+            "section_title": title,
+            "sort_order": (max(orders) if orders else 0) + 1,
+        }
+    ).insert()
+    return doc.as_dict()
+
+
+@frappe.whitelist()
+def update_section(section: str, patch):
+    """Rename a section or change its default collapsed state."""
+    frappe.only_for(DS_WRITE_ROLES)
+    if isinstance(patch, str):
+        patch = json.loads(patch)
+    if not isinstance(patch, dict):
+        frappe.throw("patch must be a JSON object")
+
+    doc = frappe.get_doc("DS Dashboard Section", section)
+    for key, value in patch.items():
+        if key not in _EDITABLE_SECTION_FIELDS:
+            continue
+        if key == "section_title":
+            value = str(value or "").strip()
+            if not value:
+                frappe.throw("Section title cannot be empty.")
+        doc.set(key, value)
+    doc.save()
+    return doc.as_dict()
+
+
+@frappe.whitelist()
+def reorder_sections(dashboard: str, order):
+    """Reassign sort_order from a full ordered list of section names.
+
+    Applied in one call rather than per-section so the ordering can never be
+    left half-updated with duplicate positions.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    if isinstance(order, str):
+        order = json.loads(order)
+    if not isinstance(order, list):
+        frappe.throw("order must be a JSON array of section names")
+
+    owned = {
+        row.name
+        for row in frappe.get_all(
+            "DS Dashboard Section", filters={"dashboard": dashboard}, fields=["name"]
+        )
+    }
+    unknown = [name for name in order if name not in owned]
+    if unknown:
+        frappe.throw(f"Not sections of this dashboard: {', '.join(unknown)}")
+
+    for position, name in enumerate(order, start=1):
+        frappe.db.set_value("DS Dashboard Section", name, "sort_order", position)
+    return {"reordered": len(order)}
+
+
+@frappe.whitelist()
+def delete_section(section: str):
+    """Delete a section, keeping its charts.
+
+    Charts are un-assigned first so they fall back to Ungrouped — deleting a
+    grouping must never destroy the things it grouped.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    charts = frappe.get_all("DS Chart", filters={"section": section}, fields=["name"])
+    for chart in charts:
+        frappe.db.set_value("DS Chart", chart.name, "section", "")
+    frappe.delete_doc("DS Dashboard Section", section)
+    return {"deleted": section, "unassigned_charts": len(charts)}
+
+
 @frappe.whitelist()
 def get_migration_project(project: str):
     """Return a DS Migration Project with the mappings and canvas layout it needs.
