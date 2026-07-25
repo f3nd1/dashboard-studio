@@ -55,12 +55,20 @@ def _make_fake_frappe():
             )
         return _FakeDoc(name=name, dashboard_title=name)
 
-    def get_all(doctype, **kwargs):
+    def get_all(doctype, filters=None, **kwargs):
         if doctype in ("DS Chart", "DS Chart Filter"):
             return []
         if doctype == "DS Metric":
-            return [{"name": "M1", "metric_name": "M1", "calculation_type": "Count",
-                     "source_doctype": "Student Applicant"}]
+            rows = [
+                {"name": "M1", "metric_name": "M1", "status": "Approved",
+                 "calculation_type": "Count", "source_doctype": "Student Applicant"},
+                {"name": "M2-draft", "metric_name": "M2-draft", "status": "Draft",
+                 "calculation_type": "Count", "source_doctype": "Student Applicant"},
+            ]
+            # Honour filters, so endpoints that rely on them are actually tested.
+            for key, value in (filters or {}).items():
+                rows = [r for r in rows if r.get(key) == value]
+            return rows
         # grouped-count fetch shape for the engine
         return [{"academic_year": "2023", "count": 3}]
 
@@ -145,6 +153,12 @@ class TestApiRoleEnforcement(unittest.TestCase):
     def test_viewer_can_list_metrics(self):
         self._as("Dashboard Studio Viewer")
         self.assertEqual(self.studio.list_ds_metrics()[0]["metric_name"], "M1")
+
+    def test_list_metrics_excludes_unapproved(self):
+        # The picker must only offer metrics the engine will actually run.
+        self._as("Dashboard Studio Viewer")
+        names = [m["metric_name"] for m in self.studio.list_ds_metrics()]
+        self.assertEqual(names, ["M1"], "Draft metrics must not be listed")
 
     def test_no_role_cannot_list_metrics(self):
         self._as("Some Other Role")
