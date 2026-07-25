@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard picker — revised, at scale</title>
+<style>
+  :root{
+    --navy:#17345d;
+    --blue:#3b76c5;
+    --blue-soft:#eaf1fa;
+    --ink-1:#17345d;
+    --ink-2:#5a6b82;
+    --ink-3:#8b98aa;
+    --surface-sunk:#f4f6f9;
+    --line:#e3e8ef;
+    --r-lg:18px;
+    --r-md:12px;
+    --r-sm:9px;
+    --shadow:0 12px 28px rgba(15,31,58,.08);
+    --shadow-pop:0 16px 40px rgba(15,31,58,.14);
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif;
+    --draft:#5a6b82;
+    --review:#8a6a1f;
+    --published:#1d6b4f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);background:#e8ecf2;color:var(--ink-1);-webkit-font-smoothing:antialiased}
+  .kicker{font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+
+  .harness{background:#0e1b2e;color:#fff;padding:14px 20px;display:flex;flex-wrap:wrap;align-items:center;gap:14px;position:sticky;top:0;z-index:60}
+  .harness h1{font-size:13px;margin:0;font-weight:700}
+  .harness .note{font-size:11px;color:#9db0c9;margin-left:auto}
+  .switch{display:flex;gap:6px;background:#1c2c45;padding:4px;border-radius:999px}
+  .switch button{font:inherit;font-size:11px;font-weight:700;color:#9db0c9;background:none;border:0;padding:7px 14px;border-radius:999px;cursor:pointer}
+  .switch button[aria-selected="true"]{background:#fff;color:#0e1b2e}
+  .switch button:focus-visible{outline:2px solid #7fb0ff;outline-offset:2px}
+
+  .stage{padding:26px 20px 90px;max-width:1180px;margin:0 auto}
+  .caption{margin:0 0 18px;font-size:12.5px;line-height:1.55;color:#3d4d63;max-width:72ch}
+  .caption strong{color:var(--navy)}
+  .scene{display:none}
+  .scene.is-active{display:block}
+
+  .frame{background:#fff;border-radius:var(--r-lg);box-shadow:var(--shadow);overflow:visible;border:1px solid var(--line)}
+  .urlbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f7f9fc;border-bottom:1px solid var(--line);border-radius:var(--r-lg) var(--r-lg) 0 0}
+  .dots{display:flex;gap:5px}
+  .dots i{width:9px;height:9px;border-radius:50%;background:#d3dae4;display:block}
+  .url{flex:1;background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:11px;color:var(--ink-2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .url b{color:var(--navy);font-weight:700}
+
+  .studio-body{padding:20px 22px 30px}
+  .studio-head{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+  .studio-head .app{font-size:12px;color:var(--ink-3);font-weight:700;letter-spacing:.02em;text-transform:uppercase}
+
+  .btn{font:inherit;font-size:12px;font-weight:700;min-height:34px;padding:0 15px;border-radius:var(--r-md);border:1px solid var(--line);background:#fff;color:var(--ink-1);cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:transform .12s,box-shadow .12s}
+  .btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(15,31,58,.09)}
+  .btn:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  .btn.primary{background:var(--navy);border-color:var(--navy);color:#fff}
+
+  /* ---- pills: status now carries colour, but quietly ---- */
+  .pill{font-size:9.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:3.5px 9px;border-radius:999px;background:var(--surface-sunk);color:var(--ink-2);border:1px solid var(--line);white-space:nowrap}
+  .pill.s-draft{color:var(--draft)}
+  .pill.s-review{color:var(--review);background:#fdf6e6;border-color:#efe0bb}
+  .pill.s-pub{color:var(--published);background:#eaf5f0;border-color:#c9e3d7}
+
+  /* ---- trigger ---- */
+  .picker-wrap{position:relative;display:inline-block}
+  .picker-trigger{
+    font:inherit;display:inline-flex;align-items:center;gap:10px;background:none;
+    border:1px solid transparent;padding:6px 10px 6px 11px;cursor:pointer;color:var(--ink-1);
+    border-radius:var(--r-md);min-height:44px;
+  }
+  .picker-trigger:hover{background:var(--surface-sunk);border-color:var(--line)}
+  .picker-trigger:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+  .picker-trigger .name{font-size:19px;font-weight:800;letter-spacing:-.015em}
+  .chev{width:16px;height:16px;flex:0 0 auto;color:var(--ink-3);transition:transform .15s}
+  .picker-trigger[aria-expanded="true"] .chev{transform:rotate(180deg)}
+
+  /* ---- panel ---- */
+  .panel{
+    position:absolute;top:calc(100% + 8px);left:0;width:392px;background:#fff;
+    border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-pop);
+    z-index:40;overflow:hidden;
+  }
+  .panel-search{padding:11px 11px 9px;border-bottom:1px solid var(--line);background:#fbfcfe}
+  .searchbox{position:relative}
+  .searchbox input{
+    font:inherit;font-size:12.5px;width:100%;min-height:36px;padding:0 11px 0 32px;
+    border:1px solid var(--line);border-radius:var(--r-sm);background:#fff;color:var(--ink-1);
+  }
+  .searchbox input::placeholder{color:var(--ink-3)}
+  .searchbox input:focus{outline:2px solid var(--blue);outline-offset:-1px;border-color:var(--blue)}
+  .searchbox svg{position:absolute;left:10px;top:10px;width:15px;height:15px;color:var(--ink-3)}
+
+  .panel-scroll{max-height:322px;overflow-y:auto;padding:6px}
+  .panel-scroll::-webkit-scrollbar{width:9px}
+  .panel-scroll::-webkit-scrollbar-thumb{background:#d7dee7;border-radius:9px;border:2px solid #fff}
+
+  .grp{display:flex;align-items:center;gap:8px;padding:9px 10px 5px}
+  .grp .rule{flex:1;height:1px;background:var(--line)}
+
+  .item{
+    display:flex;align-items:center;gap:11px;width:100%;text-align:left;font:inherit;
+    background:none;border:0;padding:0 10px;min-height:44px;border-radius:var(--r-sm);
+    cursor:pointer;color:var(--ink-1);
+  }
+  .item:hover{background:var(--surface-sunk)}
+  .item:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+  .item .t{font-size:13px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .item .meta{font-size:11px;color:var(--ink-3);font-weight:500;white-space:nowrap}
+  .item[aria-current="true"]{background:var(--blue-soft)}
+  .item[aria-current="true"] .t{color:var(--navy);font-weight:700}
+  .item .tick{width:15px;flex:0 0 auto;color:var(--blue)}
+  .item .tick svg{display:block;width:15px;height:15px}
+
+  .panel-foot{
+    display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid var(--line);
+    background:#fbfcfe;
+  }
+  .panel-foot .count{font-size:11px;color:var(--ink-3);font-weight:600}
+  .linkish{
+    font:inherit;font-size:12px;font-weight:700;color:var(--blue);background:none;border:0;
+    padding:6px 8px;border-radius:var(--r-sm);cursor:pointer;margin-left:auto;
+  }
+  .linkish:hover{background:var(--blue-soft)}
+  .linkish:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+  .kbd{
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:var(--ink-3);
+    border:1px solid var(--line);border-radius:5px;padding:2px 5px;background:#fff;
+  }
+
+  .noresult{padding:26px 14px;text-align:center;font-size:12.5px;color:var(--ink-2)}
+  .noresult b{display:block;color:var(--ink-1);margin-bottom:4px}
+
+  /* filler content behind the panel */
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:8px 0 20px}
+  .tab{font:inherit;font-size:12.5px;font-weight:700;color:var(--ink-3);background:none;border:0;padding:11px 15px;cursor:pointer;border-bottom:2.5px solid transparent;margin-bottom:-1px}
+  .tab[aria-selected="true"]{color:var(--navy);border-bottom-color:var(--navy)}
+  .canvas{background:var(--surface-sunk);border:1px solid var(--line);border-radius:var(--r-md);min-height:190px;padding:13px;display:grid;grid-template-columns:repeat(4,1fr);gap:13px;align-content:start}
+  .card{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);box-shadow:0 2px 6px rgba(15,31,58,.05);overflow:hidden}
+  .card-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
+  .card-head .t{font-size:12px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card-body{padding:14px 12px;min-height:74px;display:flex;align-items:center;justify-content:center}
+  .kpi{font-size:29px;font-weight:800;color:var(--navy);letter-spacing:-.02em}
+  .card.wide{grid-column:span 2}
+  .card svg.chart{width:100%;height:64px;display:block}
+
+  .fixnote{
+    margin-top:24px;padding:15px 17px;background:#fff;border:1px solid var(--line);
+    border-radius:var(--r-md);box-shadow:var(--shadow);max-width:760px;
+  }
+  .fixnote h3{margin:0 0 10px;font-size:12px;font-weight:800;letter-spacing:.02em}
+  .fixnote ol{margin:0;padding-left:19px}
+  .fixnote li{font-size:12.5px;line-height:1.6;color:#3d4d63;margin-bottom:6px}
+  .fixnote li b{color:var(--navy)}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+  @media (max-width:760px){
+    .canvas{grid-template-columns:repeat(2,1fr)}
+    .panel{width:min(392px,86vw)}
+    .harness .note{display:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="harness">
+  <h1>Dashboard picker · revised</h1>
+  <div class="switch" role="tablist">
+    <button role="tab" aria-selected="true" data-scene="few">A few dashboards</button>
+    <button role="tab" aria-selected="false" data-scene="many">Twenty-four dashboards</button>
+    <button role="tab" aria-selected="false" data-scene="search">Mid-search</button>
+  </div>
+  <span class="note">Static mockup. The search box is not wired.</span>
+</div>
+
+<div class="stage">
+
+  <!-- ================= FEW ================= -->
+  <section class="scene is-active" id="s-few">
+    <p class="caption">
+      <strong>Small list — nothing extra shown.</strong> No search box, no grouping, no footer link.
+      The picker only grows the machinery it needs, so early on it stays as light as the first draft.
+      Changes from that draft: a real chevron instead of the stray caret, status colour that actually
+      distinguishes published from draft, 44px rows, and a tick on the current dashboard rather than
+      relying on the pale fill alone.
+    </p>
+
+    <div class="frame">
+      <div class="urlbar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <div class="url">ucc-sms.orb.local/app/<b>dashboard-studio</b></div>
+      </div>
+      <div class="studio-body">
+        <div class="studio-head">
+          <span class="app">Dashboard Studio</span>
+          <div style="margin-left:auto"><button class="btn primary">New dashboard</button></div>
+        </div>
+
+        <div class="picker-wrap">
+          <button class="picker-trigger" aria-expanded="true">
+            <span class="name">Admission Intelligence</span>
+            <span class="pill s-draft">Draft</span>
+            <svg class="chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6.5 8 10.5l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+
+          <div class="panel">
+            <div class="panel-scroll" style="max-height:none">
+              <button class="item" aria-current="true">
+                <span class="tick"><svg viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5 6.5 11.5 12.5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <span class="t">Admission Intelligence</span>
+                <span class="pill s-draft">Draft</span>
+              </button>
+              <button class="item">
+                <span class="tick"></span>
+                <span class="t">Employee Satisfaction Index</span>
+                <span class="pill s-review">QA Approval</span>
+              </button>
+              <button class="item">
+                <span class="tick"></span>
+                <span class="t">Agent Performance</span>
+                <span class="pill s-pub">Published</span>
+              </button>
+            </div>
+            <div class="panel-foot">
+              <span class="count">3 dashboards</span>
+              <button class="linkish">+ New dashboard</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <button class="tab" aria-selected="true">Design</button>
+          <button class="tab" aria-selected="false">Mapping</button>
+          <button class="tab" aria-selected="false">Data &amp; DocTypes</button>
+          <button class="tab" aria-selected="false">Validation</button>
+          <button class="tab" aria-selected="false">Governance</button>
+        </div>
+        <div class="canvas">
+          <div class="card"><div class="card-head"><span class="t">Total applicants</span><span class="kicker">KPI</span></div><div class="card-body"><span class="kpi">62</span></div></div>
+          <div class="card wide"><div class="card-head"><span class="t">Applicants by year</span><span class="kicker">Line</span></div><div class="card-body"><svg class="chart" viewBox="0 0 260 64" preserveAspectRatio="none"><polyline fill="none" stroke="#3b76c5" stroke-width="2.5" points="8,52 55,46 102,36 149,54 196,42 244,9"/></svg></div></div>
+          <div class="card"><div class="card-head"><span class="t">By programme</span><span class="kicker">Bar</span></div><div class="card-body"><svg class="chart" viewBox="0 0 100 64"><rect x="10" y="16" width="18" height="48" fill="#3b76c5" rx="2"/><rect x="40" y="31" width="18" height="33" fill="#3b76c5" rx="2"/><rect x="70" y="46" width="18" height="18" fill="#3b76c5" rx="2"/></svg></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= MANY ================= -->
+  <section class="scene" id="s-many">
+    <p class="caption">
+      <strong>Twenty-four dashboards — four things switch on.</strong>
+      A search box appears above the list, the list groups into <em>Recent</em> then <em>All</em>,
+      the area scrolls at a fixed height instead of growing down the page, and the footer says how
+      many there are with a way out to the full record list. <em>Recent</em> is free: it is just the
+      last-modified order Frappe already tracks, so it needs no new field.
+    </p>
+
+    <div class="frame">
+      <div class="urlbar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <div class="url">ucc-sms.orb.local/app/<b>dashboard-studio</b></div>
+      </div>
+      <div class="studio-body">
+        <div class="studio-head">
+          <span class="app">Dashboard Studio</span>
+          <div style="margin-left:auto"><button class="btn primary">New dashboard</button></div>
+        </div>
+
+        <div class="picker-wrap">
+          <button class="picker-trigger" aria-expanded="true">
+            <span class="name">Admission Intelligence</span>
+            <span class="pill s-draft">Draft</span>
+            <svg class="chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6.5 8 10.5l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+
+          <div class="panel">
+            <div class="panel-search">
+              <div class="searchbox">
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.6" stroke="currentColor" stroke-width="1.7"/><path d="M10.3 10.3 14 14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                <input type="text" placeholder="Search dashboards" aria-label="Search dashboards">
+              </div>
+            </div>
+
+            <div class="panel-scroll">
+              <div class="grp"><span class="kicker">Recent</span><span class="rule"></span></div>
+              <button class="item" aria-current="true">
+                <span class="tick"><svg viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5 6.5 11.5 12.5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <span class="t">Admission Intelligence</span>
+                <span class="pill s-draft">Draft</span>
+              </button>
+              <button class="item"><span class="tick"></span><span class="t">Employee Satisfaction Index</span><span class="pill s-review">QA Approval</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Agent Performance</span><span class="pill s-pub">Published</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Refund &amp; Withdrawal Monitoring</span><span class="pill s-draft">Draft</span></button>
+
+              <div class="grp"><span class="kicker">All dashboards</span><span class="rule"></span></div>
+              <button class="item"><span class="tick"></span><span class="t">Academic Progression Overview</span><span class="pill s-pub">Published</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Agent Performance</span><span class="pill s-pub">Published</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Attendance Intervention Cases</span><span class="pill s-review">QA Approval</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Course Completion Rates</span><span class="pill s-draft">Draft</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Evidence Coverage by Criterion</span><span class="pill s-pub">Published</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Fee Protection Scheme Status</span><span class="pill s-draft">Draft</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Management Review Summary</span><span class="pill s-review">Technical Review</span></button>
+              <button class="item"><span class="tick"></span><span class="t">Policy Review Status</span><span class="pill s-draft">Draft</span></button>
+            </div>
+
+            <div class="panel-foot">
+              <span class="count">24 dashboards</span>
+              <span class="kbd">↑↓</span><span class="kbd">esc</span>
+              <button class="linkish">View all →</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <button class="tab" aria-selected="true">Design</button>
+          <button class="tab" aria-selected="false">Mapping</button>
+          <button class="tab" aria-selected="false">Data &amp; DocTypes</button>
+          <button class="tab" aria-selected="false">Validation</button>
+          <button class="tab" aria-selected="false">Governance</button>
+        </div>
+        <div class="canvas" style="min-height:150px">
+          <div class="card"><div class="card-head"><span class="t">Total applicants</span><span class="kicker">KPI</span></div><div class="card-body"><span class="kpi">62</span></div></div>
+          <div class="card wide"><div class="card-head"><span class="t">Applicants by year</span><span class="kicker">Line</span></div><div class="card-body"><svg class="chart" viewBox="0 0 260 64" preserveAspectRatio="none"><polyline fill="none" stroke="#3b76c5" stroke-width="2.5" points="8,52 55,46 102,36 149,54 196,42 244,9"/></svg></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fixnote">
+      <h3 class="kicker">How this scales, in order of what triggers it</h3>
+      <ol>
+        <li><b>Search above 8 dashboards.</b> Below that it is clutter; above it, typing three letters beats reading a list.</li>
+        <li><b>Fixed height, scroll inside.</b> The panel never runs off the bottom of the screen, however many exist.</li>
+        <li><b>Recent, then all.</b> In practice people return to two or three dashboards. Last-modified order is already stored, so this costs nothing to build.</li>
+        <li><b>Count and a way out.</b> "24 dashboards" sets expectations; "View all" hands off to the normal record list for bulk work, which the picker should not try to replace.</li>
+        <li><b>Alphabetical within groups.</b> Predictable beats clever once a list is long enough to scan.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ================= SEARCH ================= -->
+  <section class="scene" id="s-search">
+    <p class="caption">
+      <strong>Two letters typed.</strong> Groups collapse away while filtering — they only help when
+      browsing, and they get in the way when narrowing. The count updates so it is clear the list is
+      filtered rather than short. An empty result offers the action that fixes it.
+    </p>
+
+    <div class="frame">
+      <div class="urlbar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <div class="url">ucc-sms.orb.local/app/<b>dashboard-studio</b></div>
+      </div>
+      <div class="studio-body">
+        <div class="studio-head">
+          <span class="app">Dashboard Studio</span>
+          <div style="margin-left:auto"><button class="btn primary">New dashboard</button></div>
+        </div>
+
+        <div style="display:flex;gap:34px;flex-wrap:wrap">
+          <div class="picker-wrap" style="margin-bottom:340px">
+            <button class="picker-trigger" aria-expanded="true">
+              <span class="name">Admission Intelligence</span>
+              <span class="pill s-draft">Draft</span>
+              <svg class="chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6.5 8 10.5l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="panel">
+              <div class="panel-search">
+                <div class="searchbox">
+                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.6" stroke="currentColor" stroke-width="1.7"/><path d="M10.3 10.3 14 14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                  <input type="text" value="ad" aria-label="Search dashboards">
+                </div>
+              </div>
+              <div class="panel-scroll">
+                <button class="item" aria-current="true">
+                  <span class="tick"><svg viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5 6.5 11.5 12.5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                  <span class="t">Admission Intelligence</span>
+                  <span class="pill s-draft">Draft</span>
+                </button>
+                <button class="item"><span class="tick"></span><span class="t">Admission Funnel by Programme</span><span class="pill s-review">Technical Review</span></button>
+                <button class="item"><span class="tick"></span><span class="t">Academic Progression Overview</span><span class="pill s-pub">Published</span></button>
+              </div>
+              <div class="panel-foot">
+                <span class="count">3 of 24</span>
+                <button class="linkish">View all →</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="picker-wrap">
+            <button class="picker-trigger" aria-expanded="true" style="opacity:.55">
+              <span class="name">Admission Intelligence</span>
+              <span class="pill s-draft">Draft</span>
+              <svg class="chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6.5 8 10.5l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="panel">
+              <div class="panel-search">
+                <div class="searchbox">
+                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.6" stroke="currentColor" stroke-width="1.7"/><path d="M10.3 10.3 14 14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                  <input type="text" value="intake conversion" aria-label="Search dashboards">
+                </div>
+              </div>
+              <div class="noresult">
+                <b>No dashboard matches “intake conversion”</b>
+                Create one, or clear the search to see all 24.
+              </div>
+              <div class="panel-foot">
+                <span class="count">0 of 24</span>
+                <button class="linkish">+ New dashboard</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  var tabs = document.querySelectorAll('.harness .switch button');
+  var map = { few:'s-few', many:'s-many', search:'s-search' };
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){
+      tabs.forEach(function(o){ o.setAttribute('aria-selected','false'); });
+      t.setAttribute('aria-selected','true');
+      Object.keys(map).forEach(function(k){
+        document.getElementById(map[k]).classList.toggle('is-active', k === t.dataset.scene);
+      });
+      window.scrollTo({top:0,behavior:'smooth'});
+    });
+  });
+</script>
+</body>
+</html>
