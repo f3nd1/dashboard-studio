@@ -51,6 +51,27 @@ class TestDashboardApi(unittest.TestCase):
         names = {row["name"] for row in self.studio.list_dashboards()}
         self.assertEqual(names, {"D1", "D2"})
 
+    def test_list_is_ordered_most_recently_modified_first(self):
+        """The picker's "Recent" group is this ordering and nothing else.
+
+        There is no separate recency field — it relies entirely on the endpoint
+        asking for modified desc, so that request is worth pinning down.
+        """
+        seen = {}
+        original = self.frappe.get_all
+
+        def spy(doctype, **kwargs):
+            seen.update(kwargs, doctype=doctype)
+            return original(doctype, **kwargs)
+
+        self.frappe.get_all = spy
+        self.studio.list_dashboards()
+        self.assertEqual(seen["doctype"], "DS Dashboard")
+        self.assertEqual(seen["order_by"], "modified desc")
+        # The picker renders a title and a status pill for every row.
+        for field in ("name", "dashboard_title", "status"):
+            self.assertIn(field, seen["fields"])
+
     def test_viewer_may_list_but_not_create(self):
         self.frappe._roles = {"Dashboard Studio Viewer"}
         self.assertEqual(len(self.studio.list_dashboards()), 2)
