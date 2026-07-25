@@ -433,7 +433,15 @@
     div.appendChild(el("div", "dss-node-kind", node.node_type));
     div.appendChild(el("div", "dss-node-label", node.label));
 
+    // A drag that ends over the node still fires a click; without this the
+    // drag would also pick a source, or silently create a mapping.
+    var dragged = false;
+
     div.addEventListener("click", function () {
+      if (dragged) {
+        dragged = false;
+        return;
+      }
       if (isSource) {
         self.state.pickedSource = self.state.pickedSource === node.node_id ? null : node.node_id;
       } else if (self.state.pickedSource) {
@@ -453,9 +461,13 @@
       var startX = e.clientX, startY = e.clientY;
       var baseX = node.pos_x, baseY = node.pos_y;
       var moved = false;
+      dragged = false;
       function onMove(ev) {
         var dx = ev.clientX - startX, dy = ev.clientY - startY;
-        if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+        if (Math.abs(dx) + Math.abs(dy) > 3) {
+          moved = true;
+          dragged = true; // consumed by the click handler above
+        }
         if (!moved) return;
         node.pos_x = Math.max(0, baseX + dx);
         node.pos_y = Math.max(0, baseY + dy);
