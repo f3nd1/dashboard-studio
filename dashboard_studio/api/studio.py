@@ -134,12 +134,18 @@ def get_studio_dashboard(dashboard: str):
         fields=["name", "section_title", "sort_order", "is_collapsed_default"],
         order_by="sort_order asc, section_title asc",
     )
+    # Deferred import: governance imports DS_READ_ROLES from this module.
+    from dashboard_studio.api.governance import publish_readiness
+
     # Resolved here, not stored: the record holds only the code.
     return {
         "dashboard": doc.as_dict(),
         "scope": describe(doc.get("subcriterion") or ""),
         "charts": charts,
         "sections": sections,
+        # The publish rules, evaluated for display. Same function the gate throws
+        # on — see publish_readiness's docstring for why there is only one.
+        "readiness": publish_readiness(dashboard),
     }
 
 

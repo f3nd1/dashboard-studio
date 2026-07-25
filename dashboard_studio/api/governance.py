@@ -106,27 +106,10 @@ def advance_status(dashboard: str, to_status: str):
             "Publishing is separated from editing on purpose."
         )
 
-    # Scope is optional while authoring and required to publish: an unscoped
-    # dashboard has nowhere to go on the Sophia side, and a code Sophia does not
-    # know does not fail there — it falls back to the criterion's default section
-    # and renders the wrong subcriterion's data under the right heading. Refuse
-    # here, naming the code, rather than let that reach a published dashboard.
     if to_status == PUBLISHED:
-        scope = (doc.get("subcriterion") or "").strip()
-        if not scope:
-            frappe.throw(
-                "This dashboard has no EduTrust subcriterion, so it cannot be "
-                "published — there is no section for it on the receiving platform."
-            )
-        if scope not in SUBCRITERIA:
-            frappe.throw(
-                f"Unknown EduTrust subcriterion '{scope}'. It is not one of the "
-                f"{len(SUBCRITERIA)} codes the receiving platform serves, so the "
-                "dashboard would be routed to the wrong section without any error."
-            )
-
-    if to_status == PUBLISHED:
-        _refuse_unpublishable_charts(dashboard)
+        blockers = publish_readiness(dashboard)["blockers"]
+        if blockers:
+            frappe.throw(" ".join(b["message"] for b in blockers))
 
     doc.status = to_status
     if to_status == PUBLISHED:
@@ -141,14 +124,53 @@ def advance_status(dashboard: str, to_status: str):
 _PASSING_COMPARISONS = ("Match", "Accepted")
 
 
-def _refuse_unpublishable_charts(dashboard: str):
-    """Block publishing on charts that are unlinked or unchecked, naming each.
+@frappe.whitelist()
+def publish_readiness(dashboard: str):
+    """Everything standing between this dashboard and Published, as facts.
 
-    Both are refusals rather than exclusions. Publishing a dashboard with the
-    offending charts silently dropped would produce something that looks
-    complete and is not, with nobody told — the same failure class as a silent
-    mis-route, and worse on audit evidence than visibly refusing.
+    ONE DEFINITION, TWO PRESENTATIONS. ``advance_status`` throws on the blockers
+    this returns; ``get_studio_dashboard`` displays them. **Do not add a second,
+    cheaper computation for the display path.** A readiness indicator that
+    disagrees with the gate would show "ready" and then refuse — worse than
+    either failure on its own, because it teaches people to distrust the
+    indicator rather than fix the dashboard. It is also exactly the fault
+    recorded in ``docs/SOPHIA_FAULT_PATTERN.md``: the same question answered by
+    two code paths, agreeing only until one of them is edited.
+
+    Three queries regardless of chart count. Every refusal names the records
+    responsible, because "not ready" without the list is another dead end.
     """
+    frappe.only_for(DS_READ_ROLES)
+    doc = frappe.get_doc("DS Dashboard", dashboard)
+    blockers = []
+
+    # Scope is optional while authoring and required to publish: an unscoped
+    # dashboard has nowhere to go on the Sophia side, and a code Sophia does not
+    # know does not fail there — it falls back to the criterion's default section
+    # and renders the wrong subcriterion's data under the right heading.
+    scope = (doc.get("subcriterion") or "").strip()
+    if not scope:
+        blockers.append({
+            "rule": "scope",
+            "summary": "No EduTrust subcriterion",
+            "charts": [],
+            "message": (
+                "This dashboard has no EduTrust subcriterion, so it cannot be "
+                "published — there is no section for it on the receiving platform."
+            ),
+        })
+    elif scope not in SUBCRITERIA:
+        blockers.append({
+            "rule": "scope_unknown",
+            "summary": f"Subcriterion '{scope}' is not one the platform serves",
+            "charts": [],
+            "message": (
+                f"Unknown EduTrust subcriterion '{scope}'. It is not one of the "
+                f"{len(SUBCRITERIA)} codes the receiving platform serves, so the "
+                "dashboard would be routed to the wrong section without any error."
+            ),
+        })
+
     charts = frappe.get_all(
         "DS Chart",
         filters={"dashboard": dashboard},
@@ -158,39 +180,65 @@ def _refuse_unpublishable_charts(dashboard: str):
     def label(chart):
         return chart.get("chart_title") or chart.get("name")
 
-    unlinked = [label(c) for c in charts if not c.get("metric")]
+    # Both chart rules refuse rather than exclude. Publishing with the offending
+    # charts silently dropped would produce something that looks complete and is
+    # not, with nobody told — worse on audit evidence than visibly refusing.
+    unlinked = sorted(label(c) for c in charts if not c.get("metric"))
     if unlinked:
-        frappe.throw(
-            "These charts have no metric, so there is nothing to publish for them: "
-            + ", ".join(sorted(unlinked))
-            + ". Link a metric or delete the chart."
-        )
+        blockers.append({
+            "rule": "chart_without_metric",
+            "summary": f"{len(unlinked)} chart(s) with no metric",
+            "charts": unlinked,
+            "message": (
+                "These charts have no metric, so there is nothing to publish for "
+                "them: " + ", ".join(unlinked) + ". Link a metric or delete the chart."
+            ),
+        })
 
-    # ponytail: one query per chart. Fine at a dashboard's scale (tens); batch on
-    # `chart in [...]` if a dashboard ever carries hundreds.
-    unchecked = []
-    for chart in charts:
-        rows = frappe.get_all(
+    linked = [c for c in charts if c.get("metric")]
+    passing_by_chart = {}
+    if linked:
+        # One batched read, not one per chart: this runs on every dashboard load
+        # now, not only at the moment someone presses publish.
+        for row in frappe.get_all(
             "DS Validation Comparison",
-            filters={"chart": chart["name"]},
-            fields=["status", "comparison_date"],
-        )
-        passing = [r for r in rows if r.get("status") in _PASSING_COMPARISONS]
+            filters={"chart": ["in", [c["name"] for c in linked]]},
+            fields=["chart", "status", "comparison_date"],
+        ):
+            if row.get("status") in _PASSING_COMPARISONS:
+                passing_by_chart.setdefault(row["chart"], []).append(row)
+
+    def is_current(chart):
+        passing = passing_by_chart.get(chart["name"], [])
         if not passing:
-            unchecked.append(label(chart))
-            continue
+            return False
         # A pass from before the chart was last edited proves nothing about it now.
         edited = frappe.utils.getdate(chart.get("modified"))
-        if not any(frappe.utils.getdate(r.get("comparison_date")) >= edited for r in passing):
-            unchecked.append(label(chart))
+        return any(frappe.utils.getdate(r.get("comparison_date")) >= edited for r in passing)
 
+    # Only charts that HAVE a metric are checked for validation — an unlinked
+    # chart is already named above, and naming it twice reads as two problems.
+    unchecked = sorted(label(c) for c in linked if not is_current(c))
     if unchecked:
-        frappe.throw(
-            "These charts have no validation newer than their last edit: "
-            + ", ".join(sorted(unchecked))
-            + ". Run each in the Validation Centre and resolve it to Match, or "
-            "accept the difference with a reason, before publishing."
-        )
+        blockers.append({
+            "rule": "chart_not_validated",
+            "summary": f"{len(unchecked)} chart(s) not validated since their last edit",
+            "charts": unchecked,
+            "message": (
+                "These charts have no validation newer than their last edit: "
+                + ", ".join(unchecked)
+                + ". Run each in the Validation Centre and resolve it to Match, or "
+                "accept the difference with a reason, before publishing."
+            ),
+        })
+
+    return {
+        "publishable": not blockers,
+        "blockers": blockers,
+        "charts_total": len(charts),
+        "charts_ready": sum(1 for c in linked if is_current(c)),
+        "scope_set": bool(scope and scope in SUBCRITERIA),
+    }
 
 
 @frappe.whitelist()

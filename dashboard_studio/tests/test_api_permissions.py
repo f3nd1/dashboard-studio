@@ -121,6 +121,13 @@ class TestApiRoleEnforcement(unittest.TestCase):
         with self.assertRaises(_PermissionError):
             self.studio.get_studio_dashboard("D1")
 
+    def test_the_read_carries_publish_readiness(self):
+        """Folded into the existing payload, so the editor needs no extra call."""
+        self._as("Dashboard Studio Viewer")
+        readiness = self.studio.get_studio_dashboard("D1")["readiness"]
+        self.assertIn("publishable", readiness)
+        self.assertIn("blockers", readiness)
+
     # ---- writes: save_chart ----
     def test_editor_can_write_chart(self):
         self._as("Dashboard Studio Editor")

@@ -69,7 +69,12 @@ def _make_fake_frappe(store):
     def get_all(doctype, filters=None, fields=None, order_by=None, limit=None, **kwargs):
         rows = list(store.get(doctype, {}).values())
         for key, value in (filters or {}).items():
-            rows = [r for r in rows if r.get(key) == value]
+            # The batched read uses ["in", [...]]; a fake that only knew equality
+            # would have quietly matched nothing and reported everything unchecked.
+            if isinstance(value, (list, tuple)) and len(value) == 2 and value[0] == "in":
+                rows = [r for r in rows if r.get(key) in value[1]]
+            else:
+                rows = [r for r in rows if r.get(key) == value]
         return [dict(r) for r in rows][: limit or None]
 
     def count(doctype, filters=None):
@@ -318,6 +323,97 @@ class TestGovernanceApi(unittest.TestCase):
         self.assertEqual(impact["metrics"], 2)
         # M-shared is on a chart in another dashboard too; M-solo is not.
         self.assertEqual(impact["shared_metrics"], [{"metric": "M-shared", "used_by_charts": 2}])
+
+    # ---- the same rules, evaluated for display ----
+    #
+    # The load-bearing property is that these are not a second implementation:
+    # a readiness indicator that disagreed with the gate would show "ready" and
+    # then refuse. Each test below pairs a display assertion with the gate's
+    # behaviour on the identical fixture.
+    def test_a_publishable_dashboard_reports_ready(self):
+        self._as("Dashboard Studio Viewer")
+        readiness = self.gov.publish_readiness("D1")
+        self.assertTrue(readiness["publishable"])
+        self.assertEqual(readiness["blockers"], [])
+        self.assertEqual(readiness["charts_ready"], 2)
+        self.assertEqual(readiness["charts_total"], 2)
+
+    def test_display_and_gate_agree_on_every_blocker(self):
+        """Whatever the display names, the gate refuses on — and vice versa."""
+        cases = {
+            "scope": lambda: self.store["DS Dashboard"]["D1"].update({"subcriterion": ""}),
+            "scope_unknown": lambda: self.store["DS Dashboard"]["D1"].update(
+                {"subcriterion": "9.9.9"}),
+            "chart_without_metric": lambda: self.store["DS Chart"]["C2"].update({"metric": ""}),
+            "chart_not_validated": lambda: self.store["DS Validation Comparison"].pop("V-C2"),
+        }
+        for rule, break_it in cases.items():
+            with self.subTest(rule=rule):
+                self.setUp()
+                break_it()
+                self._as("Dashboard Studio QA Approver", "Dashboard Studio Viewer")
+                readiness = self.gov.publish_readiness("D1")
+                self.assertFalse(readiness["publishable"])
+                self.assertIn(rule, [b["rule"] for b in readiness["blockers"]])
+
+                self.store["DS Dashboard"]["D1"]["status"] = "QA Approval"
+                with self.assertRaises(_ValidationError) as caught:
+                    self.gov.advance_status("D1", "Published")
+                # The refusal text IS the display text — not a parallel wording.
+                for blocker in readiness["blockers"]:
+                    self.assertIn(blocker["message"], str(caught.exception))
+
+    def test_every_blocker_names_the_charts_responsible(self):
+        self.store["DS Chart"]["C2"]["metric"] = ""
+        self._as("Dashboard Studio Viewer")
+        blocker = [b for b in self.gov.publish_readiness("D1")["blockers"]
+                   if b["rule"] == "chart_without_metric"][0]
+        self.assertEqual(blocker["charts"], ["B"])
+
+    def test_an_unlinked_chart_is_not_also_reported_as_unvalidated(self):
+        """One problem, named once. Two entries would read as two faults."""
+        self.store["DS Chart"]["C2"]["metric"] = ""
+        del self.store["DS Validation Comparison"]["V-C2"]
+        self._as("Dashboard Studio Viewer")
+        rules = [b["rule"] for b in self.gov.publish_readiness("D1")["blockers"]]
+        self.assertIn("chart_without_metric", rules)
+        self.assertNotIn("chart_not_validated", rules)
+
+    def test_charts_ready_counts_only_linked_and_currently_validated(self):
+        self.store["DS Chart"]["C1"]["modified"] = "2026-07-25 09:00:00"  # newer than its pass
+        self.store["DS Chart"]["C2"]["metric"] = ""
+        self._as("Dashboard Studio Viewer")
+        readiness = self.gov.publish_readiness("D1")
+        self.assertEqual(readiness["charts_ready"], 0)
+        self.assertEqual(readiness["charts_total"], 2)
+
+    def test_all_blockers_are_reported_together_not_one_at_a_time(self):
+        """Fixing one and rediscovering the next is the problem being fixed."""
+        self.store["DS Dashboard"]["D1"]["subcriterion"] = ""
+        self.store["DS Chart"]["C2"]["metric"] = ""
+        del self.store["DS Validation Comparison"]["V-C1"]
+        self._as("Dashboard Studio Viewer")
+        rules = [b["rule"] for b in self.gov.publish_readiness("D1")["blockers"]]
+        self.assertEqual(rules, ["scope", "chart_without_metric", "chart_not_validated"])
+
+    def test_readiness_is_read_gated(self):
+        self._as()
+        with self.assertRaises(_PermissionError):
+            self.gov.publish_readiness("D1")
+
+    def test_the_comparison_read_is_batched(self):
+        """Three queries whatever the chart count — it now runs on every load."""
+        calls = []
+        inner = self.frappe.get_all
+        self.frappe.get_all = lambda dt, **kw: (calls.append(dt), inner(dt, **kw))[1]
+        for i in range(20):
+            self.store["DS Chart"][f"X{i}"] = {
+                "name": f"X{i}", "dashboard": "D1", "chart_title": f"X{i}",
+                "metric": "M-solo", "modified": "2026-07-20 09:00:00",
+            }
+        self._as("Dashboard Studio Viewer")
+        self.gov.publish_readiness("D1")
+        self.assertEqual(calls.count("DS Validation Comparison"), 1, calls)
 
     # ---- native version history, not a bespoke one ----
     def test_version_history_comes_from_frappe_version_records(self):
