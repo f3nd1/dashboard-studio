@@ -324,6 +324,12 @@
           row.appendChild(mark);
           row.appendChild(el("span", "dss-picker-name", core.dashboardTitle(d)));
           row.appendChild(statusPill(d.status));
+          // A row built from separate spans has no separator in its accessible
+          // name, so "1234" + "Draft" is announced as "1234Draft". Name it
+          // explicitly rather than padding the markup with whitespace, which
+          // would fix the reading and leave the structure fragile.
+          row.setAttribute("aria-label",
+            core.dashboardTitle(d) + ", " + (d.status || "Draft"));
           row.addEventListener("click", function () {
             self.togglePicker(false);
             if (!isCurrent) self.openDashboard(d.name);
@@ -762,7 +768,7 @@
       var scopeSelect = el("select", "dss-input");
       scopeSelect.setAttribute("aria-label", "EduTrust subcriterion");
       var current = this.state.dashboard.subcriterion || "";
-      var none = el("option", null, "— Not scoped —");
+      var none = el("option", null, "Choose a subcriterion…");
       none.value = "";
       if (!current) none.selected = true;
       scopeSelect.appendChild(none);
@@ -1938,9 +1944,34 @@
     }
     band.appendChild(stepper);
 
+    // What stands between this dashboard and Published, ABOVE the buttons rather
+    // than after pressing one. The chip promises this list, so this is where the
+    // promise is kept; both read the same publish_readiness payload.
+    var readiness = this.state.readiness;
+    if (readiness && (readiness.blockers || []).length) {
+      var blocked = el("div", "dss-gov-blockers");
+      blocked.appendChild(el("div", "dss-gov-blockers-head",
+        "Not ready to publish — " + readiness.blockers.length +
+        (readiness.blockers.length === 1 ? " thing to resolve" : " things to resolve")));
+      readiness.blockers.forEach(function (b) {
+        var item = el("div", "dss-gov-blocker");
+        item.appendChild(el("div", "dss-gov-blocker-what", b.summary));
+        // The named records, not just the count — "not ready" without the list
+        // is the dead end this whole change is about.
+        if ((b.charts || []).length) {
+          item.appendChild(el("div", "dss-gov-blocker-who", b.charts.join(", ")));
+        }
+        blocked.appendChild(item);
+      });
+      band.appendChild(blocked);
+    } else if (readiness) {
+      band.appendChild(el("div", "dss-gov-ready", "Nothing is blocking publication."));
+    }
+
     var actions = el("div", "dss-gov-actions");
     (gov.transitions || []).forEach(function (move) {
-      var btn = el("button", "dss-btn" + (move.allowed ? " dss-btn-primary" : ""), move.label);
+      var btn = el("button", "dss-btn dss-btn-transition" +
+        (move.allowed ? " is-allowed" : ""), move.label);
       if (!move.allowed) {
         btn.disabled = true;
         // Say WHY it is unavailable rather than hiding the step.
