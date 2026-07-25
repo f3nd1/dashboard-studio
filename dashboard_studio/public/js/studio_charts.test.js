@@ -36,9 +36,33 @@ var table = charts.render("Table", rows);
 assert.strictEqual((table.html.match(/<tr><td>/g) || []).length, 3, "table renders one row per group");
 assert.ok(table.html.indexOf("academic_year") !== -1, "table header shows dimension");
 
-// Unsupported types stub visibly instead of guessing.
+// Trend: area + line + emphasized endpoint
+var trend = charts.render("Trend Chart", rows);
+assert.ok(trend.supported && trend.html.indexOf("<polygon") !== -1, "trend has an area fill");
+assert.ok(trend.html.indexOf("<circle") !== -1, "trend marks the latest value");
+
+// Funnel: one band per group, ordered by magnitude (widest first)
+var funnel = charts.render("Funnel", rows);
+assert.strictEqual((funnel.html.match(/<rect /g) || []).length, 3, "funnel band per group");
+var widths = (funnel.html.match(/width="([\d.]+)"/g) || []).map(function (w) {
+  return parseFloat(w.replace(/[^\d.]/g, ""));
+});
+assert.ok(widths[0] >= widths[1] && widths[1] >= widths[2], "funnel tapers by count");
+
+// Radar: polygon over >=3 groups; degenerate below that
 var radar = charts.render("Radar", rows);
-assert.ok(!radar.supported && radar.html.indexOf("not yet supported") !== -1, "unsupported stub");
+assert.ok(radar.supported && radar.html.indexOf("<polygon") !== -1, "radar renders a polygon");
+var radar2 = charts.render("Radar", rows.slice(0, 2));
+assert.ok(radar2.html.indexOf("at least 3 groups") !== -1, "radar declines under 3 groups");
+
+// Unsupported types stub with the SPECIFIC reason, not a bare message.
+var matrix = charts.render("Matrix", rows);
+assert.ok(!matrix.supported, "Matrix unsupported");
+assert.ok(matrix.html.indexOf("two dimensions") !== -1, "Matrix explains why");
+var gauge = charts.render("Gauge", rows);
+assert.ok(gauge.html.indexOf("target") !== -1, "Gauge explains the missing target");
+var unknown = charts.render("Totally Made Up", rows);
+assert.ok(!unknown.supported, "unknown type still stubs safely");
 
 // Empty result -> No data placeholder, still supported.
 var none = charts.render("Bar Chart", []);

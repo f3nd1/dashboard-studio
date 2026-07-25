@@ -11,9 +11,28 @@
 (function (root) {
   "use strict";
 
-  // Chart types that map naturally to count-by-group data. The other schema
-  // types render a visible "not yet supported" stub instead of guessing.
-  var SUPPORTED = ["KPI Card", "Bar Chart", "Line Chart", "Donut Chart", "Table"];
+  // Chart types that map naturally to count-by-group data — the only shape the
+  // engine produces ([{<dimension>: label, count: n}]).
+  var SUPPORTED = [
+    "KPI Card", "Bar Chart", "Line Chart", "Donut Chart", "Table",
+    "Trend Chart", "Funnel", "Radar",
+  ];
+
+  // The rest are stubbed with the specific reason they cannot be drawn from
+  // count-by-group data, rather than a bare "not supported". Each would need
+  // either a second dimension, an ordering the data does not carry, or a
+  // target/relationship the schema has no field for.
+  var UNSUPPORTED_REASONS = {
+    "Gauge": "needs a target or maximum to measure against; DS Metric has no target field",
+    "Lifecycle": "needs an ordered stage sequence — groups arrive alphabetically, so any order shown would be invented",
+    "Flow": "needs source-to-target pairs with volumes; the engine groups by a single dimension",
+    "Matrix": "needs two dimensions (rows and columns); the engine groups by one",
+    "Risk Matrix": "needs two dimensions (likelihood and impact); the engine groups by one",
+    "Decision Diagram": "needs branch/condition structure, which counts do not describe",
+    "Network Diagram": "needs relationships between records, not aggregated counts",
+    "Reconciliation Diagram": "needs two result sets to compare — that is the DS Validation Comparison feature",
+    "Maturity Ladder": "needs a defined level scale and a current position, neither of which counts provide",
+  };
 
   // Accent-first palette, matches studio.css.
   var COLORS = ["#0d7481", "#4fa3ad", "#8bc3ca", "#c2dfe3", "#1b4b52", "#6b5cc4"];
@@ -102,6 +121,76 @@
     return '<svg viewBox="0 0 42 42" class="dss-chart-svg dss-chart-donut">' + segments + "</svg>";
   }
 
+  // Trend = the line, plus an area fill and an emphasized endpoint so the
+  // latest value reads at a glance.
+  function trend(rows) {
+    var s = series(rows);
+    if (s.values.length === 1) return line(rows);
+    var max = Math.max.apply(null, s.values.concat([1]));
+    var step = 92 / (s.values.length - 1);
+    var pts = s.values.map(function (v, i) {
+      return { x: 4 + i * step, y: 54 - (v / max) * 48 };
+    });
+    var path = pts.map(function (p) { return p.x.toFixed(2) + "," + p.y.toFixed(2); }).join(" ");
+    var last = pts[pts.length - 1];
+    return '<svg viewBox="0 0 100 60" preserveAspectRatio="none" class="dss-chart-svg">' +
+      '<polygon points="4,56 ' + path + " " + last.x.toFixed(2) + ',56" fill="' + COLORS[0] +
+      '" fill-opacity="0.15"/>' +
+      '<polyline points="' + path + '" fill="none" stroke="' + COLORS[0] + '" stroke-width="2"/>' +
+      '<circle cx="' + last.x.toFixed(2) + '" cy="' + last.y.toFixed(2) + '" r="2" fill="' +
+      COLORS[0] + '"><title>' + esc(s.labels[s.labels.length - 1]) + ": " +
+      esc(s.values[s.values.length - 1]) + "</title></circle></svg>";
+  }
+
+  // Funnel = groups ordered by magnitude, tapering. Order is by count
+  // descending (what a funnel shows); the data carries no process order.
+  function funnel(rows) {
+    var s = series(rows);
+    var pairs = s.labels.map(function (label, i) { return { label: label, value: s.values[i] }; });
+    pairs.sort(function (a, b) { return b.value - a.value; });
+    var max = Math.max.apply(null, pairs.map(function (p) { return p.value; }).concat([1]));
+    var band = 60 / pairs.length;
+    var bars = pairs.map(function (p, i) {
+      var w = (p.value / max) * 96;
+      return '<rect x="' + ((100 - w) / 2).toFixed(2) + '" y="' + (i * band + band * 0.12).toFixed(2) +
+        '" width="' + w.toFixed(2) + '" height="' + (band * 0.76).toFixed(2) +
+        '" fill="' + COLORS[i % COLORS.length] + '"><title>' + esc(p.label) + ": " +
+        esc(p.value) + "</title></rect>";
+    }).join("");
+    return '<svg viewBox="0 0 100 60" preserveAspectRatio="none" class="dss-chart-svg">' + bars + "</svg>";
+  }
+
+  // Radar = one axis per group, radius proportional to count. Square viewBox so
+  // the shape is not distorted (no preserveAspectRatio="none" here).
+  function radar(rows) {
+    var s = series(rows);
+    if (s.values.length < 3) {
+      return '<div class="dss-nochart">Radar needs at least 3 groups (this metric returned ' +
+        s.values.length + ")</div>";
+    }
+    var max = Math.max.apply(null, s.values.concat([1]));
+    var point = function (value, i) {
+      var angle = (-90 + (360 / s.values.length) * i) * (Math.PI / 180);
+      var r = (value / max) * 38;
+      return (50 + r * Math.cos(angle)).toFixed(2) + "," + (50 + r * Math.sin(angle)).toFixed(2);
+    };
+    var spokes = s.values.map(function (v, i) {
+      return '<line x1="50" y1="50" x2="' + point(max, i).split(",")[0] + '" y2="' +
+        point(max, i).split(",")[1] + '" stroke="' + COLORS[3] + '" stroke-width="0.5"/>';
+    }).join("");
+    var shape = s.values.map(point).join(" ");
+    var titles = s.values.map(function (v, i) {
+      return '<circle cx="' + point(v, i).split(",")[0] + '" cy="' + point(v, i).split(",")[1] +
+        '" r="1.6" fill="' + COLORS[0] + '"><title>' + esc(s.labels[i]) + ": " + esc(v) +
+        "</title></circle>";
+    }).join("");
+    return '<svg viewBox="0 0 100 100" class="dss-chart-svg dss-chart-square">' +
+      '<circle cx="50" cy="50" r="38" fill="none" stroke="' + COLORS[3] + '" stroke-width="0.5"/>' +
+      spokes +
+      '<polygon points="' + shape + '" fill="' + COLORS[0] + '" fill-opacity="0.25" stroke="' +
+      COLORS[0] + '" stroke-width="1.5"/>' + titles + "</svg>";
+  }
+
   function table(rows) {
     var dim = inferDimension(rows);
     var body = rows.map(function (r) {
@@ -111,22 +200,30 @@
       "</th><th>count</th></tr></thead><tbody>" + body + "</tbody></table>";
   }
 
+  var RENDERERS = {
+    "KPI Card": kpi,
+    "Bar Chart": bar,
+    "Line Chart": line,
+    "Donut Chart": donut,
+    "Table": table,
+    "Trend Chart": trend,
+    "Funnel": funnel,
+    "Radar": radar,
+  };
+
   function render(chartType, rows) {
-    if (SUPPORTED.indexOf(chartType) === -1) {
+    var draw = RENDERERS[chartType];
+    if (!draw) {
+      var reason = UNSUPPORTED_REASONS[chartType];
       return {
         supported: false,
-        html: '<div class="dss-nochart">' + esc(chartType || "This chart type") +
-          " is not yet supported</div>",
+        html: '<div class="dss-nochart"><strong>' + esc(chartType || "This chart type") +
+          "</strong> cannot be drawn from count-by-group data — " +
+          esc(reason || "no rendering is defined for it yet") + "</div>",
       };
     }
     if (!rows || !rows.length) return { supported: true, html: empty() };
-    var html;
-    if (chartType === "KPI Card") html = kpi(rows);
-    else if (chartType === "Bar Chart") html = bar(rows);
-    else if (chartType === "Line Chart") html = line(rows);
-    else if (chartType === "Donut Chart") html = donut(rows);
-    else html = table(rows);
-    return { supported: true, html: html };
+    return { supported: true, html: draw(rows) };
   }
 
   var api = {
