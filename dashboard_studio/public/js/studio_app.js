@@ -985,17 +985,34 @@
 
   // Re-read the dashboard so section order and chart assignment come back from
   // the server rather than being guessed at locally.
+  // The dashboard actually open — NOT the one named in the route.
+  //
+  // options.dashboard is only set when the page was opened at
+  // /app/dashboard-studio/<name>. The picker and the default landing both open a
+  // dashboard through openDashboard() without touching it, so in every other
+  // case it is null (a reload then asks the server for a dashboard called
+  // "null", which 404s) or stale (pointing at whichever dashboard the route
+  // named before the user switched).
+  App.prototype.currentDashboard = function () {
+    return (this.state.dashboard && this.state.dashboard.name) || this.options.dashboard || null;
+  };
+
   App.prototype.reloadDashboard = function (describe) {
     var self = this;
     root.frappe.call({
       method: "dashboard_studio.api.studio.get_studio_dashboard",
-      args: { dashboard: this.options.dashboard },
+      args: { dashboard: this.currentDashboard() },
     }).then(function (r) {
       var data = r.message || {};
       self.state.charts = data.charts || [];
       self.state.sections = data.sections || [];
       if (self.state.view === "design") self.refresh();
       toast(describe);
+    }).catch(function () {
+      // Without this the write succeeded server-side and the screen never
+      // changed, so the natural response was to click again — which is how one
+      // failure became six charts nobody could see.
+      toast("Saved, but the dashboard could not be reloaded. Refresh to see it.");
     });
   };
 
@@ -1006,7 +1023,7 @@
     var self = this;
     this.sectionCall(
       "create_section",
-      { dashboard: this.options.dashboard, section_title: title },
+      { dashboard: this.currentDashboard(), section_title: title },
       function () {
         self.state.sections = (self.state.sections || []).concat([{
           name: "mock-sec-" + (self.state.sections.length + 1),
@@ -1041,7 +1058,7 @@
     var self = this;
     this.sectionCall(
       "reorder_sections",
-      { dashboard: this.options.dashboard, order: JSON.stringify(order) },
+      { dashboard: this.currentDashboard(), order: JSON.stringify(order) },
       function () {
         var byName = {};
         self.state.sections.forEach(function (s) { byName[s.name] = s; });
@@ -1774,7 +1791,7 @@
     this.canvas.innerHTML = "";
 
     if (this.state.governance) { this.paintGovernance(); return; }
-    if (!hasFrappe() || !this.options.dashboard) {
+    if (!hasFrappe() || this.state.mock || !this.currentDashboard()) {
       this.state.governance = (root.DSStudioMock || {}).MOCK_GOVERNANCE || null;
       this.paintGovernance();
       return;
@@ -1782,7 +1799,7 @@
     this.canvas.appendChild(el("div", "dss-hint", "Loading governance…"));
     root.frappe.call({
       method: "dashboard_studio.api.governance.get_governance",
-      args: { dashboard: this.options.dashboard },
+      args: { dashboard: this.currentDashboard() },
     }).then(function (r) {
       self.state.governance = r.message || null;
       if (self.state.view === "governance") self.paintGovernance();
@@ -1882,7 +1899,7 @@
 
   App.prototype.advanceStage = function (move) {
     var self = this;
-    if (!hasFrappe() || !this.options.dashboard) {
+    if (!hasFrappe() || this.state.mock || !this.currentDashboard()) {
       this.state.governance.status = move.to;
       this.paintGovernance();
       toast("Moved to " + move.to + " (mock — not persisted)");
@@ -1890,7 +1907,7 @@
     }
     root.frappe.call({
       method: "dashboard_studio.api.governance.advance_status",
-      args: { dashboard: this.options.dashboard, to_status: move.to },
+      args: { dashboard: this.currentDashboard(), to_status: move.to },
     }).then(function (r) {
       self.state.governance = null; // re-read, so the next legal moves come from the server
       self.renderGovernance();
