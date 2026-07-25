@@ -34,8 +34,12 @@
     "Maturity Ladder": "needs a defined level scale and a current position, neither of which counts provide",
   };
 
-  // Accent-first palette, matches studio.css.
-  var COLORS = ["#0d7481", "#4fa3ad", "#8bc3ca", "#c2dfe3", "#1b4b52", "#6b5cc4"];
+  // Accent-first palette, matches studio.css (blue-led, per the prototype's
+  // visual language). Constants only — no rendering logic depends on them.
+  var COLORS = ["#3b76c5", "#17345d", "#6c5ac7", "#23815f", "#d6a73a", "#b86f16"];
+  // Funnel stages are one process, not unrelated categories, so they take a
+  // single-hue ramp rather than the categorical palette.
+  var COLORS_SEQ = ["#17345d", "#245083", "#3b76c5", "#7aa5db", "#b9d0ec"];
 
   function esc(value) {
     return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
@@ -154,8 +158,8 @@
       var w = (p.value / max) * 96;
       return '<rect x="' + ((100 - w) / 2).toFixed(2) + '" y="' + (i * band + band * 0.12).toFixed(2) +
         '" width="' + w.toFixed(2) + '" height="' + (band * 0.76).toFixed(2) +
-        '" fill="' + COLORS[i % COLORS.length] + '"><title>' + esc(p.label) + ": " +
-        esc(p.value) + "</title></rect>";
+        '" fill="' + COLORS_SEQ[Math.min(i, COLORS_SEQ.length - 1)] + '"><title>' +
+        esc(p.label) + ": " + esc(p.value) + "</title></rect>";
     }).join("");
     return '<svg viewBox="0 0 100 60" preserveAspectRatio="none" class="dss-chart-svg">' + bars + "</svg>";
   }
@@ -217,9 +221,12 @@
       var reason = UNSUPPORTED_REASONS[chartType];
       return {
         supported: false,
-        html: '<div class="dss-nochart"><strong>' + esc(chartType || "This chart type") +
+        // Single wrapper element: .dss-nochart centres with flex, so loose inline
+        // content would become separate flex items and break mid-sentence.
+        html: '<div class="dss-nochart"><span><strong>' +
+          esc(chartType || "This chart type") +
           "</strong> cannot be drawn from count-by-group data — " +
-          esc(reason || "no rendering is defined for it yet") + "</div>",
+          esc(reason || "no rendering is defined for it yet") + "</span></div>",
       };
     }
     if (!rows || !rows.length) return { supported: true, html: empty() };
