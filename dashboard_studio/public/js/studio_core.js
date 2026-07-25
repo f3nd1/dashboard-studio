@@ -227,6 +227,77 @@
     return { rows: rows, errors: errors };
   }
 
+  // ---- Dashboard picker ----
+  //
+  // Scale features switch on only past a threshold, so a short list stays a
+  // short list: no search box, no group headers, no reason to read twice.
+  var PICKER_SCALE_THRESHOLD = 8; // above this — 9 or more — search + grouping
+  var PICKER_RECENT_COUNT = 5;
+
+  function dashboardTitle(d) {
+    return String((d && (d.dashboard_title || d.name)) || "");
+  }
+
+  // Shape the picker's contents for a given list and search query.
+  //
+  // Groups are "Recent" (the order list_dashboards already returns, which is
+  // last-modified, so it costs nothing) then "All dashboards" alphabetically —
+  // predictable beats clever once a list is long enough to scan. While a search
+  // is active the groups collapse to a single flat list: they help browsing and
+  // get in the way of narrowing.
+  function pickerModel(dashboards, options) {
+    var list = (dashboards || []).slice();
+    var opts = options || {};
+    var total = list.length;
+    var searchable = total > PICKER_SCALE_THRESHOLD;
+    // A list too short to have a search box cannot be filtered.
+    var query = searchable ? String(opts.query || "").trim() : "";
+    var groups;
+
+    if (query) {
+      var needle = query.toLowerCase();
+      groups = [{
+        title: null,
+        items: list.filter(function (d) {
+          return dashboardTitle(d).toLowerCase().indexOf(needle) !== -1;
+        }),
+      }];
+    } else if (searchable) {
+      groups = [
+        { title: "Recent", items: list.slice(0, PICKER_RECENT_COUNT) },
+        {
+          title: "All dashboards",
+          items: list.slice().sort(function (a, b) {
+            return dashboardTitle(a).localeCompare(dashboardTitle(b));
+          }),
+        },
+      ];
+    } else {
+      groups = [{ title: null, items: list }];
+    }
+
+    return {
+      groups: groups,
+      total: total,
+      // What the footer reports: while filtering this is the match count, so a
+      // narrowed list never reads as a short one.
+      shown: query ? groups[0].items.length : total,
+      searchable: searchable,
+      query: query,
+    };
+  }
+
+  // Every row the picker will render, in display order. This is what the
+  // keyboard walks — group headers are labels, not stops. A dashboard listed
+  // under both Recent and All appears twice, because it is two rows on screen.
+  function pickerRows(model) {
+    var rows = [];
+    ((model && model.groups) || []).forEach(function (g) {
+      (g.items || []).forEach(function (d) { rows.push(d); });
+    });
+    return rows;
+  }
+
   // Move a section one place up or down. Returns the reordered names, or null
   // if the move is a no-op (already at the end it is moving toward), so the
   // caller can skip a pointless save.
@@ -363,6 +434,11 @@
     validationSummary: validationSummary,
     canAccept: canAccept,
     parseReferenceRows: parseReferenceRows,
+    pickerModel: pickerModel,
+    pickerRows: pickerRows,
+    dashboardTitle: dashboardTitle,
+    PICKER_SCALE_THRESHOLD: PICKER_SCALE_THRESHOLD,
+    PICKER_RECENT_COUNT: PICKER_RECENT_COUNT,
     VALIDATION_STATUSES: VALIDATION_STATUSES,
     moveSection: moveSection,
     mergeMappings: mergeMappings,

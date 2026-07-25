@@ -220,4 +220,80 @@ assert.strictEqual(core.parseReferenceRows(" ,4").errors.length, 1, "blank label
 assert.deepStrictEqual(core.parseReferenceRows("   "), { rows: [], errors: [] },
   "empty input is empty, not an error");
 
+// ---- pickerModel: the dashboard picker's scale behaviour ----
+//
+// Fixture dashboards arrive the way list_dashboards returns them: modified desc.
+function dash(n, title, status) {
+  return { name: title, dashboard_title: title, status: status || "Draft" };
+}
+var small = ["Delta", "Alpha", "Charlie"].map(function (t, i) { return dash(i, t); });
+var big = ["I", "H", "G", "F", "E", "D", "C", "B", "A"].map(function (t, i) { return dash(i, t); });
+
+// 8 or fewer: no search box, no grouping — a short list stays light.
+var eight = big.slice(0, 8);
+var m8 = core.pickerModel(eight, {});
+assert.strictEqual(m8.searchable, false, "8 dashboards is not above the threshold");
+assert.strictEqual(m8.groups.length, 1, "no grouping at 8");
+assert.strictEqual(m8.groups[0].title, null, "the single group is unlabelled");
+assert.strictEqual(m8.groups[0].items.length, 8, "all 8 listed");
+assert.strictEqual(m8.groups[0].items[0].dashboard_title, "I",
+  "ungrouped keeps the server's modified-desc order");
+
+// Above 8: search box and grouping switch on.
+var m9 = core.pickerModel(big, {});
+assert.strictEqual(m9.searchable, true, "9 is above the threshold");
+assert.strictEqual(m9.groups.length, 2, "Recent + All dashboards");
+assert.strictEqual(m9.groups[0].title, "Recent");
+assert.strictEqual(m9.groups[1].title, "All dashboards");
+assert.strictEqual(m9.groups[0].items.length, 5, "Recent is capped");
+assert.deepStrictEqual(m9.groups[0].items.map(function (d) { return d.dashboard_title; }),
+  ["I", "H", "G", "F", "E"], "Recent is last-modified order, untouched");
+assert.deepStrictEqual(m9.groups[1].items.map(function (d) { return d.dashboard_title; }),
+  ["A", "B", "C", "D", "E", "F", "G", "H", "I"], "All dashboards is alphabetical");
+assert.strictEqual(big[0].dashboard_title, "I", "sorting did not mutate the caller's array");
+
+// Searching narrows, and collapses the groups away: they help browsing, not narrowing.
+var searched = core.pickerModel(big, { query: "a" });
+assert.strictEqual(searched.groups.length, 1, "groups collapse while searching");
+assert.strictEqual(searched.groups[0].title, null);
+assert.deepStrictEqual(searched.groups[0].items.map(function (d) { return d.dashboard_title; }),
+  ["A"], "filtered by title");
+assert.strictEqual(searched.searchable, true, "the search box stays available while searching");
+
+// Counts drive the footer: a filtered list must not read as a short one.
+assert.strictEqual(m9.total, 9);
+assert.strictEqual(m9.shown, 9, "unfiltered shows everything");
+assert.strictEqual(searched.shown, 1);
+assert.strictEqual(searched.total, 9, "total is the whole list, not the filtered one");
+
+// Matching ignores case and surrounding space, and matches anywhere in the title.
+var mixed = core.pickerModel(
+  [dash(0, "Admission Overview")].concat(big), { query: "  VIEW " });
+assert.deepStrictEqual(mixed.groups[0].items.map(function (d) { return d.dashboard_title; }),
+  ["Admission Overview"], "case-insensitive substring match");
+
+// Nothing matched — the caller needs to know, and needs the query back to say so.
+var none = core.pickerModel(big, { query: "zzz" });
+assert.strictEqual(none.shown, 0);
+assert.strictEqual(none.query, "zzz", "trimmed query returned for the empty message");
+assert.strictEqual(none.groups[0].items.length, 0);
+
+// A short list never gets a search box, so a query it cannot produce is ignored.
+var smallQueried = core.pickerModel(small, { query: "alpha" });
+assert.strictEqual(smallQueried.searchable, false);
+assert.strictEqual(smallQueried.shown, 3, "short lists are never filtered");
+
+// Flat rows, in display order, are what the keyboard walks — group headers are
+// not stops.
+assert.deepStrictEqual(core.pickerRows(m9).map(function (d) { return d.dashboard_title; }),
+  ["I", "H", "G", "F", "E", "A", "B", "C", "D", "E", "F", "G", "H", "I"],
+  "every rendered row, groups flattened, duplicates and all");
+assert.strictEqual(core.pickerRows(none).length, 0, "no rows when nothing matched");
+
+// Empty input is a real state, not a crash.
+var empty = core.pickerModel([], {});
+assert.strictEqual(empty.total, 0);
+assert.strictEqual(empty.searchable, false);
+assert.strictEqual(core.pickerRows(empty).length, 0);
+
 console.log("studio_core.test.js — all assertions passed");
