@@ -270,7 +270,17 @@
 .dss-table th { font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .5px;
   color: var(--dss-muted); }
 .dss-nochart { color: var(--dss-muted); font-size: 11px; line-height: 1.5; display: flex;
+  flex-direction: column; gap: 4px;
   align-items: center; justify-content: center; height: 100%; text-align: center; padding: 0 6px; }
+/* The remedy, on the card that needs it. Hidden on a card too small to hold it
+   rather than clipped mid-word. */
+.dss-nochart span { font-size: 10px; color: var(--dss-muted-2, var(--dss-muted)); opacity: .85; }
+.dss-card-body[style*="height: 4"] .dss-nochart span { display: none; }
+
+/* Load failure inside a workspace, with its retry. Same shape as the landing
+   failure: a fact plus the way out of it. */
+.dss-loadfail { display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  padding: 14px 0; }
 /* Resize grip — size is a hit target, keep it. */
 .dss-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 50%, var(--dss-line-dark) 50%); }

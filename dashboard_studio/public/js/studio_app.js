@@ -536,6 +536,19 @@
       [retry, this.demoButton("You chose the demo after a failed load.")]);
   };
 
+  // In-canvas load failure. Matches the landing failure's shape: say what broke
+  // and offer the retry, rather than printing the fact and stopping there.
+  App.prototype.canvasError = function (message, retryFn) {
+    var self = this;
+    this.canvas.innerHTML = "";
+    var box = el("div", "dss-loadfail");
+    box.appendChild(el("p", "dss-hint", message));
+    var retry = el("button", "dss-btn", "Try again");
+    retry.addEventListener("click", function () { retryFn.call(self); });
+    box.appendChild(retry);
+    this.canvas.appendChild(box);
+  };
+
   App.prototype.newDashboard = function () {
     var self = this;
     if (!hasFrappe()) { toast("Creating a dashboard needs the server."); return; }
@@ -784,9 +797,9 @@
       list.appendChild(item);
     });
     wrap.appendChild(list);
-    wrap.appendChild(el("p", "dss-hint",
-      "Adds a card below the existing ones. Drag it to position, then link a " +
-      "metric in the panel on the right."));
+    // One sentence: the control's immediate effect. Positioning is discoverable,
+    // and linking a metric now belongs on the card that needs one.
+    wrap.appendChild(el("p", "dss-hint", "Adds a card below the existing ones."));
     return wrap;
   };
 
@@ -923,7 +936,11 @@
   App.prototype.renderChartBody = function (body, chart) {
     var charts = root.DSStudioCharts;
     if (!chart.metric) {
-      body.innerHTML = '<div class="dss-nochart">No metric linked</div>';
+      // The remedy belongs here, on the card that has the problem, rather than
+      // in the palette hint where it was one of three instructions on a control
+      // that does something else. This card is also a publish blocker.
+      body.innerHTML = '<div class="dss-nochart">No metric linked' +
+        '<span>Select this card and link a metric in the panel on the right.</span></div>';
       return;
     }
     this._rowsCache = this._rowsCache || {};
@@ -1456,7 +1473,7 @@
       if (self.state.view === "data") self.paintCatalogue();
     }).catch(function () {
       if (self.state.view === "data") {
-        self.canvas.innerHTML = '<div class="dss-hint">Could not load the catalogue.</div>';
+        self.canvasError("Could not load the catalogue.", self.renderCatalogue);
       }
     });
   };
@@ -1594,7 +1611,7 @@
       })
       .catch(function () {
         if (self.state.view === "validation") {
-          self.canvas.innerHTML = '<div class="dss-hint">Could not load comparisons.</div>';
+          self.canvasError("Could not load comparisons.", self.renderValidation);
         }
       });
   };
@@ -1618,8 +1635,17 @@
     // nothing for this app to compute and compare against.
     var charts = (this.state.charts || []).filter(function (c) { return c.metric; });
     if (!charts.length) {
-      wrap.appendChild(el("p", "dss-hint dss-note",
-        "No chart on this dashboard has a metric, so there is nothing to validate yet."));
+      var note = el("div", "dss-loadfail");
+      note.appendChild(el("p", "dss-hint dss-note",
+        "No chart on this dashboard has a metric, so there is nothing to validate yet. " +
+        "Select a card in the Builder and link a metric in the panel on the right."));
+      var toBuilder = el("button", "dss-btn", "Go to the Builder");
+      toBuilder.addEventListener("click", function () {
+        self.state.view = "design";
+        self.render();
+      });
+      note.appendChild(toBuilder);
+      wrap.appendChild(note);
       return wrap;
     }
 
@@ -1869,7 +1895,7 @@
       if (self.state.view === "governance") self.paintGovernance();
     }).catch(function () {
       if (self.state.view === "governance") {
-        self.canvas.innerHTML = '<div class="dss-hint">Could not load governance.</div>';
+        self.canvasError("Could not load governance.", self.renderGovernance);
       }
     });
   };
@@ -1880,7 +1906,13 @@
     this.panel.innerHTML = "";
     var gov = this.state.governance;
     if (!gov) {
-      this.canvas.appendChild(el("div", "dss-hint", "No dashboard selected."));
+      var none = el("div", "dss-loadfail");
+      none.appendChild(el("p", "dss-hint",
+        "No dashboard is open, so there is no workflow to show."));
+      var pick = el("button", "dss-btn", "Open a dashboard");
+      pick.addEventListener("click", function () { self.togglePicker(true); });
+      none.appendChild(pick);
+      this.canvas.appendChild(none);
       return;
     }
 
