@@ -357,6 +357,19 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-analysis.is-ok { background: var(--dss-green-100); border: 1px solid #b7ddcd; color: var(--dss-green); }
 .dss-analysis.is-warn { background: var(--dss-orange-100); border: 1px solid #f0d19a; color: var(--dss-orange); }
 
+/* Canvas hero — the mockup's .canvas-hero, in the app's own navy tokens.
+   Kicker, title, subtitle. The mockup's two buttons are not built: neither has
+   behaviour, and a button that does nothing is worse than no button. */
+.dss-canvashero { padding: 20px 22px; margin-bottom: 14px; border-radius: var(--dss-r-lg);
+  background: linear-gradient(135deg, var(--dss-navy-deep), var(--dss-navy)); color: #fff;
+  box-shadow: var(--dss-shadow-sm); }
+.dss-canvashero-kicker { color: var(--dss-gold); text-transform: uppercase;
+  letter-spacing: .14em; font-size: 10px; font-weight: 900; }
+.dss-canvashero-title { margin: 6px 0 0; font-size: clamp(20px, 2.4vw, 30px);
+  font-weight: 800; letter-spacing: -.6px; }
+.dss-canvashero-sub { margin: 7px 0 0; max-width: 620px; font-size: 12px; line-height: 1.5;
+  color: var(--dss-surface-3); }
+
 /* Two controls on one line, as the mockup's .property-row. */
 .dss-prop-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 

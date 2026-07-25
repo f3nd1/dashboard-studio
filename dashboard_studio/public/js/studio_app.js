@@ -652,20 +652,20 @@
     // The Builder has no fixed hero — its heading is the dashboard title in the
     // toolbar — but DS Dashboard.description was being stored and never shown
     // anywhere. Reuses the hero block rather than adding a second style for it.
-    var dashboardDescription = this.state.dashboard && this.state.dashboard.description;
+    var dashboard = this.state.dashboard || {};
     var scope = this.state.scope;
-    if (this.state.view === "design" && (dashboardDescription || scope)) {
-      var descBox = el("div", "dss-hero");
-      // Kicker above the description, per the reference mockup. Reads
-      // "Criterion 4 · 4.1.1 · Pre-Course Counselling…" from resolved labels.
-      if (scope) {
-        descBox.appendChild(el("div", "dss-kicker",
-          scope.label + " · " + scope.subcriterion_title));
+    if (this.state.view === "design" && dashboard.name) {
+      // Kicker, title and subtitle, per the mockup's .canvas-hero. The two
+      // right-aligned buttons there are skipped: neither has behaviour.
+      var heroBox = el("section", "dss-canvashero");
+      heroBox.appendChild(el("div", "dss-canvashero-kicker",
+        scope ? scope.label + " · " + scope.subcriterion_title : "Unscoped dashboard"));
+      heroBox.appendChild(el("h1", "dss-canvashero-title",
+        dashboard.dashboard_title || dashboard.name));
+      if (dashboard.description) {
+        heroBox.appendChild(el("p", "dss-canvashero-sub", dashboard.description));
       }
-      if (dashboardDescription) {
-        descBox.appendChild(el("p", "dss-hero-blurb", dashboardDescription));
-      }
-      wrap.appendChild(descBox);
+      wrap.appendChild(heroBox);
     }
 
     var hero = HEROES[this.state.view];
