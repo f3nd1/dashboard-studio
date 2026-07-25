@@ -49,8 +49,7 @@ Do not begin by migrating all seven legacy Criterion scripts or implementing the
 ├── reference/
 ├── scripts/
 ├── dashboard_studio/          # Frappe Python package
-├── pyproject.toml
-└── package.json
+└── pyproject.toml
 ```
 
 See:

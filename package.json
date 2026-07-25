@@ -1,9 +1,0 @@
-{
-  "name": "dashboard-studio",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Frappe dashboard migration and visual design studio",
-  "scripts": {
-    "validate": "python scripts/validate_repository.py"
-  }
-}
