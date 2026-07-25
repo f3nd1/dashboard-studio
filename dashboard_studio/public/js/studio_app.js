@@ -115,6 +115,7 @@
       this.renderMapping();
     } else {
       this.state.charts.forEach(function (c) { self.renderCard(c); });
+      this.fitCanvas();
       this.renderPanel();
     }
   };
@@ -232,6 +233,19 @@
     var self = this;
     this.canvas.innerHTML = "";
     this.state.charts.forEach(function (c) { self.renderCard(c); });
+    this.fitCanvas();
+  };
+
+  // Cards are absolutely positioned, so the canvas does not grow with them and
+  // its overflow is hidden — without this, a card dragged past the fixed height
+  // simply vanishes. Size the canvas to its lowest card.
+  App.prototype.fitCanvas = function () {
+    var bottom = 0;
+    this.state.charts.forEach(function (chart) {
+      var box = core.clampLayout(chart);
+      bottom = Math.max(bottom, (box.pos_y + box.height) * ROW_H);
+    });
+    this.canvas.style.height = Math.max(480, bottom + 8) + "px";
   };
 
   App.prototype.select = function (name) {
