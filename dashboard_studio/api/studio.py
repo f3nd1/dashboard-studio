@@ -43,6 +43,34 @@ _MAPPING_VALUE_FIELDS = ("target_doctype", "target_field", "mapping_status")
 
 
 @frappe.whitelist()
+def list_dashboards():
+    """Dashboards the editor can open, most recently changed first.
+
+    This is what lets the editor open on real records instead of mock data when
+    it is loaded without a dashboard in the route.
+    """
+    frappe.only_for(DS_READ_ROLES)
+    return frappe.get_all(
+        "DS Dashboard",
+        fields=["name", "dashboard_title", "status", "modified"],
+        order_by="modified desc",
+    )
+
+
+@frappe.whitelist()
+def create_dashboard(dashboard_title: str):
+    """Create an empty Draft dashboard and return enough for the editor to open it."""
+    frappe.only_for(DS_WRITE_ROLES)
+    title = (dashboard_title or "").strip()
+    if not title:
+        frappe.throw("A dashboard needs a title.")
+    doc = frappe.get_doc(
+        {"doctype": "DS Dashboard", "dashboard_title": title, "status": "Draft"}
+    ).insert()
+    return {"name": doc.name, "dashboard_title": title, "status": "Draft"}
+
+
+@frappe.whitelist()
 def get_studio_dashboard(dashboard: str):
     """Return a DS Dashboard and its DS Chart records for the visual editor."""
     frappe.only_for(DS_READ_ROLES)

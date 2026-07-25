@@ -53,7 +53,20 @@
 /* ---- Header ---- */
 .dss-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding-bottom: 14px; border-bottom: 1px solid var(--dss-line); margin-bottom: 18px; }
+.dss-titlebox { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .dss-title { font-size: 19px; font-weight: 800; letter-spacing: -.3px; margin: 0; }
+.dss-picker { width: auto; max-width: 230px; padding: 5px 8px; font-size: 12px; }
+
+/* ---- Empty state (no dashboards exist yet) ---- */
+.dss-empty { max-width: 460px; margin: 60px auto; text-align: center;
+  background: var(--dss-surface); border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-lg); box-shadow: var(--dss-shadow); padding: 34px 30px; }
+.dss-empty-kicker { color: var(--dss-muted); font-size: 10px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .9px; }
+.dss-empty-title { font-size: 20px; font-weight: 800; letter-spacing: -.3px; margin: 6px 0 8px; }
+.dss-empty .dss-btn { margin: 14px 4px 0; }
+.dss-btn-ghost { background: transparent; border-color: transparent; color: var(--dss-muted); }
+.dss-btn-ghost:hover { background: var(--dss-surface-2); color: var(--dss-ink-700); }
 
 .dss-main { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: start; }
 @media (max-width: 780px) { .dss-main { grid-template-columns: 1fr; } }

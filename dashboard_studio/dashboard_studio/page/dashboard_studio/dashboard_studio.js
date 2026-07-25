@@ -5,8 +5,12 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
     single_column: true,
   });
 
+  let app = null;
+  // Creates a real DS Dashboard and opens it in the editor. Deliberately not
+  // frappe.new_doc() — that navigates away to the standard form and leaves the
+  // studio behind.
   page.set_primary_action(__("New Dashboard"), () => {
-    frappe.new_doc("DS Dashboard");
+    if (app) app.newDashboard();
   });
 
   const mount = document.createElement("div");
@@ -16,8 +20,9 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
   mount.textContent = __("Loading the visual editor…");
 
   // Load the framework-free editor assets on demand (no bundler required), then
-  // mount the SPA. Without a `dashboard` route param the app falls back to MOCK
-  // data — see studio_mock.js — so it renders even before real records exist.
+  // mount the SPA. Without a `dashboard` route param the app lists real
+  // DS Dashboards and opens the most recent one; sample data is only used when
+  // the server cannot be reached, or when the user asks for it explicitly.
   frappe.require(
     [
       "/assets/dashboard_studio/css/studio.css",
@@ -32,7 +37,7 @@ frappe.pages["dashboard-studio"].on_page_load = function (wrapper) {
       // The route segment is already the dashboard, so a migration project
       // arrives as a query param: /app/dashboard-studio?project=<name>
       const project = new URLSearchParams(window.location.search).get("project");
-      window.DSStudioApp.mount(mount, { dashboard, project });
+      app = window.DSStudioApp.mount(mount, { dashboard, project });
     }
   );
 };

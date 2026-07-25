@@ -36,7 +36,10 @@
     this.mount = mountPoint;
     this.options = options || {};
     this.state = {
-      dashboard: null, charts: [], selected: null, mock: false,
+      dashboard: null, charts: [], selected: null, mock: false, mockReason: null,
+      // Every dashboard the user may open, for the toolbar switcher. null = not
+      // fetched yet (distinct from [] = fetched, none exist).
+      dashboards: null,
       // Arriving with ?project= means the caller came from a DS Migration
       // Project, so open straight into the Mapping view.
       view: this.options.project ? "mapping" : "design",
@@ -47,34 +50,114 @@
     };
   }
 
+  // Real records are the default. Mock is only reached when there is no server
+  // at all, or a call to it failed — never simply because no dashboard was named
+  // in the route.
   App.prototype.load = function () {
     var self = this;
-    var name = this.options.dashboard;
-    if (hasFrappe() && name) {
-      root.frappe.call({
-        method: "dashboard_studio.api.studio.get_studio_dashboard",
-        args: { dashboard: name },
-      }).then(function (r) {
-        var data = r.message || {};
-        self.state.dashboard = data.dashboard;
-        self.state.charts = data.charts || [];
-        self.state.sections = data.sections || [];
-        self.state.mock = false;
-        self.render();
-      }).catch(function () {
-        self.useMock();
-      });
-    } else {
-      this.useMock();
+    if (!hasFrappe()) {
+      this.useMock("No Frappe backend is reachable from this page.");
+      return;
     }
+    if (this.options.dashboard) {
+      this.openDashboard(this.options.dashboard);
+      return;
+    }
+    root.frappe.call({ method: "dashboard_studio.api.studio.list_dashboards" })
+      .then(function (r) {
+        self.state.dashboards = r.message || [];
+        if (self.state.dashboards.length) {
+          self.openDashboard(self.state.dashboards[0].name);
+        } else {
+          self.renderEmpty();
+        }
+      })
+      .catch(function () {
+        self.useMock("Could not list dashboards.");
+      });
   };
 
-  App.prototype.useMock = function () {
+  App.prototype.openDashboard = function (name) {
+    var self = this;
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.get_studio_dashboard",
+      args: { dashboard: name },
+    }).then(function (r) {
+      var data = r.message || {};
+      self.state.dashboard = data.dashboard;
+      self.state.charts = data.charts || [];
+      self.state.sections = data.sections || [];
+      self.state.mock = false;
+      self.state.mockReason = null;
+      self.render();
+      // Keep the toolbar switcher populated even when opened straight from a route.
+      if (!self.state.dashboards) self.listDashboards();
+    }).catch(function () {
+      self.useMock("Could not open dashboard " + name + ".");
+    });
+  };
+
+  App.prototype.listDashboards = function () {
+    var self = this;
+    root.frappe.call({ method: "dashboard_studio.api.studio.list_dashboards" })
+      .then(function (r) {
+        self.state.dashboards = r.message || [];
+        self.render();
+      })
+      .catch(function () { /* switcher is optional; the dashboard is already open */ });
+  };
+
+  // No dashboards exist yet: invite creating one rather than silently showing
+  // invented records.
+  App.prototype.renderEmpty = function () {
+    var self = this;
+    this.mount.innerHTML = "";
+    var wrap = el("div", "dss-wrap");
+    var box = el("div", "dss-empty");
+    box.appendChild(el("div", "dss-empty-kicker", "Dashboard Studio"));
+    box.appendChild(el("h2", "dss-empty-title", "No dashboards yet"));
+    box.appendChild(el("p", "dss-hint",
+      "Create your first dashboard to start adding charts. It is saved as a real " +
+      "DS Dashboard record straight away."));
+    var create = el("button", "dss-btn dss-btn-primary", "Create dashboard");
+    create.addEventListener("click", function () { self.newDashboard(); });
+    box.appendChild(create);
+    var preview = el("button", "dss-btn dss-btn-ghost", "Preview with sample data");
+    preview.title = "Loads invented sample records. Nothing is saved.";
+    preview.addEventListener("click", function () {
+      self.useMock("Sample-data preview — you chose this from the empty state.");
+    });
+    box.appendChild(preview);
+    wrap.appendChild(box);
+    this.mount.appendChild(wrap);
+  };
+
+  App.prototype.newDashboard = function () {
+    var self = this;
+    if (!hasFrappe()) { toast("Creating a dashboard needs the server."); return; }
+    var title = root.prompt("Dashboard title");
+    if (title == null) return;
+    if (!title.trim()) { toast("A dashboard needs a title."); return; }
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.create_dashboard",
+      args: { dashboard_title: title.trim() },
+    }).then(function (r) {
+      var created = r.message || {};
+      self.state.dashboards = null; // refetched by openDashboard
+      self.openDashboard(created.name);
+      toast("Created " + created.dashboard_title);
+    }).catch(function () {
+      toast("Could not create the dashboard.");
+    });
+  };
+
+  App.prototype.useMock = function (reason) {
     var mock = (root.DSStudioMock || {}).MOCK_DASHBOARD || { charts: [] };
     this.state.dashboard = mock;
     this.state.charts = mock.charts.map(function (c) { return Object.assign({}, c); });
     this.state.sections = mock.sections || [];
     this.state.mock = true;
+    this.state.mockReason = reason || null;
     this.render();
   };
 
@@ -84,11 +167,30 @@
     var wrap = el("div", "dss-wrap");
 
     if (this.state.mock) {
-      wrap.appendChild(el("div", "dss-banner", "⚠ Mock data — not connected to a live DS Dashboard. Edits are not persisted."));
+      wrap.appendChild(el("div", "dss-banner",
+        "⚠ Sample data — not a live DS Dashboard, and nothing you change here is saved. " +
+        (this.state.mockReason || "")));
     }
 
     var head = el("div", "dss-toolbar");
-    head.appendChild(el("h2", "dss-title", (this.state.dashboard && this.state.dashboard.dashboard_title) || "Dashboard"));
+    var titleBox = el("div", "dss-titlebox");
+    titleBox.appendChild(el("h2", "dss-title",
+      (this.state.dashboard && this.state.dashboard.dashboard_title) || "Dashboard"));
+    // Switch between real dashboards without leaving the editor. Only shown
+    // when there is somewhere to switch to.
+    if (!this.state.mock && (this.state.dashboards || []).length > 1) {
+      var picker = el("select", "dss-input dss-picker");
+      picker.setAttribute("aria-label", "Open dashboard");
+      this.state.dashboards.forEach(function (d) {
+        var opt = el("option", null, d.dashboard_title + " · " + (d.status || "Draft"));
+        opt.value = d.name;
+        if (self.state.dashboard && d.name === self.state.dashboard.name) opt.selected = true;
+        picker.appendChild(opt);
+      });
+      picker.addEventListener("change", function () { self.openDashboard(picker.value); });
+      titleBox.appendChild(picker);
+    }
+    head.appendChild(titleBox);
 
     var views = el("div", "dss-viewtabs");
     [["design", "Design"], ["mapping", "Mapping"],
