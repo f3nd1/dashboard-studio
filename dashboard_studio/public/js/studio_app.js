@@ -103,28 +103,58 @@
   // thing you click. Scale behaviour (search, grouping) lives in
   // core.pickerModel so it can be tested without a browser.
 
-  var CHEVRON_PATH = "M4 6l4 4 4-4";
-  var TICK_PATH = "M3.5 8.5l3 3 6-7";
   var SVG_NS = "http://www.w3.org/2000/svg";
+  // Geometry taken from prototypes/ds_picker_revised.html.
+  var CHEVRON_PATH = "M4 6.5 8 10.5l4-4";
+  var TICK_PATH = "M3.5 8.5 6.5 11.5 12.5 5";
 
   // A real 16px icon, not a text glyph — a caret character sitting next to a
   // bold title reads as stray punctuation.
-  function icon(d, cls) {
+  function icon(d, cls, width) {
     var svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("class", cls);
     svg.setAttribute("viewBox", "0 0 16 16");
     svg.setAttribute("width", "16");
     svg.setAttribute("height", "16");
+    svg.setAttribute("fill", "none");
     svg.setAttribute("aria-hidden", "true");
     var path = document.createElementNS(SVG_NS, "path");
     path.setAttribute("d", d);
     path.setAttribute("fill", "none");
     path.setAttribute("stroke", "currentColor");
-    path.setAttribute("stroke-width", "2");
+    path.setAttribute("stroke-width", width || "2");
     path.setAttribute("stroke-linecap", "round");
     path.setAttribute("stroke-linejoin", "round");
     svg.appendChild(path);
     return svg;
+  }
+
+  // The magnifier in the search field. Two shapes rather than one path, so it
+  // gets its own builder.
+  function searchIcon() {
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", "dss-picker-searchicon");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("aria-hidden", "true");
+    var ring = document.createElementNS(SVG_NS, "circle");
+    ring.setAttribute("cx", "6.8");
+    ring.setAttribute("cy", "6.8");
+    ring.setAttribute("r", "4.6");
+    ring.setAttribute("stroke", "currentColor");
+    ring.setAttribute("stroke-width", "1.7");
+    var handle = document.createElementNS(SVG_NS, "path");
+    handle.setAttribute("d", "M10.3 10.3 14 14");
+    handle.setAttribute("stroke", "currentColor");
+    handle.setAttribute("stroke-width", "1.7");
+    handle.setAttribute("stroke-linecap", "round");
+    svg.appendChild(ring);
+    svg.appendChild(handle);
+    return svg;
+  }
+
+  function statusPill(status, cls) {
+    return el("span", (cls || "dss-picker-pill") + " " + statusClass(status), status || "Draft");
   }
 
   // Status carries real meaning, so the pills are colour-coded — but quietly,
@@ -156,7 +186,12 @@
     trigger.setAttribute("aria-expanded", this.state.pickerOpen ? "true" : "false");
     trigger.setAttribute("title", "Open a different dashboard");
     trigger.appendChild(el("h2", "dss-title", title));
-    trigger.appendChild(icon(CHEVRON_PATH, "dss-chevron"));
+    // The open dashboard's status, right where its name is: which stage the
+    // thing you are editing sits at is worth knowing without changing tab.
+    if (this.state.dashboard && this.state.dashboard.status) {
+      trigger.appendChild(statusPill(this.state.dashboard.status));
+    }
+    trigger.appendChild(icon(CHEVRON_PATH, "dss-chevron", "1.8"));
     trigger.addEventListener("click", function () {
       self.togglePicker(!self.state.pickerOpen);
     });
@@ -203,12 +238,15 @@
     // need one, and showing it would imply the list is longer than it is.
     if (model.searchable) {
       var searchWrap = el("div", "dss-picker-search");
+      var searchBox = el("div", "dss-picker-searchbox");
+      searchBox.appendChild(searchIcon());
       search = el("input", "dss-input");
-      search.type = "search";
+      search.type = "text";
       search.placeholder = "Search dashboards";
       search.setAttribute("aria-label", "Search dashboards");
       search.value = this.state.pickerQuery || "";
-      searchWrap.appendChild(search);
+      searchBox.appendChild(search);
+      searchWrap.appendChild(searchBox);
       panel.appendChild(searchWrap);
     }
 
@@ -229,14 +267,18 @@
       // for the click.
       if (!model.shown) {
         var none = el("div", "dss-picker-empty");
-        none.appendChild(el("p", "dss-hint",
-          'No dashboard matches “' + model.query + '”.'));
+        none.appendChild(el("strong", null, 'No dashboard matches “' + model.query + '”'));
+        none.appendChild(document.createTextNode(
+          "Create one, or clear the search to see all " + model.total + "."));
         listHost.appendChild(none);
       }
 
       model.groups.forEach(function (group) {
         if (group.title && group.items.length) {
-          listHost.appendChild(el("div", "dss-picker-group", group.title));
+          var head = el("div", "dss-picker-group");
+          head.appendChild(el("span", "dss-picker-group-label", group.title));
+          head.appendChild(el("span", "dss-picker-group-rule"));
+          listHost.appendChild(head);
         }
         group.items.forEach(function (d) {
           var isCurrent = d.name === current;
@@ -249,8 +291,7 @@
           if (isCurrent) mark.appendChild(icon(TICK_PATH, "dss-tick"));
           row.appendChild(mark);
           row.appendChild(el("span", "dss-picker-name", core.dashboardTitle(d)));
-          row.appendChild(el("span", "dss-picker-pill " + statusClass(d.status),
-            d.status || "Draft"));
+          row.appendChild(statusPill(d.status));
           row.addEventListener("click", function () {
             self.togglePicker(false);
             if (!isCurrent) self.openDashboard(d.name);
@@ -265,11 +306,24 @@
         model.shown === model.total
           ? model.total + (model.total === 1 ? " dashboard" : " dashboards")
           : model.shown + " of " + model.total));
+      // Keycap hints while browsing a long list, where arrowing through it is a
+      // realistic way to use it. Not while searching — there the keyboard is
+      // already in the search box.
+      if (model.searchable && !model.query) {
+        footer.appendChild(el("span", "dss-picker-kbd", "↑↓"));
+        footer.appendChild(el("span", "dss-picker-kbd", "esc"));
+      }
+
+      // One link, never two — 392px does not hold both, and each state has an
+      // obvious single next step. Past the threshold that is "get out to the
+      // real list", because the picker should not grow into one; on a short
+      // list, or when a search found nothing, it is "make one".
+      //
+      // Creating is not lost at scale: the Desk page keeps a primary "New
+      // Dashboard" action in its header, which is where the reference mockup
+      // puts it too.
       var actions = el("div", "dss-picker-actions");
-      actions.appendChild(self.pickerCreateButton());
-      // Past the threshold the picker stops trying to be a list view and hands
-      // bulk work to the real one.
-      if (model.searchable) {
+      if (model.searchable && model.shown) {
         var all = el("button", "dss-picker-link", "View all →");
         all.addEventListener("click", function () {
           self.togglePicker(false);
@@ -277,6 +331,8 @@
           else toast("The DS Dashboard list needs the server.");
         });
         actions.appendChild(all);
+      } else {
+        actions.appendChild(self.pickerCreateButton());
       }
       footer.appendChild(actions);
     }
