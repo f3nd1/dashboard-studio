@@ -293,6 +293,36 @@
     };
   }
 
+  // The toolbar readiness chip: one line answering "what stage am I at, and what
+  // is blocking me", from the server's publish_readiness payload.
+  //
+  // Assembly only — every fact here is computed by publish_readiness, the same
+  // function the publish gate throws on. Nothing in this file decides whether a
+  // dashboard is publishable, and nothing here should ever start to: a chip that
+  // disagreed with the gate would say ready and then refuse.
+  function readinessChip(readiness, status) {
+    if (!readiness) return null;
+    var stage = status || "Draft";
+    var blockers = readiness.blockers || [];
+
+    if (!blockers.length) {
+      return {
+        tone: "ready",
+        text: stage === "Published" ? stage : stage + " · ready to publish",
+        detail: "Nothing is blocking publication.",
+      };
+    }
+    // One blocker is named; several would not fit, so the first is named and the
+    // rest counted. The full list is on Governance, which the chip links to.
+    var text = stage + " · " + blockers[0].summary;
+    if (blockers.length > 1) text += ", +" + (blockers.length - 1) + " more";
+    return {
+      tone: "blocked",
+      text: text,
+      detail: blockers.map(function (b) { return b.summary; }).join("\n"),
+    };
+  }
+
   // Display order for one chart's result rows (DS Chart.sort_order).
   //
   // Presentation only. It never changes a value, only the order they are drawn
@@ -489,6 +519,7 @@
     dashboardTitle: dashboardTitle,
     dashboardFormUrl: dashboardFormUrl,
     sortResultRows: sortResultRows,
+    readinessChip: readinessChip,
     SORT_ORDERS: SORT_ORDERS,
     PICKER_SCALE_THRESHOLD: PICKER_SCALE_THRESHOLD,
     PICKER_RECENT_COUNT: PICKER_RECENT_COUNT,

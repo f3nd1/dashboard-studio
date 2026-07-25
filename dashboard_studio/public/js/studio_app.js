@@ -56,6 +56,22 @@
     else if (root.console) root.console.log("[Dashboard Studio] " + msg);
   }
 
+  // A refused frappe.call carries the server's own message. The publish gate
+  // names every offending chart in that message; discarding it and toasting a
+  // generic line is how a refusal that knew the answer stopped giving it.
+  //
+  // ponytail: reads the two shapes Frappe puts a thrown message in. Frappe also
+  // raises its own dialog for _server_messages, so this may be the second place
+  // the text appears — a duplicate is a far cheaper fault than a swallowed one.
+  function refusalMessage(err, fallback) {
+    var raw = err && (err.message || err._server_messages);
+    if (typeof raw === "string" && raw.charAt(0) === "[") {
+      try { raw = JSON.parse(JSON.parse(raw)[0]).message; } catch (e) { /* not that shape */ }
+    }
+    if (typeof raw !== "string" || !raw.trim()) return fallback;
+    return raw.replace(/<[^>]*>/g, "").trim() || fallback;
+  }
+
   function App(mountPoint, options) {
     this.mount = mountPoint;
     this.options = options || {};
@@ -446,6 +462,7 @@
       self.state.scope = data.scope || null;
       self.state.charts = data.charts || [];
       self.state.sections = data.sections || [];
+      self.state.readiness = data.readiness || null;
       self.state.mock = false;
       self.state.mockReason = null;
       // Both caches are keyed by metric name but their contents depend on which
@@ -570,6 +587,11 @@
 
     var head = el("div", "dss-toolbar");
     head.appendChild(this.buildTitle());
+    // The publish rules, in the one element that renders in every workspace.
+    // Reaching Governance and only then discovering the work was incomplete is
+    // the fault this fixes, so it cannot live inside a single view.
+    var chip = this.buildReadinessChip();
+    if (chip) head.appendChild(chip);
     // Unsaved-layout marker. saveLayout writes every chart unconditionally, so
     // without this there is no way to tell whether pressing it does anything.
     if (this.state.view === "design" && !this.state.mock) {
@@ -669,6 +691,41 @@
       this.refresh();
       this.renderPanel();
     }
+  };
+
+  // Stage plus what blocks publishing, in every workspace, linking to the place
+  // that lists the blockers in full. Nothing is computed here — see
+  // core.readinessChip and governance.publish_readiness.
+  App.prototype.buildReadinessChip = function () {
+    var self = this;
+    if (this.state.mock || !this.state.dashboard) return null;
+    var model = core.readinessChip(
+      this.state.readiness, (this.state.dashboard || {}).status);
+    if (!model) return null;
+
+    var chip = el("button", "dss-readiness is-" + model.tone, model.text);
+    chip.type = "button";
+    chip.title = model.detail + "\n\nOpen Governance & Publish";
+    chip.addEventListener("click", function () {
+      self.state.view = "governance";
+      self.state.governance = null; // re-read, so the stage shown is the stored one
+      self.render();
+    });
+    return chip;
+  };
+
+  // Re-read the publish rules after something that could have changed them.
+  // Same server function as the gate; the chip repaints from the result.
+  App.prototype.refreshReadiness = function () {
+    var self = this;
+    if (!hasFrappe() || this.state.mock || !this.currentDashboard()) return;
+    root.frappe.call({
+      method: "dashboard_studio.api.governance.publish_readiness",
+      args: { dashboard: this.currentDashboard() },
+    }).then(function (r) {
+      self.state.readiness = r.message || null;
+      self.render();
+    }).catch(function () { /* the chip keeps its last known state */ });
   };
 
   // Visual catalogue. Only the types that can actually be drawn are offered —
@@ -772,6 +829,7 @@
       self.state.scope = result.scope || null;
       toast(result.scope ? "Scoped to " + result.scope.label : "Scope cleared");
       self.markSaved(result.scope ? "Scope saved" : "Scope cleared");
+      self.refreshReadiness();   // scope is one of the four publish rules
     }).catch(function () {
       toast("Could not set the dashboard scope.");
     });
@@ -1006,7 +1064,12 @@
       var data = r.message || {};
       self.state.charts = data.charts || [];
       self.state.sections = data.sections || [];
-      if (self.state.view === "design") self.refresh();
+      // Adding or deleting a chart changes what blocks publishing, and this is
+      // the path every such write already goes through.
+      self.state.readiness = data.readiness || null;
+      // Full render rather than refresh(): the chip lives in the toolbar, which
+      // refresh() does not touch, and a stale chip is worse than no chip.
+      self.render();
       toast(describe);
     }).catch(function () {
       // Without this the write succeeded server-side and the screen never
@@ -1595,6 +1658,7 @@
         var result = r.message || {};
         toast("Validation recorded: " + result.status);
         self.state.comparisons = null; // refetched by renderValidation
+        self.refreshReadiness();       // a pass can clear the validation blocker
         self.render();
       }).catch(function () {
         note.textContent = "Could not run that validation.";
@@ -1910,9 +1974,15 @@
       args: { dashboard: this.currentDashboard(), to_status: move.to },
     }).then(function (r) {
       self.state.governance = null; // re-read, so the next legal moves come from the server
+      if (self.state.dashboard) self.state.dashboard.status = (r.message || {}).status;
       self.renderGovernance();
+      self.refreshReadiness();
       toast((r.message || {}).applied || "Updated");
-    }).catch(function () { toast("That move was refused."); });
+    }).catch(function (err) {
+      // The server names every offending chart. Replacing that with five words
+      // is how the publish rules became invisible until they refused.
+      toast(refusalMessage(err, "That move was refused."));
+    });
   };
 
   // ---- Mapping view: source tables -> DocTypes, persisted shapes mocked ----
@@ -2248,6 +2318,7 @@
   };
 
   App.prototype.saveChart = function (chart) {
+    var self = this;
     if (this.state.mock || !hasFrappe()) {
       toast("Saved “" + chart.chart_title + "” (mock — not persisted)");
       return;
@@ -2270,7 +2341,12 @@
           }),
         }),
       },
-    }).then(function () { toast("Saved " + chart.chart_title); });
+    }).then(function () {
+      toast("Saved " + chart.chart_title);
+      // Two rules move here: the metric link, and validation currency — an edit
+      // makes an earlier pass older than the chart.
+      self.refreshReadiness();
+    });
   };
 
   App.prototype.saveLayout = function () {

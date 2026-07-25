@@ -176,6 +176,21 @@
   color: var(--dss-blue); font-size: 12px; }
 .dss-palette-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Publish readiness, in the toolbar so it is present in every workspace. A
+   button, not a label: the blockers it summarises are listed in full on
+   Governance, and this is the way there. */
+.dss-readiness { display: inline-flex; align-items: center; gap: 6px; min-height: 26px;
+  margin-right: auto; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid transparent; font: inherit; font-size: 11px; font-weight: 700;
+  max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dss-readiness::before { content: "●"; font-size: 9px; }
+.dss-readiness.is-ready { background: var(--dss-green-100); border-color: #b9e0c4;
+  color: var(--dss-green); }
+.dss-readiness.is-blocked { background: var(--dss-orange-100); border-color: #f0d19a;
+  color: var(--dss-orange); }
+.dss-readiness:hover { filter: brightness(.97); }
+.dss-readiness:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(59, 118, 197, .3); }
+
 /* Unsaved-layout marker in the toolbar. */
 .dss-savestate { font-size: 11px; font-weight: 700; color: var(--dss-green); white-space: nowrap; }
 .dss-savestate.is-dirty { color: var(--dss-orange); }

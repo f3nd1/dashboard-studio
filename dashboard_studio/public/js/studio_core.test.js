@@ -360,4 +360,31 @@ assert.strictEqual(
 assert.deepStrictEqual(core.sortResultRows([], "Descending"), [], "empty stays empty");
 assert.deepStrictEqual(core.sortResultRows(null, "Descending"), [], "null is not a crash");
 
+// The readiness chip assembles the server's blockers; it never decides them.
+assert.strictEqual(core.readinessChip(null, "Draft"), null,
+  "no readiness payload means no chip, not a guess");
+
+var ready = core.readinessChip({ publishable: true, blockers: [] }, "Draft");
+assert.strictEqual(ready.text, "Draft · ready to publish");
+assert.strictEqual(ready.tone, "ready");
+assert.strictEqual(
+  core.readinessChip({ publishable: true, blockers: [] }, "Published").text, "Published",
+  "a published dashboard does not advertise that it is ready to publish");
+
+var one = core.readinessChip(
+  { blockers: [{ rule: "scope", summary: "no subcriterion set" }] }, "Draft");
+assert.strictEqual(one.text, "Draft · no subcriterion set", "a single blocker is named");
+assert.strictEqual(one.tone, "blocked");
+
+var many = core.readinessChip({
+  blockers: [
+    { rule: "scope", summary: "no subcriterion set" },
+    { rule: "chart_without_metric", summary: "2 charts with no metric" },
+    { rule: "chart_not_validated", summary: "3 charts not validated since the last edit" },
+  ],
+}, "Draft");
+assert.strictEqual(many.text, "Draft · no subcriterion set, +2 more");
+assert.ok(many.detail.indexOf("3 charts not validated") !== -1,
+  "the hover detail carries every blocker, not just the named one");
+
 console.log("studio_core.test.js — all assertions passed");

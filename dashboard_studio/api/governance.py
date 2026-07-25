@@ -124,6 +124,10 @@ def advance_status(dashboard: str, to_status: str):
 _PASSING_COMPARISONS = ("Match", "Accepted")
 
 
+def _plural(count, noun):
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
 @frappe.whitelist()
 def publish_readiness(dashboard: str):
     """Everything standing between this dashboard and Published, as facts.
@@ -152,7 +156,9 @@ def publish_readiness(dashboard: str):
     if not scope:
         blockers.append({
             "rule": "scope",
-            "summary": "No EduTrust subcriterion",
+            # `summary` is the short form the toolbar chip shows; `message` is the
+            # full sentence the gate throws and Governance lists. Same facts.
+            "summary": "no subcriterion set",
             "charts": [],
             "message": (
                 "This dashboard has no EduTrust subcriterion, so it cannot be "
@@ -162,7 +168,7 @@ def publish_readiness(dashboard: str):
     elif scope not in SUBCRITERIA:
         blockers.append({
             "rule": "scope_unknown",
-            "summary": f"Subcriterion '{scope}' is not one the platform serves",
+            "summary": f"subcriterion \u201c{scope}\u201d not recognised",
             "charts": [],
             "message": (
                 f"Unknown EduTrust subcriterion '{scope}'. It is not one of the "
@@ -187,7 +193,7 @@ def publish_readiness(dashboard: str):
     if unlinked:
         blockers.append({
             "rule": "chart_without_metric",
-            "summary": f"{len(unlinked)} chart(s) with no metric",
+            "summary": _plural(len(unlinked), "chart") + " with no metric",
             "charts": unlinked,
             "message": (
                 "These charts have no metric, so there is nothing to publish for "
@@ -222,7 +228,7 @@ def publish_readiness(dashboard: str):
     if unchecked:
         blockers.append({
             "rule": "chart_not_validated",
-            "summary": f"{len(unchecked)} chart(s) not validated since their last edit",
+            "summary": _plural(len(unchecked), "chart") + " not validated since the last edit",
             "charts": unchecked,
             "message": (
                 "These charts have no validation newer than their last edit: "
