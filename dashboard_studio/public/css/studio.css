@@ -178,10 +178,18 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
   background: var(--dss-surface-2); border: 1px dashed var(--dss-line-dark);
   border-radius: var(--dss-r-sm); padding: 7px 9px; margin-bottom: 5px; }
 
-.dss-sqlimport { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--dss-line); }
-.dss-sqlimport textarea.dss-input { min-height: 62px; font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px; margin-bottom: 7px; }
-.dss-sqlnote { font-size: 10px; color: var(--dss-muted); min-height: 14px; margin-bottom: 7px; }
+/* Primary import route: leads the Migration workspace, not a panel footer. */
+.dss-sqlimport { background: var(--dss-surface); border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-lg); box-shadow: var(--dss-shadow-sm); padding: 16px 18px;
+  margin-bottom: 18px; }
+.dss-sqlimport-head { margin-bottom: 4px; }
+.dss-sqlimport-title { font-size: 14px; font-weight: 800; letter-spacing: -.2px; margin: 3px 0 0; }
+.dss-sqlimport .dss-hint { max-width: 76ch; }
+.dss-sqlimport textarea.dss-input { min-height: 88px; font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px; margin: 11px 0 9px; }
+.dss-sqlimport-actions { display: flex; align-items: center; gap: 12px; }
+.dss-sqlnote { font-size: 11px; color: var(--dss-muted); }
+.dss-sqlimport .dss-note { margin-top: 12px; padding-top: 10px; }
 .dss-analysis { font-size: 10px; line-height: 1.5; border-radius: var(--dss-r-md); padding: 9px 11px;
   margin-bottom: 10px; font-weight: 600; }
 .dss-analysis.is-ok { background: var(--dss-green-100); border: 1px solid #b7ddcd; color: var(--dss-green); }

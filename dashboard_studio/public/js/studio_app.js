@@ -246,6 +246,10 @@
       wrap.appendChild(heroBox);
     }
 
+    // Pasting SQL is how a migration actually starts, so it leads the workspace
+    // rather than sitting under the mapping list in the side panel.
+    if (this.state.view === "mapping") wrap.appendChild(this.buildSqlImport());
+
     var main = el("div", "dss-main");
     this.canvas = el("div", "dss-canvas");
     this.canvas.style.minHeight = "480px";
@@ -1416,26 +1420,32 @@
     var save = el("button", "dss-btn dss-btn-primary", "Save mappings");
     save.addEventListener("click", function () { self.saveMappings(); });
     this.panel.appendChild(save);
-
-    this.renderSqlImport();
   };
 
-  // Paste Metabase SQL to seed the canvas: the parser reports what it found and
-  // suggests identity mappings, which the user then confirms or rejects.
-  App.prototype.renderSqlImport = function () {
+  // Paste Metabase SQL — the way a migration starts. The parser reports what it
+  // found and suggests identity mappings, which the user then confirms or
+  // rejects. Returned as an element so the caller can place it prominently
+  // instead of tucking it under the mapping list.
+  App.prototype.buildSqlImport = function () {
     var self = this;
     var wrap = el("div", "dss-sqlimport");
-    wrap.appendChild(el("span", "dss-field-label", "Import from Metabase SQL"));
+    var head = el("div", "dss-sqlimport-head");
+    head.appendChild(el("div", "dss-kicker", "Step 1 — import"));
+    head.appendChild(el("h3", "dss-sqlimport-title", "Paste the Metabase SQL"));
+    wrap.appendChild(head);
+    wrap.appendChild(el("p", "dss-hint",
+      "Copy the query behind a Metabase card and paste it here. Tables it finds " +
+      "become nodes on the canvas below; a query it cannot safely translate is " +
+      "reported with reasons and nothing is suggested for it."));
 
     var box = el("textarea", "dss-input");
-    box.placeholder = "Paste a SELECT query…";
+    box.placeholder = "SELECT COUNT(*) FROM `tabStudent Applicant` WHERE …";
     box.setAttribute("aria-label", "Metabase SQL");
     wrap.appendChild(box);
 
     var note = el("div", "dss-sqlnote");
-    wrap.appendChild(note);
 
-    var analyze = el("button", "dss-btn dss-btn-small", "Analyze SQL");
+    var analyze = el("button", "dss-btn dss-btn-primary", "Analyze SQL");
     analyze.addEventListener("click", function () {
       var sql = (box.value || "").trim();
       if (!sql) { note.textContent = "Paste a query first."; return; }
@@ -1455,8 +1465,16 @@
         note.textContent = "Could not analyze that query.";
       });
     });
-    wrap.appendChild(analyze);
-    this.panel.appendChild(wrap);
+    var actions = el("div", "dss-sqlimport-actions");
+    actions.appendChild(analyze);
+    actions.appendChild(note);
+    wrap.appendChild(actions);
+    // The other prototype import routes (dashboard URL / API, result CSV) are
+    // not built — say so rather than showing dead controls.
+    wrap.appendChild(el("p", "dss-hint dss-note",
+      "Pasting SQL is the only import route. Importing straight from a Metabase " +
+      "URL or API is not built."));
+    return wrap;
   };
 
   // Seed nodes and suggestions from a parsed query. Tables found are always
