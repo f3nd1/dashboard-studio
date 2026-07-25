@@ -144,7 +144,10 @@ def save_migration_mapping_set(project: str, mappings=None, canvas_nodes=None):
             {
                 "data_source": doc.data_source,
                 "external_table": external_table,
-                "external_field": external_field,
+                # A blank Data field may be stored as NULL or "" depending on how
+                # the row was created; SQL's `= ''` would not match NULL, which
+                # would duplicate the row instead of updating it.
+                "external_field": ["in", ["", None]] if not external_field else external_field,
             },
         )
         if existing:

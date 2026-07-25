@@ -99,9 +99,19 @@ def _make_fake_frappe(store):
             rows = [r for r in rows if r.get(key) == value]
         return [dict(r) for r in rows]
 
+    def _matches(row_value, expected):
+        # Supports Frappe's ["in", [...]] filter form as well as equality.
+        if isinstance(expected, (list, tuple)) and len(expected) == 2 and expected[0] == "in":
+            return row_value in expected[1]
+        # Model SQL equality honestly: NULL never equals ''. Collapsing the two
+        # here would hide the real MariaDB behaviour this fake exists to catch.
+        if row_value is None or expected is None:
+            return row_value is None and expected is None
+        return str(row_value) == str(expected)
+
     def _get_value(doctype, filters=None, fieldname="name"):
         for name, row in store.get(doctype, {}).items():
-            if all(str(row.get(k) or "") == str(v or "") for k, v in (filters or {}).items()):
+            if all(_matches(row.get(k), v) for k, v in (filters or {}).items()):
                 return name if fieldname == "name" else row.get(fieldname)
         return None
 
@@ -215,6 +225,24 @@ class TestMigrationMappingApi(unittest.TestCase):
         )
         rows = self._mappings()
         self.assertEqual(len(rows), 1, "same natural key must upsert, not duplicate")
+        self.assertEqual(rows[0]["mapping_status"], "Confirmed")
+
+    def test_existing_mapping_with_null_external_field_is_updated(self):
+        # A mapping created through the Frappe UI can store NULL rather than ""
+        # for a blank Data field; the upsert must still match it.
+        self.store["DS Data Mapping"]["pre"] = {
+            "name": "pre", "data_source": "Metabase (MOCK)",
+            "external_table": "tabStudent Applicant", "external_field": None,
+            "target_doctype": "Student Applicant", "mapping_status": "Suggested",
+        }
+        self.studio.save_migration_mapping_set(
+            "P1",
+            [{"external_table": "tabStudent Applicant", "target_doctype": "Student Applicant",
+              "mapping_status": "Confirmed"}],
+            [],
+        )
+        rows = self._mappings()
+        self.assertEqual(len(rows), 1, "NULL external_field must upsert, not duplicate")
         self.assertEqual(rows[0]["mapping_status"], "Confirmed")
 
     def test_rows_without_external_table_are_skipped(self):
