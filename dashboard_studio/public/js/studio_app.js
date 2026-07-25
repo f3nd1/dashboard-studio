@@ -192,17 +192,6 @@
     }
     head.appendChild(titleBox);
 
-    var views = el("div", "dss-viewtabs");
-    [["design", "Design"], ["mapping", "Mapping"],
-     ["data", "Data & DocTypes"], ["validation", "Validation"],
-     ["governance", "Governance"]].forEach(function (pair) {
-      var v = pair[0];
-      var b = el("button", "dss-btn" + (self.state.view === v ? " dss-btn-primary" : ""), pair[1]);
-      b.addEventListener("click", function () { self.state.view = v; self.render(); });
-      views.appendChild(b);
-    });
-    head.appendChild(views);
-
     if (this.state.view === "design") {
       var addSection = el("button", "dss-btn", "+ Section");
       addSection.title = "Add a section to group charts";
@@ -214,6 +203,22 @@
       head.appendChild(saveAll);
     }
     wrap.appendChild(head);
+
+    // Workspace tab bar (underlined active tab), not a row of buttons.
+    var tabs = el("div", "dss-tabs");
+    tabs.setAttribute("role", "tablist");
+    [["design", "Dashboard Builder"], ["mapping", "Metabase Migration"],
+     ["data", "Data & DocTypes"], ["validation", "Validation"],
+     ["governance", "Governance & Publish"]].forEach(function (pair) {
+      var v = pair[0];
+      var active = self.state.view === v;
+      var tab = el("button", "dss-tab" + (active ? " is-active" : ""), pair[1]);
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+      tab.addEventListener("click", function () { self.state.view = v; self.render(); });
+      tabs.appendChild(tab);
+    });
+    wrap.appendChild(tabs);
 
     var main = el("div", "dss-main");
     this.canvas = el("div", "dss-canvas");

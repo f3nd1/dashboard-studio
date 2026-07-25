@@ -15,6 +15,8 @@
   --dss-navy-deep: #102341;
   --dss-blue: #3b76c5;
   --dss-blue-100: #eaf2ff;
+  --dss-gold: #d6a73a;
+  --dss-gold-100: #fff6df;
   /* Ink scale */
   --dss-ink: #142033;
   --dss-ink-700: #455268;
@@ -52,7 +54,7 @@
 
 /* ---- Header ---- */
 .dss-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding-bottom: 14px; border-bottom: 1px solid var(--dss-line); margin-bottom: 18px; }
+  padding-bottom: 10px; margin-bottom: 0; }
 .dss-titlebox { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .dss-title { font-size: 19px; font-weight: 800; letter-spacing: -.3px; margin: 0; }
 .dss-picker { width: auto; max-width: 230px; padding: 5px 8px; font-size: 12px; }
@@ -71,7 +73,17 @@
 .dss-main { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: start; }
 @media (max-width: 780px) { .dss-main { grid-template-columns: 1fr; } }
 
-.dss-viewtabs { display: flex; gap: 6px; margin-left: auto; margin-right: 10px; }
+/* Workspace tabs — flat, underlined-active bar (prototype .workspace-tabs). */
+.dss-tabs { display: flex; align-items: flex-end; gap: 22px; height: 44px;
+  border-bottom: 1px solid var(--dss-line); margin-bottom: 18px; overflow-x: auto; }
+.dss-tab { height: 44px; padding: 0 2px; border: 0; background: transparent; cursor: pointer;
+  color: var(--dss-muted); font-weight: 800; font-size: 13px; white-space: nowrap;
+  position: relative; }
+.dss-tab:hover { color: var(--dss-ink-700); }
+.dss-tab:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(59, 118, 197, .3); border-radius: 4px; }
+.dss-tab.is-active { color: var(--dss-navy); }
+.dss-tab.is-active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0;
+  height: 3px; border-radius: 999px; background: var(--dss-gold); }
 
 /* ---- Canvas + chart cards ---- */
 .dss-canvas { position: relative; background:
