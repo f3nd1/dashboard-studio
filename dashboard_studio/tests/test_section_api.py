@@ -102,6 +102,31 @@ def _make_fake_frappe(store):
     def set_value(doctype, name, field, value):
         store.setdefault(doctype, {}).setdefault(name, {})[field] = value
 
+    def get_value(doctype, name, field):
+        return store.get(doctype, {}).get(name, {}).get(field)
+
+    def get_meta(doctype):
+        """Meta backed by the real DocType JSON, so Select options cannot drift."""
+        import json as _json
+        import os
+
+        folder = doctype.lower().replace(" ", "_")
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "dashboard_studio", "doctype", folder, folder + ".json",
+        )
+        with open(path) as handle:
+            fields = _json.load(handle)["fields"]
+
+        class _Meta:
+            def get_field(self, fieldname):
+                for field in fields:
+                    if field["fieldname"] == fieldname:
+                        return types.SimpleNamespace(**field)
+                return None
+
+        return _Meta()
+
     def delete_doc(doctype, name):
         store.get(doctype, {}).pop(name, None)
 
@@ -114,7 +139,8 @@ def _make_fake_frappe(store):
     frappe.get_all = get_all
     frappe.delete_doc = delete_doc
     frappe.throw = throw
-    frappe.db = types.SimpleNamespace(set_value=set_value, get_value=lambda *a, **k: None)
+    frappe.get_meta = get_meta
+    frappe.db = types.SimpleNamespace(set_value=set_value, get_value=get_value)
     return frappe
 
 

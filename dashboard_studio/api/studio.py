@@ -368,6 +368,81 @@ def _as_row_list(value, label):
     return [row for row in value if isinstance(row, dict)]
 
 
+def _chart_type_options():
+    """Valid DS Chart types, read from the DocType so there is one source of truth."""
+    field = frappe.get_meta("DS Chart").get_field("chart_type")
+    return [line for line in (field.options or "").split("\n") if line]
+
+
+def _next_free_row(dashboard: str):
+    """First grid row below everything already on the dashboard."""
+    bottom = 0
+    for row in frappe.get_all(
+        "DS Chart", filters={"dashboard": dashboard}, fields=["pos_y", "height"]
+    ):
+        bottom = max(bottom, (row.get("pos_y") or 0) + (row.get("height") or 1))
+    return bottom
+
+
+@frappe.whitelist()
+def create_chart(dashboard: str, chart_type: str = "KPI Card", copy_from: str = None):
+    """Add a chart to a dashboard, or duplicate one that is already on it.
+
+    Both paths land the new card on the first free row rather than on top of an
+    existing one, so nothing is ever hidden behind what was just created.
+
+    ``copy_from`` carries the source chart's metric, description, layout size and
+    filters over. It is restricted to the same dashboard: duplicating across
+    dashboards would silently move a chart's metric into a different governance
+    scope.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    source = frappe.get_doc("DS Chart", copy_from) if copy_from else None
+    if source and source.dashboard != dashboard:
+        frappe.throw("A chart can only be duplicated within its own dashboard.")
+
+    resolved_type = source.chart_type if source else chart_type
+    if resolved_type not in _chart_type_options():
+        frappe.throw(f"Unknown chart type: {resolved_type}")
+
+    doc = frappe.get_doc(
+        {
+            "doctype": "DS Chart",
+            "dashboard": dashboard,
+            "chart_type": resolved_type,
+            "chart_title": (
+                f"{source.chart_title} (copy)" if source else f"New {resolved_type}"
+            ),
+            "section": (source.section if source else None),
+            "metric": (source.metric if source else None),
+            "description": (source.description if source else ""),
+            "pos_x": 0,
+            "pos_y": _next_free_row(dashboard),
+            "width": (source.width if source else 4),
+            "height": (source.height if source else 4),
+            "chart_filters": (
+                [
+                    {k: row.get(k) for k in _FILTER_ROW_FIELDS}
+                    for row in (source.get("chart_filters") or [])
+                ]
+                if source
+                else []
+            ),
+        }
+    ).insert()
+    return doc.as_dict()
+
+
+@frappe.whitelist()
+def delete_chart(chart: str):
+    """Remove one chart. Its metric is left alone — metrics outlive the charts
+    that draw them, and may be shared with other dashboards."""
+    frappe.only_for(DS_WRITE_ROLES)
+    dashboard = frappe.db.get_value("DS Chart", chart, "dashboard")
+    frappe.delete_doc("DS Chart", chart)
+    return {"deleted": chart, "dashboard": dashboard}
+
+
 @frappe.whitelist()
 def save_chart(chart: str, patch):
     """Persist an editor patch to one DS Chart. Only allowlisted fields are written.
