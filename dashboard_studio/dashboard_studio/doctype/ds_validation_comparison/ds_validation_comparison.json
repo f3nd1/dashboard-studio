@@ -14,7 +14,8 @@
   "status",
   "accepted_reason",
   "evidence",
-  "reviewed_by"
+  "reviewed_by",
+  "comparison_rows"
  ],
  "fields": [
   {
@@ -73,6 +74,13 @@
    "fieldtype": "Link",
    "label": "Reviewed By",
    "options": "User"
+  },
+  {
+   "fieldname": "comparison_rows",
+   "fieldtype": "Table",
+   "label": "Comparison Rows",
+   "options": "DS Validation Row",
+   "description": "Per-group detail for this comparison run."
   }
  ],
  "index_web_pages_for_search": 0,

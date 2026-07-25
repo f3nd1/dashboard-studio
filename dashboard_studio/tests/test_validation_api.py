@@ -167,12 +167,39 @@ class TestValidationApi(unittest.TestCase):
         labels = [row["label"] for row in result["rows"]]
         self.assertIn("2023", labels, "the missing group must still be reported")
 
-    def test_per_group_rows_are_returned_but_not_persisted(self):
-        # Documented schema gap: DS Validation Comparison has no group-label field.
+    def test_per_group_rows_are_persisted_as_child_rows(self):
         result = self.validation.run_validation("C1", self.source, list(self.source))
-        self.assertEqual(len(result["rows"]), 2)
-        self.assertFalse(result["persisted_rows"])
-        self.assertEqual(len(self._comparisons()), 1, "one record per run, holding totals")
+        self.assertTrue(result["persisted_rows"])
+        self.assertEqual(len(self._comparisons()), 1, "one record per RUN")
+        rows = self._comparisons()[0]["comparison_rows"]
+        self.assertEqual([r["group_label"] for r in rows], ["2022", "2023"])
+        self.assertEqual(rows[0]["original_value"], "2")
+        self.assertEqual(rows[0]["status"], "Match")
+
+    def test_incomparable_group_stores_blank_difference_not_zero(self):
+        # The whole point of comparison.py: unknown must never become 0.
+        target = [{"academic_year": "2022", "count": 2}]  # 2023 missing
+        self.validation.run_validation("C1", self.source, target)
+        rows = {r["group_label"]: r for r in self._comparisons()[0]["comparison_rows"]}
+        self.assertEqual(rows["2023"]["status"], "Flagged")
+        self.assertEqual(rows["2023"]["difference"], "", "blank, not 0")
+        self.assertEqual(rows["2023"]["difference_pct"], "", "blank, not 0")
+        self.assertEqual(rows["2023"]["new_value"], "", "missing value stays missing")
+        self.assertTrue(rows["2023"]["reason"], "a reason is recorded")
+
+    def test_child_rows_never_carry_an_accepted_status(self):
+        # Acceptance is a decision about the RUN, recorded on the parent.
+        self.validation.run_validation(
+            "C1", self.source, [{"academic_year": "2022", "count": 9}]
+        )
+        for row in self._comparisons()[0]["comparison_rows"]:
+            self.assertIn(row["status"], ("Match", "Discrepancy", "Flagged"))
+
+    def test_get_comparison_returns_the_breakdown(self):
+        run = self.validation.run_validation("C1", self.source, list(self.source))
+        detail = self.validation.get_comparison(run["comparison"])
+        self.assertEqual(len(detail["comparison_rows"]), 2)
+        self.assertEqual(detail["comparison_rows"][1]["group_label"], "2023")
 
     def test_chart_without_a_metric_is_rejected(self):
         with self.assertRaises(_ValidationError):

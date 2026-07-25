@@ -2,12 +2,10 @@
 
 Wires analytics/comparison.py to DS Validation Comparison records.
 
-SCHEMA NOTE — deliberately not worked around: compare_result_sets reports one
-row per group, but DS Validation Comparison has no field for a group label, so
-per-group rows cannot be persisted without inventing one. Each run therefore
-stores ONE record per chart holding the totals (which the schema fits exactly)
-and returns the full per-group breakdown for the UI to display live. Persisting
-per-group detail needs a schema decision, not a workaround here.
+One DS Validation Comparison record is one comparison RUN: it holds the totals,
+the overall status and the acceptance decision, with per-group detail in its
+comparison_rows child table. A run is the unit that gets accepted, so acceptance
+lives on the parent and the child rows carry no Accepted status.
 
 The three safety rules from comparison.py are preserved end to end:
 - "Accepted" is never computed. Only accept_comparison() sets it, and only with
@@ -60,6 +58,7 @@ def run_validation(chart: str, source_rows, target_rows=None, tolerance_pct=0):
             "difference_pct": totals.get("difference_pct"),
             # Overall status, worst-first: a Flagged group outranks a Discrepancy.
             "status": result["status"],
+            "comparison_rows": [_row_for_storage(row) for row in result["rows"]],
         }
     ).insert()
 
@@ -67,11 +66,46 @@ def run_validation(chart: str, source_rows, target_rows=None, tolerance_pct=0):
         "comparison": doc.name,
         "status": result["status"],
         "summary": result["summary"],
-        # Per-group detail is returned for display but not persisted (see module note).
         "rows": result["rows"],
         "totals": totals,
-        "persisted_rows": False,
+        "persisted_rows": True,
     }
+
+
+def _row_for_storage(row):
+    """One comparison row as a DS Validation Row child.
+
+    Blanks stay blank: a group that could not be compared has no difference, and
+    writing 0 would turn "unknown" into "identical".
+    """
+    return {
+        "group_label": _as_text(row.get("label")),
+        "original_value": _as_text(row.get("original_value")),
+        "new_value": _as_text(row.get("new_value")),
+        "difference": _as_text(row.get("difference")),
+        "difference_pct": _as_text(row.get("difference_pct")),
+        "status": row.get("status"),
+        "reason": row.get("reason") or "",
+    }
+
+
+@frappe.whitelist()
+def get_comparison(comparison: str):
+    """One comparison run with its full per-group breakdown."""
+    frappe.only_for(DS_READ_ROLES)
+    doc = frappe.get_doc("DS Validation Comparison", comparison)
+    data = doc.as_dict()
+    data["comparison_rows"] = [
+        {
+            key: row.get(key)
+            for key in (
+                "group_label", "original_value", "new_value",
+                "difference", "difference_pct", "status", "reason",
+            )
+        }
+        for row in (doc.get("comparison_rows") or [])
+    ]
+    return data
 
 
 @frappe.whitelist()

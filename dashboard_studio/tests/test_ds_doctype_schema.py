@@ -138,6 +138,19 @@ SPEC = {
         "accepted_reason": {"fieldtype": "Small Text", "depends_on": "eval:doc.status=='Accepted'"},
         "evidence": {"fieldtype": "Attach"},
         "reviewed_by": {"fieldtype": "Link", "options": "User"},
+        "comparison_rows": {"fieldtype": "Table", "options": "DS Validation Row"},
+    }),
+    "DS Validation Row": (1, None, None, {
+        "group_label": {"fieldtype": "Data", "reqd": 1},
+        "original_value": {"fieldtype": "Data"},
+        "new_value": {"fieldtype": "Data"},
+        # Data, not Float/Percent: an incomparable group has NO difference, and a
+        # numeric field would store 0 — the coercion comparison.py exists to avoid.
+        "difference": {"fieldtype": "Data"},
+        "difference_pct": {"fieldtype": "Data"},
+        # No "Accepted": acceptance is recorded once per run, on the parent.
+        "status": {"fieldtype": "Select", "options": "Match\nDiscrepancy\nFlagged"},
+        "reason": {"fieldtype": "Small Text"},
     }),
 }
 

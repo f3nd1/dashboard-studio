@@ -1,0 +1,95 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-24 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "group_label",
+  "original_value",
+  "new_value",
+  "difference",
+  "difference_pct",
+  "status",
+  "reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "group_label",
+   "fieldtype": "Data",
+   "label": "Group Label",
+   "reqd": 1,
+   "description": "The dimension value this row compares, e.g. an academic year."
+  },
+  {
+   "fieldname": "original_value",
+   "fieldtype": "Data",
+   "label": "Original Value"
+  },
+  {
+   "fieldname": "new_value",
+   "fieldtype": "Data",
+   "label": "New Value"
+  },
+  {
+   "fieldname": "difference",
+   "fieldtype": "Data",
+   "label": "Difference",
+   "description": "Blank when the values could not be compared \u2014 never 0."
+  },
+  {
+   "fieldname": "difference_pct",
+   "fieldtype": "Data",
+   "label": "Difference Pct",
+   "description": "Blank when there is no meaningful percentage."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Match\nDiscrepancy\nFlagged"
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason",
+   "description": "Why a row could not be compared, when it could not."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-07-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Dashboard Studio",
+ "name": "DS Validation Row",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Dashboard Studio Editor",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Dashboard Studio Viewer"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Dashboard Studio QA Approver"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}
