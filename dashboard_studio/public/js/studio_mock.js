@@ -141,8 +141,31 @@
       reviewed_by: "reviewer@example.invalid" },
   ];
 
+  // ⚠️ MOCK governance state — shaped exactly like get_governance's response.
+  // Roles here simulate an EDITOR: note "Approve and publish" is not allowed.
+  var MOCK_GOVERNANCE = {
+    __mock__: true,
+    dashboard: "D1",
+    dashboard_title: "Admission Overview (MOCK)",
+    status: "QA Approval",
+    stages: ["Draft", "Technical Review", "QA Approval", "Published"],
+    transitions: [
+      { to: "Published", label: "Approve and publish", allowed: false,
+        requires: ["Dashboard Studio QA Approver", "System Manager"] },
+      { to: "Draft", label: "Return for correction", allowed: true,
+        requires: ["Dashboard Studio Editor", "Dashboard Studio QA Approver", "System Manager"] },
+    ],
+    impact: { charts: 9, sections: 3, metrics: 3,
+      shared_metrics: [{ metric: "Applicants by Year (MOCK)", used_by_charts: 3 }] },
+    versions: [
+      { name: "V2", owner: "editor@example.invalid", creation: "2026-07-25 09:40:12" },
+      { name: "V1", owner: "editor@example.invalid", creation: "2026-07-24 16:05:03" },
+    ],
+  };
+
   var api = {
     MOCK_DASHBOARD: MOCK_DASHBOARD,
+    MOCK_GOVERNANCE: MOCK_GOVERNANCE,
     MOCK_CATALOGUE: MOCK_CATALOGUE,
     MOCK_FIELD_CATALOGUE: MOCK_FIELD_CATALOGUE,
     MOCK_COMPARISONS: MOCK_COMPARISONS,

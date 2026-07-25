@@ -92,7 +92,8 @@
 
     var views = el("div", "dss-viewtabs");
     [["design", "Design"], ["mapping", "Mapping"],
-     ["data", "Data & DocTypes"], ["validation", "Validation"]].forEach(function (pair) {
+     ["data", "Data & DocTypes"], ["validation", "Validation"],
+     ["governance", "Governance"]].forEach(function (pair) {
       var v = pair[0];
       var b = el("button", "dss-btn" + (self.state.view === v ? " dss-btn-primary" : ""), pair[1]);
       b.addEventListener("click", function () { self.state.view = v; self.render(); });
@@ -127,6 +128,8 @@
       this.renderCatalogue();
     } else if (this.state.view === "validation") {
       this.renderValidation();
+    } else if (this.state.view === "governance") {
+      this.renderGovernance();
     } else {
       this.refresh();
       this.renderPanel();
@@ -877,6 +880,139 @@
       self.renderValidation();
       toast("Difference accepted");
     }).catch(function () { toast("Could not accept that difference."); });
+  };
+
+  // ---- Governance & Publish: four-stage workflow with separated duties ----
+
+  App.prototype.renderGovernance = function () {
+    var self = this;
+    this.canvas.className = "dss-bandwrap";
+    this.canvas.style.height = "";
+    this.canvas.innerHTML = "";
+
+    if (this.state.governance) { this.paintGovernance(); return; }
+    if (!hasFrappe() || !this.options.dashboard) {
+      this.state.governance = (root.DSStudioMock || {}).MOCK_GOVERNANCE || null;
+      this.paintGovernance();
+      return;
+    }
+    this.canvas.appendChild(el("div", "dss-hint", "Loading governance…"));
+    root.frappe.call({
+      method: "dashboard_studio.api.governance.get_governance",
+      args: { dashboard: this.options.dashboard },
+    }).then(function (r) {
+      self.state.governance = r.message || null;
+      if (self.state.view === "governance") self.paintGovernance();
+    }).catch(function () {
+      if (self.state.view === "governance") {
+        self.canvas.innerHTML = '<div class="dss-hint">Could not load governance.</div>';
+      }
+    });
+  };
+
+  App.prototype.paintGovernance = function () {
+    var self = this;
+    this.canvas.innerHTML = "";
+    this.panel.innerHTML = "";
+    var gov = this.state.governance;
+    if (!gov) {
+      this.canvas.appendChild(el("div", "dss-hint", "No dashboard selected."));
+      return;
+    }
+
+    // Stage indicator.
+    var band = el("div", "dss-band");
+    var head = el("div", "dss-band-head");
+    head.appendChild(el("span", "dss-band-toggle", "Workflow"));
+    head.appendChild(el("span", "dss-band-count", gov.status));
+    band.appendChild(head);
+
+    var stepper = el("div", "dss-stepper");
+    var reached = gov.stages.indexOf(gov.status);
+    gov.stages.forEach(function (stage, index) {
+      var state = index < reached ? " is-done" : (index === reached ? " is-current" : "");
+      var step = el("div", "dss-step" + state);
+      step.appendChild(el("span", "dss-step-dot", String(index + 1)));
+      step.appendChild(el("span", "dss-step-label", stage));
+      stepper.appendChild(step);
+    });
+    // Archived sits outside the forward path, so it is shown only when reached.
+    if (gov.stages.indexOf(gov.status) === -1) {
+      stepper.appendChild(el("div", "dss-step is-current", gov.status));
+    }
+    band.appendChild(stepper);
+
+    var actions = el("div", "dss-gov-actions");
+    (gov.transitions || []).forEach(function (move) {
+      var btn = el("button", "dss-btn" + (move.allowed ? " dss-btn-primary" : ""), move.label);
+      if (!move.allowed) {
+        btn.disabled = true;
+        // Say WHY it is unavailable rather than hiding the step.
+        btn.title = "Requires: " + move.requires.join(" or ");
+        btn.className += " is-disabled";
+      } else {
+        btn.addEventListener("click", function () { self.advanceStage(move); });
+      }
+      actions.appendChild(btn);
+    });
+    band.appendChild(actions);
+    this.canvas.appendChild(band);
+
+    // Change impact — every number here is computed from real Link fields.
+    var impact = gov.impact || {};
+    var impactBand = el("div", "dss-band");
+    var impactHead = el("div", "dss-band-head");
+    impactHead.appendChild(el("span", "dss-band-toggle", "Change impact"));
+    impactBand.appendChild(impactHead);
+    var stats = el("div", "dss-cat-grid");
+    [["Charts", impact.charts], ["Sections", impact.sections], ["Metrics", impact.metrics]]
+      .forEach(function (pair) {
+        var card = el("div", "dss-cat-card");
+        card.appendChild(el("div", "dss-node-kind", pair[0]));
+        card.appendChild(el("div", "dss-cat-count", String(pair[1] == null ? "—" : pair[1])));
+        stats.appendChild(card);
+      });
+    impactBand.appendChild(stats);
+    (impact.shared_metrics || []).forEach(function (row) {
+      impactBand.appendChild(el("div", "dss-gov-warn",
+        "“" + row.metric + "” is used by " + row.used_by_charts +
+        " charts — changing it affects all of them."));
+    });
+    this.canvas.appendChild(impactBand);
+
+    // Native Frappe version history, not a bespoke one.
+    this.panel.appendChild(el("h3", "dss-panel-title", "Version history"));
+    this.panel.appendChild(el("p", "dss-hint",
+      "Frappe records every change automatically; this is that history, not a separate one."));
+    var versions = gov.versions || [];
+    if (!versions.length) this.panel.appendChild(el("p", "dss-hint", "No changes recorded yet."));
+    versions.forEach(function (v) {
+      var row = el("div", "dss-ver-row");
+      row.appendChild(el("div", "dss-ver-when", v.creation));
+      row.appendChild(el("div", "dss-ver-who", v.owner));
+      self.panel.appendChild(row);
+    });
+    this.panel.appendChild(el("p", "dss-hint",
+      "Publishing is separated from editing: an Editor can submit work for approval, " +
+      "but only a QA Approver can publish it."));
+  };
+
+  App.prototype.advanceStage = function (move) {
+    var self = this;
+    if (!hasFrappe() || !this.options.dashboard) {
+      this.state.governance.status = move.to;
+      this.paintGovernance();
+      toast("Moved to " + move.to + " (mock — not persisted)");
+      return;
+    }
+    root.frappe.call({
+      method: "dashboard_studio.api.governance.advance_status",
+      args: { dashboard: this.options.dashboard, to_status: move.to },
+    }).then(function (r) {
+      self.state.governance = null; // re-read, so the next legal moves come from the server
+      self.renderGovernance();
+      toast((r.message || {}).applied || "Updated");
+    }).catch(function () { toast("That move was refused."); });
   };
 
   // ---- Mapping view: source tables -> DocTypes, persisted shapes mocked ----

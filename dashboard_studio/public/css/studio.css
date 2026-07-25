@@ -248,3 +248,24 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-val-table tr.is-discrepancy { background: var(--dss-orange-100); }
 .dss-num { font-variant-numeric: tabular-nums; text-align: right; }
 .dss-val-reason { font-size: 10px; color: var(--dss-muted); font-style: italic; }
+
+/* ---- Governance & Publish ---- */
+.dss-stepper { display: flex; align-items: center; gap: 8px; padding: 16px 14px; flex-wrap: wrap; }
+.dss-step { display: flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px;
+  background: var(--dss-surface-2); border: 1px solid var(--dss-line); font-size: 11px;
+  font-weight: 700; color: var(--dss-muted); }
+.dss-step.is-done { background: var(--dss-green-100); border-color: #b7ddcd; color: var(--dss-green); }
+.dss-step.is-current { background: var(--dss-navy); border-color: var(--dss-navy); color: #fff;
+  box-shadow: 0 8px 16px rgba(28, 62, 105, .16); }
+.dss-step-dot { display: inline-flex; align-items: center; justify-content: center; width: 18px;
+  height: 18px; border-radius: 50%; background: rgba(255,255,255,.25); font-size: 9px; font-weight: 900; }
+.dss-step.is-done .dss-step-dot, .dss-step:not(.is-current) .dss-step-dot
+  { background: var(--dss-surface-3); }
+.dss-gov-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 14px 14px; }
+.dss-btn.is-disabled { opacity: .5; cursor: not-allowed; }
+.dss-gov-warn { font-size: 11px; font-weight: 600; color: var(--dss-orange);
+  background: var(--dss-orange-100); border-top: 1px solid #f0d19a; padding: 9px 14px; }
+.dss-ver-row { display: flex; justify-content: space-between; gap: 8px; font-size: 10px;
+  padding: 7px 0; border-bottom: 1px solid var(--dss-line); }
+.dss-ver-when { font-variant-numeric: tabular-nums; color: var(--dss-ink-700); }
+.dss-ver-who { color: var(--dss-muted); }
