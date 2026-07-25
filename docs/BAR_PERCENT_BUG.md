@@ -377,20 +377,17 @@ would need an API read to confirm.~~ **Corrected.** The table cell is rendered b
 an `SGD ` prefix, a `/5` or a thousands separator. Part 1B detects the dropping
 case with DOM reads only.
 
-## A genuinely separate pair: the KPI strip has two implementations
+## DUPLICATE IMPLEMENTATIONS OF THE SAME FOUR METRICS — Criterion 4
 
-- Generic (`:2507`): `metricValue(metric)` → `Number(v).toLocaleString()`,
-  default 3 fraction digits.
-- Criterion 4 / 4.1.1 admission (`:2504`):
-  `Number(v).toLocaleString(undefined,{maximumFractionDigits:2})` plus its own
-  `unit==="percent"?"%":""`.
+**Plainly, so it does not have to be re-derived:**
 
-Measured: `96.7742` renders as **`96.774`** through the first and **`96.77`**
-through the second.
+> On Criterion 4, the headline KPI figures and the charts are **two independent
+> implementations of the same four metrics, shipped in the same API response**.
+> They agree by coincidence, not by construction. This is a separate defect of
+> the same family as the unit split — it is **not** a rounding quirk.
 
-**Update — the overlap is confirmed from source, and it is worse than a rounding
-difference.** `CONFIG['4.1.1']['metrics']` and `admission_intelligence.kpis`
-carry the **same four metric IDs**:
+`CONFIG['4.1.1']['metrics']` and `result.admission_intelligence.kpis` carry the
+**same four metric IDs**, computed twice by different code in one script:
 
 | ID | Label | `CONFIG` path | `admission_intelligence` path |
 |---|---|---|---|
@@ -399,15 +396,35 @@ carry the **same four metric IDs**:
 | `c411-enrolled-admitted` | No. of Enrolled Students | mode `equals` | bespoke |
 | `c411-success-rate` | Success Rate | mode `ratio_status` | `round(admitted/applicants*100, 2)` |
 
-Both are built by `UCC Analytics - Criterion 4.py` and both ship in the **same
-API response**. So on Criterion 4 the KPI strip renders one computation and the
-charts and tables render a different, independently-written computation of the
-same four figures. The `96.774` / `96.77` pair is the visible symptom, not the
-problem: the rounding differs because the *code* differs.
+Both are built by `UCC Analytics - Criterion 4.py`. On the page, the KPI strip
+renders one computation while the charts and tables render the other.
 
-Two independent implementations of one figure will agree only for as long as
-nobody edits one of them. **Parked deliberately, not closed** — no further
-investigation until the two percentage procedures have been run.
+### How it became visible
+
+Two renderers with different rounding rules:
+
+- Generic (`:2507`): `metricValue(metric)` → `Number(v).toLocaleString()`,
+  default 3 fraction digits.
+- Criterion 4 / 4.1.1 admission (`:2504`):
+  `Number(v).toLocaleString(undefined,{maximumFractionDigits:2})` plus its own
+  `unit==="percent"?"%":""`.
+
+`96.7742` renders as **`96.774`** through the first and **`96.77`** through the
+second. That pair is the *symptom*. The rounding differs because the code
+differs — and the code differing is the actual defect, because it means the two
+figures are only ever equal by accident.
+
+### Why it matters even while the numbers still match
+
+`success_rate` is already rounded server-side to 2 places, so today the client
+formatter is a no-op and the two paths happen to agree. Nothing enforces that.
+A filter added to one definition, a status value renamed, a denominator changed
+— any of these moves one path and not the other, and the page then shows two
+different numbers for one metric with no error anywhere.
+
+**Parked deliberately, not closed.** No further investigation until the two
+percentage procedures have been run. Named as a pattern instance in
+`docs/SOPHIA_FAULT_PATTERN.md`.
 
 ## A third inconsistency, inside the "correct" function
 
