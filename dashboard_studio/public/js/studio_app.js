@@ -133,7 +133,10 @@
   function statusClass(status) {
     if (status === "Published") return "is-published";
     if (status === "Technical Review" || status === "QA Approval") return "is-review";
-    return "is-draft"; // Draft, Archived, or unset — all neutral
+    // Archived is retired, so it reads quieter than anything active — quieter
+    // than Draft too, which is a live dashboard someone is still working on.
+    if (status === "Archived") return "is-archived";
+    return "is-draft"; // Draft, or unset
   }
 
   App.prototype.buildTitle = function () {
@@ -221,11 +224,13 @@
       listHost.innerHTML = "";
       footer.innerHTML = "";
 
+      // Guidance only — the create action stays in the footer, where it sits in
+      // every other state, rather than moving into the message and competing
+      // for the click.
       if (!model.shown) {
         var none = el("div", "dss-picker-empty");
         none.appendChild(el("p", "dss-hint",
           'No dashboard matches “' + model.query + '”.'));
-        none.appendChild(self.pickerCreateButton());
         listHost.appendChild(none);
       }
 

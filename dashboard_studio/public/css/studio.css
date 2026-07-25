@@ -91,6 +91,12 @@
 .dss-picker-pill { flex: none; border-radius: 999px; padding: 2px 7px; font-size: 9px;
   font-weight: 700; letter-spacing: .2px; }
 .dss-picker-pill.is-draft { background: var(--dss-surface-3); color: var(--dss-muted); }
+/* Retired: an outline instead of a fill, so it sits back from every active
+   status. Drawn with an inset shadow rather than a border so it stays exactly
+   the same size as its filled siblings. Text colour is unchanged — "quieter"
+   is the fill's job, not the contrast's. */
+.dss-picker-pill.is-archived { background: transparent; color: var(--dss-muted);
+  box-shadow: inset 0 0 0 1px var(--dss-line); }
 .dss-picker-pill.is-review { background: var(--dss-orange-100); color: var(--dss-orange); }
 .dss-picker-pill.is-published { background: var(--dss-green-100); color: var(--dss-green); }
 .dss-picker-empty { padding: 14px 10px; text-align: center; }
