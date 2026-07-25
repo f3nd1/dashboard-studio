@@ -17,6 +17,31 @@ class _ValidationError(Exception):
     pass
 
 
+class _MandatoryError(Exception):
+    """Stands in for frappe.exceptions.MandatoryError."""
+
+
+def _doctype_fields(doctype):
+    """Field definitions from the real DocType JSON on disk.
+
+    Reading the shipped schema rather than restating it here is what stops the
+    fake and the DocType drifting apart — a reqd flag added to the JSON starts
+    being enforced in tests with no test change.
+    """
+    import json as _json
+    import os
+
+    folder = doctype.lower().replace(" ", "_")
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "dashboard_studio", "doctype", folder, folder + ".json",
+    )
+    if not os.path.exists(path):
+        return []          # not one of ours (e.g. Version) — nothing to enforce
+    with open(path) as handle:
+        return _json.load(handle)["fields"]
+
+
 class _FakeDoc:
     def __init__(self, data, store=None, doctype=None):
         object.__setattr__(self, "_data", dict(data))
@@ -54,6 +79,21 @@ class _FakeDoc:
         return self
 
     def insert(self):
+        # Frappe raises MandatoryError on insert when a reqd field is empty.
+        # Without this the fake accepted documents a real site rejects — which
+        # is how create_chart shipped inserting a DS Chart with no metric and
+        # passed nine tests before failing on the first live Bench call.
+        #
+        # ponytail: insert only, not save(). Docs loaded from the fixture store
+        # and re-saved are not re-checked; extend if a save-path gap turns up.
+        for field in _doctype_fields(self._doctype):
+            if not field.get("reqd"):
+                continue
+            value = self._data.get(field["fieldname"])
+            if value is None or value == "":
+                raise _MandatoryError(
+                    f"[{self._doctype}]: {field['fieldname']}"
+                )
         self._persist()
         return self
 
@@ -107,16 +147,7 @@ def _make_fake_frappe(store):
 
     def get_meta(doctype):
         """Meta backed by the real DocType JSON, so Select options cannot drift."""
-        import json as _json
-        import os
-
-        folder = doctype.lower().replace(" ", "_")
-        path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "dashboard_studio", "doctype", folder, folder + ".json",
-        )
-        with open(path) as handle:
-            fields = _json.load(handle)["fields"]
+        fields = _doctype_fields(doctype)
 
         class _Meta:
             def get_field(self, fieldname):
@@ -140,6 +171,7 @@ def _make_fake_frappe(store):
     frappe.delete_doc = delete_doc
     frappe.throw = throw
     frappe.get_meta = get_meta
+    frappe.MandatoryError = _MandatoryError
     frappe.db = types.SimpleNamespace(set_value=set_value, get_value=get_value)
     return frappe
 
