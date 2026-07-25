@@ -16,6 +16,23 @@
   var ROW_H = 44; // px per grid row
   var PENDING = "__pending__"; // in-flight marker in the metric result cache
 
+  // Workspace header: kicker / title / what this screen is for. The Design view
+  // has no entry — its heading is the dashboard title in the toolbar.
+  var HEROES = {
+    mapping: ["Metabase migration", "Map a Metabase query onto DocTypes",
+      "Paste the query behind a Metabase card. Tables it finds become nodes you " +
+      "map to DocTypes; anything it cannot safely translate is reported, never guessed."],
+    data: ["Source of truth", "Records, relationships and safe fields",
+      "What this app has stored, how those records link to each other, and which " +
+      "fields each metric is allowed to read."],
+    validation: ["Result comparison", "Validation Centre",
+      "Compare a reference result against this app's result for the same chart " +
+      "before publishing. Differences are only ever accepted by a person."],
+    governance: ["Governance", "Review and publish",
+      "A dashboard moves Draft → Technical Review → QA Approval → Published. " +
+      "Whoever builds it cannot be the one who publishes it."],
+  };
+
   function el(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -219,6 +236,15 @@
       tabs.appendChild(tab);
     });
     wrap.appendChild(tabs);
+
+    var hero = HEROES[this.state.view];
+    if (hero) {
+      var heroBox = el("div", "dss-hero");
+      heroBox.appendChild(el("div", "dss-kicker", hero[0]));
+      heroBox.appendChild(el("h3", "dss-hero-title", hero[1]));
+      heroBox.appendChild(el("p", "dss-hero-blurb", hero[2]));
+      wrap.appendChild(heroBox);
+    }
 
     var main = el("div", "dss-main");
     this.canvas = el("div", "dss-canvas");

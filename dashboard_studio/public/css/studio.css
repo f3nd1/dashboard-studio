@@ -85,6 +85,16 @@
 .dss-tab.is-active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0;
   height: 3px; border-radius: 999px; background: var(--dss-gold); }
 
+/* ---- Workspace hero (kicker / title / purpose) ---- */
+.dss-kicker { color: var(--dss-muted); font-size: 10px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .9px; }
+.dss-hero { background: linear-gradient(180deg, var(--dss-surface), var(--dss-surface-2));
+  border: 1px solid var(--dss-line); border-left: 3px solid var(--dss-gold);
+  border-radius: var(--dss-r-lg); padding: 14px 18px; margin-bottom: 18px; }
+.dss-hero-title { font-size: 16px; font-weight: 800; letter-spacing: -.3px; margin: 4px 0 5px; }
+.dss-hero-blurb { font-size: 12px; line-height: 1.55; color: var(--dss-ink-700);
+  margin: 0; max-width: 76ch; }
+
 /* ---- Canvas + chart cards ---- */
 .dss-canvas { position: relative; background:
   linear-gradient(90deg, var(--dss-surface-3) 1px, transparent 1px) 0 0 / 8.333% 100%,
