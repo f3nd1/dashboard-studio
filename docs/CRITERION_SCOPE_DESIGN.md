@@ -172,6 +172,19 @@ publish with a named reason** rather than emitting a contract Sophia will
 silently mis-route. Authoring-time Select options are a usability affordance;
 publish-time validation is the control.
 
+> ### ⚠ Known limitation, as built
+>
+> **The gate validates against our copy, not against Sophia.**
+> `advance_status` refuses a code that is not in `edutrust.SUBCRITERIA`. That is
+> a *self-consistency* check, not a *truth* check: it proves the stored code
+> matches this repo's copy, not that it matches Sophia's live registries. If the
+> copy drifts, the gate passes a code Sophia silently mis-routes — the exact
+> failure it exists to prevent.
+>
+> It cannot be closed today: nothing serves Sophia's list, and this app cannot
+> import its Server Scripts. **Closing it is an acceptance criterion of the
+> Publish-to-Sophia work**, which must reach Sophia anyway.
+
 ### Details to settle when this is built
 
 1. **Store the canonical code.** Use `5.4.1`/`5.5.1`, not the frontend's

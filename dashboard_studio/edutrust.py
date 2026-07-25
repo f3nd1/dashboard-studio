@@ -16,6 +16,16 @@ validates against this list rather than trusting it.
 Do NOT source this from ``VERSION.json``. Its ``policy_registries`` block omits
 criterion_4 and criterion_5 entirely and is already stale against the scripts.
 
+KNOWN LIMITATION — the publish gate **validates against our copy, not against
+Sophia.** ``api/governance.advance_status`` refuses to publish a code that is not
+in ``SUBCRITERIA``, which is a self-consistency check: it proves the stored code
+matches this file, not that it matches Sophia's live registries. If this file
+drifts, the gate will pass a code Sophia silently mis-routes — the exact failure
+the gate exists to prevent. It cannot be closed today because nothing serves
+Sophia's list. **Closing it is an acceptance criterion of the Publish-to-Sophia
+work**, which has to reach Sophia anyway; see docs/CRITERION_SCOPE_DESIGN.md §4
+and docs/PUBLISH_TO_SOPHIA_DESIGN.md.
+
 Deliberately excluded:
 
 - ``overview``. Sophia's POLICY_REGISTRY defines it for criteria 1, 3, 4 and 5,
