@@ -46,6 +46,9 @@ class _FakeDoc:
     def set(self, key, value):
         self._data[key] = value
 
+    def append(self, key, value):
+        self._data.setdefault(key, []).append(dict(value))
+
     def as_dict(self):
         return dict(self._data)
 
@@ -274,6 +277,37 @@ class TestMigrationMappingApi(unittest.TestCase):
         nodes = self.store["DS Migration Project"]["P1"]["canvas_nodes"]
         self.assertEqual(len(nodes), 1, "layout is replaced wholesale, not appended")
         self.assertEqual(nodes[0]["node_id"], "tgt:Y")
+
+    # ---- SQL kept as evidence ----
+    def test_analyzed_sql_is_recorded_as_evidence(self):
+        result = self.studio.save_migration_mapping_set(
+            "P1", [], [],
+            [{"source_sql": "SELECT COUNT(*) FROM `tabStudent Applicant`",
+              "supported": True, "reasons": []},
+             {"source_sql": "SELECT ... nested ...", "supported": False,
+              "reasons": ["subquery / nested SELECT", "multiple joins (2)"]}],
+        )
+        self.assertEqual(result["recorded_queries"], 2)
+        rows = self.store["DS Migration Project"]["P1"]["source_queries"]
+        self.assertEqual(rows[0]["supported"], 1)
+        # The unsupported query keeps its reasons — it IS the review evidence.
+        self.assertEqual(rows[1]["supported"], 0)
+        self.assertEqual(rows[1]["reasons"], "subquery / nested SELECT; multiple joins (2)")
+
+    def test_identical_sql_is_not_recorded_twice(self):
+        query = [{"source_sql": "SELECT COUNT(*) FROM `tabX`", "supported": True, "reasons": []}]
+        self.studio.save_migration_mapping_set("P1", [], [], query)
+        result = self.studio.save_migration_mapping_set("P1", [], [], query)
+        self.assertEqual(result["recorded_queries"], 0, "re-saving must not duplicate evidence")
+        self.assertEqual(len(self.store["DS Migration Project"]["P1"]["source_queries"]), 1)
+
+    def test_evidence_accumulates_across_saves(self):
+        self.studio.save_migration_mapping_set(
+            "P1", [], [], [{"source_sql": "SELECT 1 FROM `tabA`", "supported": True}])
+        self.studio.save_migration_mapping_set(
+            "P1", [], [], [{"source_sql": "SELECT 2 FROM `tabB`", "supported": True}])
+        rows = self.store["DS Migration Project"]["P1"]["source_queries"]
+        self.assertEqual(len(rows), 2, "evidence appends, it does not replace")
 
     # ---- guards / reads ----
     def test_project_without_data_source_is_rejected(self):

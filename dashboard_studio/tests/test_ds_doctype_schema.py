@@ -111,6 +111,12 @@ SPEC = {
         "target_dashboard": {"fieldtype": "Link", "options": "DS Dashboard"},
         "notes": {"fieldtype": "Small Text"},
         "canvas_nodes": {"fieldtype": "Table", "options": "DS Canvas Node"},
+        "source_queries": {"fieldtype": "Table", "options": "DS Migration Source Query"},
+    }),
+    "DS Migration Source Query": (1, None, None, {
+        "source_sql": {"fieldtype": "Code", "reqd": 1},
+        "supported": {"fieldtype": "Check"},
+        "reasons": {"fieldtype": "Small Text"},
     }),
     "DS Canvas Node": (1, None, None, {
         "node_id": {"fieldtype": "Data", "reqd": 1},

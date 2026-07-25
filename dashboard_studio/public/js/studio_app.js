@@ -628,7 +628,7 @@
       }).then(function (r) {
         var data = r.message || {};
         var analysis = data.analysis || {};
-        self.applyAnalysis(analysis, data.suggested_mappings || []);
+        self.applyAnalysis(analysis, data.suggested_mappings || [], sql);
       }).catch(function () {
         note.textContent = "Could not analyze that query.";
       });
@@ -640,24 +640,35 @@
   // Seed nodes and suggestions from a parsed query. Tables found are always
   // shown (they can still be mapped by hand); mappings are only ever suggested
   // for a query the parser judged safe to translate.
-  App.prototype.applyAnalysis = function (analysis, suggestions) {
+  App.prototype.applyAnalysis = function (analysis, suggestions, sql) {
     var discovered = core.analysisToNodes(analysis, analysis.doctypes || []);
     this.state.mapNodes = core.mergeNodes(this.state.mapNodes, discovered);
     this.state.mappings = core.mergeMappings(this.state.mappings, suggestions);
     this.state.lastAnalysis = analysis;
+    // Keep the query itself for the next save — it is the evidence, and it
+    // matters most for the queries that were NOT translated.
+    if (sql) {
+      this.state.analyzedQueries = (this.state.analyzedQueries || []).concat([{
+        source_sql: sql,
+        supported: !!analysis.supported,
+        reasons: analysis.reasons || [],
+      }]);
+    }
     this.refreshMapping();
   };
 
   App.prototype.saveMappings = function () {
+    var self = this;
     var mappings = this.state.mappings;
     var canvasNodes = core.serializeCanvasNodes(this.state.mapNodes || []);
+    var analyzedQueries = this.state.analyzedQueries || [];
 
     // Without a ?project= there is nothing to save against, so keep the mock
     // path — the payload shape is identical either way.
     if (!this.options.project || !hasFrappe()) {
       if (root.console) {
         root.console.log("[Dashboard Studio] mock mapping payload",
-          { mappings: mappings, canvas_nodes: canvasNodes });
+          { mappings: mappings, canvas_nodes: canvasNodes, source_queries: analyzedQueries });
       }
       toast("Captured " + mappings.length + " mapping(s) (mock — no migration project)");
       return;
@@ -669,11 +680,15 @@
         project: this.options.project,
         mappings: JSON.stringify(mappings),
         canvas_nodes: JSON.stringify(canvasNodes),
+        source_queries: JSON.stringify(analyzedQueries),
       },
     }).then(function (r) {
       var result = r.message || {};
-      toast("Saved " + (result.saved_mappings || 0) + " mapping(s) — project is now " +
-        (result.status || "updated"));
+      // Recorded evidence is now on the project, so it need not be resent.
+      self.state.analyzedQueries = [];
+      toast("Saved " + (result.saved_mappings || 0) + " mapping(s)" +
+        (result.recorded_queries ? ", " + result.recorded_queries + " query(ies) kept as evidence" : "") +
+        " — project is now " + (result.status || "updated"));
     });
   };
 

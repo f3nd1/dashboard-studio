@@ -10,7 +10,8 @@
   "status",
   "target_dashboard",
   "notes",
-  "canvas_nodes"
+  "canvas_nodes",
+  "source_queries"
  ],
  "fields": [
   {
@@ -50,6 +51,13 @@
    "fieldtype": "Table",
    "label": "Canvas Nodes",
    "options": "DS Canvas Node"
+  },
+  {
+   "fieldname": "source_queries",
+   "fieldtype": "Table",
+   "label": "Source Queries",
+   "options": "DS Migration Source Query",
+   "description": "Metabase SQL analyzed for this project, kept as evidence."
   }
  ],
  "index_web_pages_for_search": 0,

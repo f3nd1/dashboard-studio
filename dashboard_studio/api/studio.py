@@ -113,7 +113,7 @@ def get_migration_project(project: str):
 
 
 @frappe.whitelist()
-def save_migration_mapping_set(project: str, mappings=None, canvas_nodes=None):
+def save_migration_mapping_set(project: str, mappings=None, canvas_nodes=None, source_queries=None):
     """Persist the Mapping view's one save action: mappings + canvas layout.
 
     Mappings are upserted against the natural key
@@ -123,6 +123,10 @@ def save_migration_mapping_set(project: str, mappings=None, canvas_nodes=None):
 
     Canvas nodes are replaced wholesale from sanitized copies (the client always
     sends the full set), the same pattern save_chart uses for child rows.
+
+    Analyzed SQL is APPENDED rather than replaced — it is evidence of what was
+    examined, especially for queries the parser routed to manual review, so it
+    accumulates instead of being overwritten. Identical SQL is not recorded twice.
 
     Performs the one automatic lifecycle transition: Not Started -> Mapping on
     the first successful save. Every later transition is a manual user action.
@@ -181,11 +185,37 @@ def save_migration_mapping_set(project: str, mappings=None, canvas_nodes=None):
         ],
     )
 
+    recorded = _append_source_queries(doc, _as_row_list(source_queries, "source_queries"))
+
     if saved and doc.status == "Not Started":
         doc.status = "Mapping"
     doc.save()
 
-    return {"saved_mappings": saved, "status": doc.status}
+    return {"saved_mappings": saved, "recorded_queries": recorded, "status": doc.status}
+
+
+def _append_source_queries(doc, rows):
+    """Append analyzed SQL as evidence, skipping any already on record."""
+    existing = doc.get("source_queries") or []
+    seen = {(row.get("source_sql") or "").strip() for row in existing}
+    added = 0
+    for row in rows:
+        sql = str(row.get("source_sql") or "").strip()
+        if not sql or sql in seen:
+            continue
+        seen.add(sql)
+        reasons = row.get("reasons")
+        doc.append(
+            "source_queries",
+            {
+                "source_sql": sql,
+                "supported": 1 if row.get("supported") else 0,
+                # Reasons arrive as a list from the analyzer; store them readable.
+                "reasons": "; ".join(reasons) if isinstance(reasons, list) else (reasons or ""),
+            },
+        )
+        added += 1
+    return added
 
 
 def _as_row_list(value, label):
