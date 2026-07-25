@@ -562,6 +562,22 @@
         ? "Now click a Target DocType to map it."
         : "Click a Source Table, then a Target DocType, to draw a mapping. Click a mapping to cycle its status."));
 
+    // Show what the parser concluded about the last analyzed query — especially
+    // when it declined to translate it, which must never be silent.
+    var analysis = this.state.lastAnalysis;
+    if (analysis) {
+      if (analysis.supported) {
+        this.panel.appendChild(el("div", "dss-analysis is-ok",
+          "SQL analyzed: " + (analysis.doctypes || []).length + " table(s) found" +
+          ((analysis.group_by || []).length ? ", grouped by " + analysis.group_by.join(", ") : "") +
+          ". Suggested mappings are marked Suggested until you confirm them."));
+      } else {
+        this.panel.appendChild(el("div", "dss-analysis is-warn",
+          "This query was not translated — " + (analysis.reasons || []).join("; ") +
+          ". Tables found are shown so you can map them by hand; nothing was suggested automatically."));
+      }
+    }
+
     if (!this.state.mappings.length) {
       this.panel.appendChild(el("p", "dss-hint", "No mappings yet."));
     }
@@ -578,6 +594,58 @@
     var save = el("button", "dss-btn dss-btn-primary", "Save mappings");
     save.addEventListener("click", function () { self.saveMappings(); });
     this.panel.appendChild(save);
+
+    this.renderSqlImport();
+  };
+
+  // Paste Metabase SQL to seed the canvas: the parser reports what it found and
+  // suggests identity mappings, which the user then confirms or rejects.
+  App.prototype.renderSqlImport = function () {
+    var self = this;
+    var wrap = el("div", "dss-sqlimport");
+    wrap.appendChild(el("span", "dss-field-label", "Import from Metabase SQL"));
+
+    var box = el("textarea", "dss-input");
+    box.placeholder = "Paste a SELECT query…";
+    box.setAttribute("aria-label", "Metabase SQL");
+    wrap.appendChild(box);
+
+    var note = el("div", "dss-sqlnote");
+    wrap.appendChild(note);
+
+    var analyze = el("button", "dss-btn dss-btn-small", "Analyze SQL");
+    analyze.addEventListener("click", function () {
+      var sql = (box.value || "").trim();
+      if (!sql) { note.textContent = "Paste a query first."; return; }
+      if (!hasFrappe()) {
+        note.textContent = "SQL analysis needs the server (not available in mock mode).";
+        return;
+      }
+      note.textContent = "Analyzing…";
+      root.frappe.call({
+        method: "dashboard_studio.api.migration.analyze_migration_sql",
+        args: { sql: sql },
+      }).then(function (r) {
+        var data = r.message || {};
+        var analysis = data.analysis || {};
+        self.applyAnalysis(analysis, data.suggested_mappings || []);
+      }).catch(function () {
+        note.textContent = "Could not analyze that query.";
+      });
+    });
+    wrap.appendChild(analyze);
+    this.panel.appendChild(wrap);
+  };
+
+  // Seed nodes and suggestions from a parsed query. Tables found are always
+  // shown (they can still be mapped by hand); mappings are only ever suggested
+  // for a query the parser judged safe to translate.
+  App.prototype.applyAnalysis = function (analysis, suggestions) {
+    var discovered = core.analysisToNodes(analysis, analysis.doctypes || []);
+    this.state.mapNodes = core.mergeNodes(this.state.mapNodes, discovered);
+    this.state.mappings = core.mergeMappings(this.state.mappings, suggestions);
+    this.state.lastAnalysis = analysis;
+    this.refreshMapping();
   };
 
   App.prototype.saveMappings = function () {

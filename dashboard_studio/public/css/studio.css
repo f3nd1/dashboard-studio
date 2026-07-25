@@ -57,6 +57,13 @@ textarea.dss-input { min-height: 60px; resize: vertical; }
 .dss-filter-locked { font-size: 11px; color: var(--dss-muted); background: #f4f6f9;
   border: 1px dashed var(--dss-line); border-radius: 6px; padding: 5px 8px; margin-bottom: 4px; }
 .dss-btn-small { padding: 3px 8px; font-size: 12px; }
+.dss-sqlimport { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--dss-line); }
+.dss-sqlimport textarea.dss-input { min-height: 62px; font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px; margin-bottom: 6px; }
+.dss-sqlnote { font-size: 11px; color: var(--dss-muted); min-height: 14px; margin-bottom: 6px; }
+.dss-analysis { font-size: 11px; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
+.dss-analysis.is-ok { background: #e7f3ef; border: 1px solid #b7ddcd; color: #146b47; }
+.dss-analysis.is-warn { background: #fdf1e3; border: 1px solid #f0d19a; color: #8a5a12; }
 .dss-layout-row { margin-bottom: 10px; }
 .dss-layout-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
 .dss-layout-grid .dss-input { padding: 4px 6px; font-size: 12px; }

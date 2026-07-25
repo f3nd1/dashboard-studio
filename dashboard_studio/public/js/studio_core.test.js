@@ -76,6 +76,21 @@ assert.strictEqual(nodes[0].label, "tabStudent Applicant", "source label restore
 assert.strictEqual(nodes[2].node_type, "Target DocType");
 assert.ok(nodes[2].pos_x > nodes[0].pos_x, "targets laid out right of sources");
 
+// mergeMappings: adds new suggestions, never resets an existing decision
+var existingMappings = [
+  { external_table: "tabStudent Applicant", target_doctype: "Student Applicant", mapping_status: "Rejected" },
+];
+var mergedMappings = core.mergeMappings(existingMappings, [
+  { external_table: "tabStudent Applicant", target_doctype: "Student Applicant", mapping_status: "Suggested" },
+  { external_table: "tabProgram", target_doctype: "Program", mapping_status: "Suggested" },
+]);
+assert.strictEqual(mergedMappings.length, 2, "only the genuinely new mapping is added");
+assert.strictEqual(mergedMappings[0].mapping_status, "Rejected", "existing decision preserved");
+assert.strictEqual(mergedMappings[1].target_doctype, "Program");
+assert.strictEqual(existingMappings.length, 1, "input not mutated");
+assert.strictEqual(core.mergeMappings([], [{ external_table: "", target_doctype: "X" }]).length, 0,
+  "incomplete rows ignored");
+
 // nodesFromProject: saved positions restored, labels derived from node_id
 var restored = core.nodesFromProject(
   [{ node_id: "src:tabStudent Applicant", node_type: "Source Table", pos_x: 44, pos_y: 90 }],
