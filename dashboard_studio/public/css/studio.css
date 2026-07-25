@@ -41,6 +41,17 @@
 .dss-resize { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 50%, var(--dss-accent) 50%); }
 
+/* Sections: each band owns its own canvas, so coordinates stay section-local. */
+.dss-bandwrap { display: flex; flex-direction: column; gap: 12px; }
+.dss-band { border: 1px solid var(--dss-line); border-radius: 10px; overflow: hidden; background: #fff; }
+.dss-band-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+  background: #f4f6f9; border-bottom: 1px solid var(--dss-line); }
+.dss-band-toggle { background: none; border: 0; font: inherit; font-weight: 600; font-size: 13px;
+  cursor: pointer; color: var(--dss-ink); padding: 2px 4px; }
+.dss-band-toggle:hover { color: var(--dss-accent); }
+.dss-band-count { font-size: 11px; color: var(--dss-muted); margin-left: auto; }
+.dss-band-canvas { border: 0; border-radius: 0; }
+
 .dss-panel { border: 1px solid var(--dss-line); border-radius: 10px; padding: 14px; background: #fff; }
 .dss-panel-title { font-size: 14px; margin: 0 0 10px; }
 .dss-hint { font-size: 13px; color: var(--dss-muted); }

@@ -42,6 +42,8 @@
       view: this.options.project ? "mapping" : "design",
       // Mapping view state, built lazily on first open.
       mapNodes: null, mappings: [], pickedSource: null,
+      // Sections group charts in the Design view; collapse state is per session.
+      sections: [], collapsedSections: {},
     };
   }
 
@@ -56,6 +58,7 @@
         var data = r.message || {};
         self.state.dashboard = data.dashboard;
         self.state.charts = data.charts || [];
+        self.state.sections = data.sections || [];
         self.state.mock = false;
         self.render();
       }).catch(function () {
@@ -70,6 +73,7 @@
     var mock = (root.DSStudioMock || {}).MOCK_DASHBOARD || { charts: [] };
     this.state.dashboard = mock;
     this.state.charts = mock.charts.map(function (c) { return Object.assign({}, c); });
+    this.state.sections = mock.sections || [];
     this.state.mock = true;
     this.render();
   };
@@ -114,13 +118,12 @@
     if (this.state.view === "mapping") {
       this.renderMapping();
     } else {
-      this.state.charts.forEach(function (c) { self.renderCard(c); });
-      this.fitCanvas();
+      this.refresh();
       this.renderPanel();
     }
   };
 
-  App.prototype.renderCard = function (chart) {
+  App.prototype.renderCard = function (chart, container) {
     var self = this;
     var style = core.layoutStyle(chart);
     var card = el("div", "dss-card" + (this.state.selected === chart.name ? " is-selected" : ""));
@@ -144,10 +147,10 @@
       if (e.target === resize) return;
       self.select(chart.name);
     });
-    this.dragBehavior(header, chart, "move");
-    this.dragBehavior(resize, chart, "resize");
+    this.dragBehavior(header, chart, "move", container);
+    this.dragBehavior(resize, chart, "resize", container);
 
-    this.canvas.appendChild(card);
+    container.appendChild(card);
   };
 
   // Draw the chart's actual visual from its metric result rows. Results are
@@ -199,12 +202,14 @@
 
   // Pointer-driven move/resize. Converts px deltas to grid columns/rows via the
   // canvas width; commits through core.clampLayout so boxes stay on the grid.
-  App.prototype.dragBehavior = function (handle, chart, mode) {
+  App.prototype.dragBehavior = function (handle, chart, mode, container) {
     var self = this;
     handle.addEventListener("mousedown", function (e) {
       e.preventDefault();
       var startX = e.clientX, startY = e.clientY;
-      var colW = self.canvas.clientWidth / core.GRID_COLUMNS;
+      // Measure the surface this card actually sits on — with sections, that is
+      // the band's own canvas, not the outer wrapper.
+      var colW = container.clientWidth / core.GRID_COLUMNS;
       var base = { pos_x: chart.pos_x, pos_y: chart.pos_y, width: chart.width, height: chart.height };
 
       function onMove(ev) {
@@ -232,20 +237,66 @@
   App.prototype.refresh = function () {
     var self = this;
     this.canvas.innerHTML = "";
-    this.state.charts.forEach(function (c) { self.renderCard(c); });
-    this.fitCanvas();
+    var bands = core.groupChartsBySection(this.state.charts, this.state.sections);
+
+    // No sections defined: keep the single flat canvas exactly as before.
+    if (!bands.length) {
+      this.canvas.className = "dss-canvas";
+      this.state.charts.forEach(function (chart) { self.renderCard(chart, self.canvas); });
+      this.fitCanvas(this.canvas, this.state.charts);
+      return;
+    }
+
+    // With sections, the outer element becomes a plain wrapper and each band
+    // gets its own surface, so coordinates and drag are scoped to the section.
+    this.canvas.className = "dss-bandwrap";
+    this.canvas.style.height = "";
+    bands.forEach(function (band) { self.renderBand(band); });
   };
 
-  // Cards are absolutely positioned, so the canvas does not grow with them and
+  App.prototype.isBandCollapsed = function (band) {
+    var key = band.name || "__ungrouped__";
+    var overrides = this.state.collapsedSections || {};
+    return key in overrides ? overrides[key] : band.collapsed;
+  };
+
+  App.prototype.renderBand = function (band) {
+    var self = this;
+    var collapsed = this.isBandCollapsed(band);
+    var wrap = el("div", "dss-band");
+
+    var head = el("div", "dss-band-head");
+    var toggle = el("button", "dss-band-toggle", (collapsed ? "▸ " : "▾ ") + band.title);
+    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggle.addEventListener("click", function () {
+      self.state.collapsedSections[band.name || "__ungrouped__"] = !collapsed;
+      self.refresh();
+    });
+    head.appendChild(toggle);
+    head.appendChild(el("span", "dss-band-count", band.charts.length + " chart(s)"));
+    wrap.appendChild(head);
+
+    if (!collapsed) {
+      var surface = el("div", "dss-canvas dss-band-canvas");
+      wrap.appendChild(surface);
+      band.charts.forEach(function (chart) { self.renderCard(chart, surface); });
+      this.fitCanvas(surface, band.charts);
+    }
+    this.canvas.appendChild(wrap);
+  };
+
+  // Cards are absolutely positioned, so a surface does not grow with them and
   // its overflow is hidden — without this, a card dragged past the fixed height
-  // simply vanishes. Size the canvas to its lowest card.
-  App.prototype.fitCanvas = function () {
+  // simply vanishes. Size the surface to its lowest card.
+  App.prototype.fitCanvas = function (surface, charts) {
     var bottom = 0;
-    this.state.charts.forEach(function (chart) {
+    (charts || []).forEach(function (chart) {
       var box = core.clampLayout(chart);
       bottom = Math.max(bottom, (box.pos_y + box.height) * ROW_H);
     });
-    this.canvas.style.height = Math.max(480, bottom + 8) + "px";
+    // A band only needs to fit its own charts; the flat canvas keeps its floor.
+    var floor = surface === this.canvas ? 480 : 120;
+    surface.style.height = Math.max(floor, bottom + 8) + "px";
   };
 
   App.prototype.select = function (name) {
@@ -308,6 +359,24 @@
       }
     });
     this.panel.appendChild(field("Metric", metricSelect));
+
+    // Section assignment — only offered once the dashboard actually has
+    // sections, so a single-section dashboard is not cluttered by an empty list.
+    var sectionSelect = null;
+    if ((this.state.sections || []).length) {
+      sectionSelect = el("select", "dss-input");
+      var none = el("option", null, "— Ungrouped —");
+      none.value = "";
+      if (!chart.section) none.selected = true;
+      sectionSelect.appendChild(none);
+      this.state.sections.forEach(function (s) {
+        var o = el("option", null, s.section_title || s.name);
+        o.value = s.name;
+        if (s.name === chart.section) o.selected = true;
+        sectionSelect.appendChild(o);
+      });
+      this.panel.appendChild(field("Section", sectionSelect));
+    }
 
     // Layout, editable numerically as well as by drag: drag is imprecise and
     // cannot be driven from the keyboard. Values are clamped by applyChartEdit.
@@ -388,6 +457,7 @@
         description: descInput.value,
         metric: metricSelect.value || chart.metric,
       };
+      if (sectionSelect) patch.section = sectionSelect.value || null;
       Object.keys(layoutInputs).forEach(function (key) {
         var raw = layoutInputs[key].value;
         if (raw !== "") patch[key] = parseInt(raw, 10);
@@ -724,6 +794,7 @@
         patch: JSON.stringify({
           chart_title: chart.chart_title, chart_type: chart.chart_type,
           description: chart.description, metric: chart.metric,
+          section: chart.section || null,
           pos_x: chart.pos_x, pos_y: chart.pos_y,
           width: chart.width, height: chart.height,
           chart_filters: (chart.chart_filters || []).map(function (row) {

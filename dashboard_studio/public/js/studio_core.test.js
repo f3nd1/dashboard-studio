@@ -37,6 +37,14 @@ assert.ok(core.validateFilter({ fieldname: "academic_year", operator: "=" }).ok,
 assert.ok(!core.validateFilter({ fieldname: "x", operator: "like" }).ok, "like rejected");
 assert.ok(!core.validateFilter({ fieldname: "", operator: "=" }).ok, "missing field rejected");
 
+// applyChartEdit carries section, including clearing it back to Ungrouped
+var sectioned = core.applyChartEdit(original, { section: "sec-a" });
+assert.strictEqual(sectioned.chart.section, "sec-a", "section assigned");
+assert.strictEqual(core.applyChartEdit(sectioned.chart, { section: "" }).chart.section, null,
+  "section can be cleared back to Ungrouped");
+assert.ok(!("section" in core.applyChartEdit(original, { chart_title: "X" }).chart),
+  "section untouched when not in the patch");
+
 // applyChartEdit passes metric selection through
 var withMetric = core.applyChartEdit(original, { metric: "Applicants by Year (MOCK)" });
 assert.ok(withMetric.ok && withMetric.chart.metric === "Applicants by Year (MOCK)", "metric edit applied");
@@ -75,6 +83,29 @@ assert.strictEqual(nodes[0].node_type, "Source Table");
 assert.strictEqual(nodes[0].label, "tabStudent Applicant", "source label restores tab prefix");
 assert.strictEqual(nodes[2].node_type, "Target DocType");
 assert.ok(nodes[2].pos_x > nodes[0].pos_x, "targets laid out right of sources");
+
+// groupChartsBySection
+var secs = [
+  { name: "sec-b", section_title: "Outcomes", sort_order: 2 },
+  { name: "sec-a", section_title: "Intake", sort_order: 1, is_collapsed_default: 1 },
+];
+var chartsToGroup = [
+  { name: "c1", section: "sec-a" },
+  { name: "c2", section: "sec-b" },
+  { name: "c3" },                       // no section
+  { name: "c4", section: "sec-gone" },  // section deleted
+];
+var bands = core.groupChartsBySection(chartsToGroup, secs);
+assert.strictEqual(bands.length, 3, "two sections plus an Ungrouped band");
+assert.strictEqual(bands[0].title, "Outcomes", "server order is preserved, not re-sorted");
+assert.strictEqual(bands[1].collapsed, true, "is_collapsed_default carried through");
+assert.strictEqual(bands[2].title, "Ungrouped");
+assert.deepStrictEqual(bands[2].charts.map(function (c) { return c.name; }), ["c3", "c4"],
+  "sectionless AND orphaned charts fall through, never vanish");
+assert.deepStrictEqual(core.groupChartsBySection(chartsToGroup, []), [],
+  "no sections -> no bands, caller keeps the flat canvas");
+var noOrphans = core.groupChartsBySection([{ name: "c1", section: "sec-a" }], secs);
+assert.strictEqual(noOrphans.length, 2, "no Ungrouped band when nothing is ungrouped");
 
 // mergeMappings: adds new suggestions, never resets an existing decision
 var existingMappings = [

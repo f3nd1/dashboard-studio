@@ -14,6 +14,7 @@ _EDITABLE_CHART_FIELDS = {
     "chart_type",
     "description",
     "metric",
+    "section",
     "pos_x",
     "pos_y",
     "width",
@@ -59,7 +60,14 @@ def get_studio_dashboard(dashboard: str):
             by_parent.setdefault(row.pop("parent"), []).append(row)
         for c in charts:
             c["chart_filters"] = by_parent.get(c["name"], [])
-    return {"dashboard": doc.as_dict(), "charts": charts}
+
+    sections = frappe.get_all(
+        "DS Dashboard Section",
+        filters={"dashboard": dashboard},
+        fields=["name", "section_title", "sort_order", "is_collapsed_default"],
+        order_by="sort_order asc, section_title asc",
+    )
+    return {"dashboard": doc.as_dict(), "charts": charts, "sections": sections}
 
 
 @frappe.whitelist()
