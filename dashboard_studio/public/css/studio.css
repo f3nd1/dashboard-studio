@@ -199,3 +199,52 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
   box-shadow: 0 8px 16px rgba(28, 62, 105, .16); }
 .dss-btn-primary:hover { background: var(--dss-navy-deep); transform: translateY(-1px); }
 .dss-btn-small { min-height: 0; padding: 4px 9px; font-size: 11px; }
+
+/* ---- Data & DocTypes ---- */
+.dss-cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px; padding: 14px; }
+.dss-cat-card { border: 1px solid var(--dss-line); border-radius: var(--dss-r-md); padding: 12px 13px;
+  background: var(--dss-surface); box-shadow: var(--dss-shadow-sm); }
+.dss-cat-name { font-size: 12px; font-weight: 800; margin-top: 2px; }
+.dss-cat-count { font-size: 26px; font-weight: 900; letter-spacing: -.6px; color: var(--dss-navy);
+  margin: 4px 0 2px; }
+.dss-cat-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.dss-cat-recent { font-size: 10px; color: var(--dss-muted); margin-top: 6px; line-height: 1.4; }
+
+.dss-pill { display: inline-flex; border-radius: 999px; padding: 3px 8px; font-size: 9px;
+  font-weight: 900; letter-spacing: .3px; background: var(--dss-surface-3); color: var(--dss-ink-700); }
+.dss-pill.is-published, .dss-pill.is-approved, .dss-pill.is-match, .dss-pill.is-allowed
+  { background: var(--dss-green-100); color: var(--dss-green); }
+.dss-pill.is-draft, .dss-pill.is-mapping { background: var(--dss-blue-100); color: var(--dss-blue); }
+.dss-pill.is-discrepancy { background: var(--dss-orange-100); color: var(--dss-orange); }
+/* Flagged is deliberately the most alarming: it means "not comparable at all". */
+.dss-pill.is-flagged { background: var(--dss-red-100); color: var(--dss-red); }
+.dss-pill.is-accepted { background: var(--dss-purple-100); color: var(--dss-purple); }
+
+.dss-rel-group { display: grid; grid-template-columns: 190px 1fr; gap: 12px; padding: 10px 14px;
+  border-top: 1px solid var(--dss-line); align-items: start; }
+.dss-rel-source { font-size: 12px; font-weight: 800; color: var(--dss-navy); }
+.dss-rel-edges { display: flex; flex-direction: column; gap: 4px; }
+.dss-rel-edge { display: grid; grid-template-columns: 150px 70px 1fr; gap: 8px; align-items: center;
+  font-size: 11px; padding: 5px 9px; border-radius: var(--dss-r-sm);
+  background: var(--dss-surface-2); border-left: 3px solid var(--dss-blue); }
+.dss-rel-edge.is-child { border-left-color: var(--dss-purple); }
+.dss-rel-field { font-weight: 700; }
+.dss-rel-arrow { font-size: 9px; color: var(--dss-muted); text-align: center; }
+.dss-rel-target { color: var(--dss-ink-700); }
+
+.dss-field-card { border: 1px solid var(--dss-line); border-radius: var(--dss-r-sm); padding: 10px 12px;
+  margin-bottom: 8px; background: var(--dss-surface-2); }
+.dss-field-card.is-blocked { border-color: #f2caca; background: var(--dss-red-100); }
+.dss-field-warn { font-size: 10px; font-weight: 700; color: var(--dss-red); margin-top: 6px; }
+
+/* ---- Validation Centre ---- */
+.dss-val-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.dss-val-table th { text-align: left; font-size: 8px; font-weight: 900; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--dss-muted); padding: 9px 12px;
+  border-bottom: 1px solid var(--dss-line); }
+.dss-val-table td { padding: 9px 12px; border-bottom: 1px solid var(--dss-line); vertical-align: middle; }
+.dss-val-table tr.is-flagged { background: var(--dss-red-100); }
+.dss-val-table tr.is-discrepancy { background: var(--dss-orange-100); }
+.dss-num { font-variant-numeric: tabular-nums; text-align: right; }
+.dss-val-reason { font-size: 10px; color: var(--dss-muted); font-style: italic; }

@@ -78,8 +78,74 @@
   // ⚠️ MOCK candidate target DocTypes (live version would query real DocTypes).
   var MOCK_TARGET_DOCTYPES = ["Student Applicant", "Student Admission UCC", "Program (MOCK)"];
 
+  // ⚠️ MOCK catalogue — record counts are invented. The relationship edges
+  // mirror the real DS schema (the live endpoint derives them from the shipped
+  // DocType files), so the shape shown here matches production.
+  var MOCK_CATALOGUE = {
+    __mock__: true,
+    doctypes: [
+      { doctype: "DS Dashboard", count: 2, recent: ["Admission Overview (MOCK)"],
+        statuses: { Published: 1, Draft: 1 } },
+      { doctype: "DS Dashboard Section", count: 3, recent: ["Intake (MOCK)"], statuses: {} },
+      { doctype: "DS Chart", count: 9, recent: ["Applicants by Year (MOCK)"], statuses: {} },
+      { doctype: "DS Metric", count: 3, recent: ["Applicants by Year (MOCK)"],
+        statuses: { Approved: 2, Draft: 1 } },
+      { doctype: "DS Data Source", count: 1, recent: ["Metabase (MOCK)"], statuses: {} },
+      { doctype: "DS Data Mapping", count: 2, recent: [], statuses: {} },
+      { doctype: "DS Migration Project", count: 1, recent: ["Admissions (MOCK)"],
+        statuses: { Mapping: 1 } },
+      { doctype: "DS Validation Comparison", count: 3, recent: [],
+        statuses: { Match: 1, Discrepancy: 1, Flagged: 1 } },
+    ],
+    relationships: [
+      { source: "DS Chart", target: "DS Dashboard", fieldname: "dashboard", kind: "link" },
+      { source: "DS Chart", target: "DS Dashboard Section", fieldname: "section", kind: "link" },
+      { source: "DS Chart", target: "DS Metric", fieldname: "metric", kind: "link" },
+      { source: "DS Chart", target: "DS Chart Filter", fieldname: "chart_filters", kind: "child" },
+      { source: "DS Dashboard Section", target: "DS Dashboard", fieldname: "dashboard", kind: "link" },
+      { source: "DS Metric", target: "DS Metric", fieldname: "numerator_metric", kind: "link",
+        self_reference: true },
+      { source: "DS Metric", target: "DS Metric Filter", fieldname: "metric_filters", kind: "child" },
+      { source: "DS Data Mapping", target: "DS Data Source", fieldname: "data_source", kind: "link" },
+      { source: "DS Migration Project", target: "DS Data Source", fieldname: "data_source", kind: "link" },
+      { source: "DS Migration Project", target: "DS Canvas Node", fieldname: "canvas_nodes", kind: "child" },
+      { source: "DS Validation Comparison", target: "DS Chart", fieldname: "chart", kind: "link" },
+    ],
+  };
+
+  // ⚠️ MOCK field catalogue — the allowlist concept is real; these values are not.
+  var MOCK_FIELD_CATALOGUE = [
+    { metric: "M1", metric_name: "Applicants by Year (MOCK)", status: "Approved",
+      source_doctype: "Student Applicant", fields: ["academic_year", "application_status"],
+      executable: true },
+    { metric: "M2", metric_name: "By Nationality (MOCK)", status: "Approved",
+      source_doctype: "Student Applicant", fields: ["nationality"], executable: true },
+    { metric: "M3", metric_name: "Unconfigured metric (MOCK)", status: "Draft",
+      source_doctype: "Student Applicant", fields: [], executable: false },
+  ];
+
+  // ⚠️ MOCK comparisons — shaped exactly like DS Validation Comparison records.
+  var MOCK_COMPARISONS = [
+    { name: "V1", chart: "Applicants by Year (MOCK)", comparison_date: "2026-07-25",
+      original_value: "62", new_value: "62", difference_pct: 0, status: "Match",
+      accepted_reason: "", reviewed_by: "" },
+    { name: "V2", chart: "Applicants by Programme (MOCK)", comparison_date: "2026-07-25",
+      original_value: "60", new_value: "57", difference_pct: -5, status: "Discrepancy",
+      accepted_reason: "", reviewed_by: "" },
+    { name: "V3", chart: "Admission Funnel (MOCK)", comparison_date: "2026-07-25",
+      original_value: "21", new_value: "", difference_pct: null, status: "Flagged",
+      accepted_reason: "", reviewed_by: "" },
+    { name: "V4", chart: "Nationality Spread (MOCK)", comparison_date: "2026-07-24",
+      original_value: "9", new_value: "8", difference_pct: -11.1, status: "Accepted",
+      accepted_reason: "Legacy counted withdrawn applicants (MOCK)",
+      reviewed_by: "reviewer@example.invalid" },
+  ];
+
   var api = {
     MOCK_DASHBOARD: MOCK_DASHBOARD,
+    MOCK_CATALOGUE: MOCK_CATALOGUE,
+    MOCK_FIELD_CATALOGUE: MOCK_FIELD_CATALOGUE,
+    MOCK_COMPARISONS: MOCK_COMPARISONS,
     MOCK_METRIC_RESULTS: MOCK_METRIC_RESULTS,
     MOCK_ANALYSIS: MOCK_ANALYSIS,
     MOCK_TARGET_DOCTYPES: MOCK_TARGET_DOCTYPES,

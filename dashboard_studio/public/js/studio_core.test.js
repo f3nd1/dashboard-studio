@@ -84,6 +84,37 @@ assert.strictEqual(nodes[0].label, "tabStudent Applicant", "source label restore
 assert.strictEqual(nodes[2].node_type, "Target DocType");
 assert.ok(nodes[2].pos_x > nodes[0].pos_x, "targets laid out right of sources");
 
+// groupRelationships: grouped by source, children before links
+var grouped = core.groupRelationships([
+  { source: "DS Chart", target: "DS Metric", fieldname: "metric", kind: "link" },
+  { source: "DS Chart", target: "DS Chart Filter", fieldname: "chart_filters", kind: "child" },
+  { source: "DS Dashboard Section", target: "DS Dashboard", fieldname: "dashboard", kind: "link" },
+]);
+assert.deepStrictEqual(grouped.map(function (g) { return g.source; }),
+  ["DS Chart", "DS Dashboard Section"], "grouped and sorted by source");
+assert.strictEqual(grouped[0].edges[0].kind, "child", "child edges lead — ownership before reference");
+assert.strictEqual(grouped[0].edges[1].fieldname, "metric");
+assert.deepStrictEqual(core.groupRelationships([]), [], "no edges -> nothing");
+
+// validationSummary: tallies by status, unknown statuses counted not dropped
+var vs = core.validationSummary([
+  { status: "Match" }, { status: "Match" }, { status: "Discrepancy" },
+  { status: "Flagged" }, { status: "Accepted" }, { status: "Weird" },
+]);
+assert.strictEqual(vs.Match, 2);
+assert.strictEqual(vs.Discrepancy, 1);
+assert.strictEqual(vs.Flagged, 1);
+assert.strictEqual(vs.Accepted, 1);
+assert.strictEqual(vs.other, 1, "unknown status is counted, not silently dropped");
+assert.strictEqual(vs.total, 6);
+
+// canAccept mirrors the server: only a real difference can be accepted
+assert.ok(core.canAccept({ status: "Discrepancy" }), "discrepancy acceptable");
+assert.ok(core.canAccept({ status: "Flagged" }), "flagged acceptable");
+assert.ok(!core.canAccept({ status: "Match" }), "nothing to accept on a match");
+assert.ok(!core.canAccept({ status: "Accepted" }), "already accepted");
+assert.ok(!core.canAccept(null), "no row");
+
 // moveSection
 var ordered = [{ name: "a" }, { name: "b" }, { name: "c" }];
 assert.deepStrictEqual(core.moveSection(ordered, "b", -1), ["b", "a", "c"], "move up");

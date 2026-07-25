@@ -91,9 +91,10 @@
     head.appendChild(el("h2", "dss-title", (this.state.dashboard && this.state.dashboard.dashboard_title) || "Dashboard"));
 
     var views = el("div", "dss-viewtabs");
-    ["design", "mapping"].forEach(function (v) {
-      var b = el("button", "dss-btn" + (self.state.view === v ? " dss-btn-primary" : ""),
-        v === "design" ? "Design" : "Mapping");
+    [["design", "Design"], ["mapping", "Mapping"],
+     ["data", "Data & DocTypes"], ["validation", "Validation"]].forEach(function (pair) {
+      var v = pair[0];
+      var b = el("button", "dss-btn" + (self.state.view === v ? " dss-btn-primary" : ""), pair[1]);
       b.addEventListener("click", function () { self.state.view = v; self.render(); });
       views.appendChild(b);
     });
@@ -122,6 +123,10 @@
     this.mount.appendChild(wrap);
     if (this.state.view === "mapping") {
       this.renderMapping();
+    } else if (this.state.view === "data") {
+      this.renderCatalogue();
+    } else if (this.state.view === "validation") {
+      this.renderValidation();
     } else {
       this.refresh();
       this.renderPanel();
@@ -620,6 +625,258 @@
     saveBtn.addEventListener("click", function () {
       if (applyEdit()) self.saveChart(chart);
     });
+  };
+
+  // ---- Data & DocTypes: what records exist, and how the schema fits together ----
+
+  App.prototype.renderCatalogue = function () {
+    var self = this;
+    this.canvas.className = "dss-bandwrap";
+    this.canvas.style.height = "";
+    this.canvas.innerHTML = "";
+    this.panel.innerHTML = "";
+
+    if (this.state.catalogue) { this.paintCatalogue(); return; }
+    if (!hasFrappe()) {
+      var mock = root.DSStudioMock || {};
+      this.state.catalogue = mock.MOCK_CATALOGUE || { doctypes: [], relationships: [] };
+      this.state.fieldCatalogue = mock.MOCK_FIELD_CATALOGUE || [];
+      this.paintCatalogue();
+      return;
+    }
+    this.canvas.appendChild(el("div", "dss-hint", "Loading catalogue…"));
+    Promise.all([
+      root.frappe.call({ method: "dashboard_studio.api.catalogue.get_catalogue" }),
+      root.frappe.call({ method: "dashboard_studio.api.catalogue.get_field_catalogue" }),
+    ]).then(function (responses) {
+      self.state.catalogue = responses[0].message || { doctypes: [], relationships: [] };
+      self.state.fieldCatalogue = responses[1].message || [];
+      if (self.state.view === "data") self.paintCatalogue();
+    }).catch(function () {
+      if (self.state.view === "data") {
+        self.canvas.innerHTML = '<div class="dss-hint">Could not load the catalogue.</div>';
+      }
+    });
+  };
+
+  App.prototype.paintCatalogue = function () {
+    var self = this;
+    this.canvas.innerHTML = "";
+    var data = this.state.catalogue || {};
+
+    // Record summary cards.
+    var recordsBand = el("div", "dss-band");
+    var recordsHead = el("div", "dss-band-head");
+    recordsHead.appendChild(el("span", "dss-band-toggle", "Records"));
+    recordsHead.appendChild(el("span", "dss-band-count",
+      (data.doctypes || []).length + " doctype(s)"));
+    recordsBand.appendChild(recordsHead);
+
+    var grid = el("div", "dss-cat-grid");
+    (data.doctypes || []).forEach(function (entry) {
+      var card = el("div", "dss-cat-card");
+      card.appendChild(el("div", "dss-node-kind", "DocType"));
+      card.appendChild(el("div", "dss-cat-name", entry.doctype));
+      card.appendChild(el("div", "dss-cat-count", String(entry.count)));
+      var statuses = Object.keys(entry.statuses || {});
+      if (statuses.length) {
+        var pills = el("div", "dss-cat-pills");
+        statuses.forEach(function (status) {
+          pills.appendChild(el("span", "dss-pill is-" + status.toLowerCase().replace(/\s+/g, "-"),
+            status + " " + entry.statuses[status]));
+        });
+        card.appendChild(pills);
+      }
+      if ((entry.recent || []).length) {
+        card.appendChild(el("div", "dss-cat-recent", entry.recent.join(" · ")));
+      }
+      grid.appendChild(card);
+    });
+    recordsBand.appendChild(grid);
+    this.canvas.appendChild(recordsBand);
+
+    // Relationship graph, from the real schema.
+    var relBand = el("div", "dss-band");
+    var relHead = el("div", "dss-band-head");
+    relHead.appendChild(el("span", "dss-band-toggle", "Relationships"));
+    relHead.appendChild(el("span", "dss-band-count", "parent · link · child"));
+    relBand.appendChild(relHead);
+    var relBody = el("div", "dss-rel-body");
+    core.groupRelationships(data.relationships).forEach(function (group) {
+      var row = el("div", "dss-rel-group");
+      row.appendChild(el("div", "dss-rel-source", group.source));
+      var list = el("div", "dss-rel-edges");
+      group.edges.forEach(function (edge) {
+        var e = el("div", "dss-rel-edge is-" + edge.kind);
+        e.appendChild(el("span", "dss-rel-field", edge.fieldname));
+        e.appendChild(el("span", "dss-rel-arrow", edge.kind === "child" ? "1 ─── ∞" : "1 ─── 1"));
+        e.appendChild(el("span", "dss-rel-target",
+          edge.target + (edge.self_reference ? " (self)" : "")));
+        list.appendChild(e);
+      });
+      row.appendChild(list);
+      relBand.appendChild(row);
+    });
+    relBand.appendChild(relBody);
+    this.canvas.appendChild(relBand);
+
+    this.paintFieldCatalogue();
+  };
+
+  // The real safe-field concept: each metric's allowlist. Field types and any
+  // "restricted" classification are deliberately absent — nothing backs them.
+  App.prototype.paintFieldCatalogue = function () {
+    this.panel.innerHTML = "";
+    this.panel.appendChild(el("h3", "dss-panel-title", "Safe field catalogue"));
+    this.panel.appendChild(el("p", "dss-hint",
+      "Fields each metric may reference. An empty allowlist blocks the metric from running."));
+
+    (this.state.fieldCatalogue || []).forEach(function (row) {
+      var card = el("div", "dss-field-card" + (row.executable ? "" : " is-blocked"));
+      card.appendChild(el("div", "dss-cat-name", row.metric_name || row.metric));
+      card.appendChild(el("div", "dss-node-kind", row.source_doctype || "—"));
+      if (row.fields.length) {
+        var tags = el("div", "dss-cat-pills");
+        row.fields.forEach(function (field) {
+          tags.appendChild(el("span", "dss-pill is-allowed", field));
+        });
+        card.appendChild(tags);
+      } else {
+        card.appendChild(el("div", "dss-field-warn", "No allowed fields — cannot run"));
+      }
+      this.panel.appendChild(card);
+    }, this);
+  };
+
+  // ---- Validation Centre: source vs target, with human-only acceptance ----
+
+  App.prototype.renderValidation = function () {
+    var self = this;
+    this.canvas.className = "dss-bandwrap";
+    this.canvas.style.height = "";
+    this.canvas.innerHTML = "";
+
+    if (this.state.comparisons) { this.paintValidation(); return; }
+    if (!hasFrappe()) {
+      this.state.comparisons = ((root.DSStudioMock || {}).MOCK_COMPARISONS || []).map(
+        function (row) { return Object.assign({}, row); });
+      this.paintValidation();
+      return;
+    }
+    this.canvas.appendChild(el("div", "dss-hint", "Loading comparisons…"));
+    root.frappe.call({ method: "dashboard_studio.api.validation.list_comparisons" })
+      .then(function (r) {
+        self.state.comparisons = r.message || [];
+        if (self.state.view === "validation") self.paintValidation();
+      })
+      .catch(function () {
+        if (self.state.view === "validation") {
+          self.canvas.innerHTML = '<div class="dss-hint">Could not load comparisons.</div>';
+        }
+      });
+  };
+
+  App.prototype.paintValidation = function () {
+    var self = this;
+    this.canvas.innerHTML = "";
+    var rows = this.state.comparisons || [];
+    var summary = core.validationSummary(rows);
+
+    var band = el("div", "dss-band");
+    var head = el("div", "dss-band-head");
+    head.appendChild(el("span", "dss-band-toggle", "Validation results"));
+    var chips = el("div", "dss-cat-pills");
+    ["Match", "Discrepancy", "Flagged", "Accepted"].forEach(function (status) {
+      if (!summary[status]) return;
+      chips.appendChild(el("span", "dss-pill is-" + status.toLowerCase(),
+        summary[status] + " " + status.toLowerCase()));
+    });
+    head.appendChild(chips);
+    band.appendChild(head);
+
+    var table = el("table", "dss-val-table");
+    var thead = el("thead");
+    var hrow = el("tr");
+    ["Chart", "Source", "Target", "Difference", "Status", ""].forEach(function (label) {
+      hrow.appendChild(el("th", null, label));
+    });
+    thead.appendChild(hrow);
+    table.appendChild(thead);
+
+    var tbody = el("tbody");
+    if (!rows.length) {
+      var empty = el("tr");
+      var cell = el("td", "dss-hint", "No comparisons recorded yet.");
+      cell.colSpan = 6;
+      empty.appendChild(cell);
+      tbody.appendChild(empty);
+    }
+    rows.forEach(function (row) {
+      var tr = el("tr", "is-" + String(row.status || "").toLowerCase());
+      tr.appendChild(el("td", null, row.chart || "—"));
+      tr.appendChild(el("td", "dss-num", row.original_value === "" ? "—" : row.original_value));
+      // A blank target is a missing result, not a zero — say so.
+      tr.appendChild(el("td", "dss-num", row.new_value === "" ? "missing" : row.new_value));
+      tr.appendChild(el("td", "dss-num",
+        row.difference_pct == null ? "—" : Number(row.difference_pct).toFixed(1) + "%"));
+      var statusCell = el("td");
+      statusCell.appendChild(el("span", "dss-pill is-" + String(row.status || "").toLowerCase(),
+        row.status || "—"));
+      tr.appendChild(statusCell);
+
+      var action = el("td");
+      if (core.canAccept(row)) {
+        var btn = el("button", "dss-btn dss-btn-small", "Accept…");
+        btn.title = "Accept this difference (a reason is required)";
+        btn.addEventListener("click", function () { self.acceptComparison(row); });
+        action.appendChild(btn);
+      } else if (row.status === "Accepted") {
+        action.appendChild(el("span", "dss-val-reason",
+          row.accepted_reason + (row.reviewed_by ? " — " + row.reviewed_by : "")));
+      }
+      tr.appendChild(action);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    band.appendChild(table);
+    this.canvas.appendChild(band);
+
+    this.panel.innerHTML = "";
+    this.panel.appendChild(el("h3", "dss-panel-title", "Validation"));
+    this.panel.appendChild(el("p", "dss-hint",
+      "Each row compares a reference result against this app's result for the same chart. " +
+      "Flagged means a value could not be compared at all — that is different from a " +
+      "difference, and is treated as more serious."));
+    this.panel.appendChild(el("p", "dss-hint",
+      "Accepting a difference is a human decision: it always requires a reason and records " +
+      "who accepted it. Nothing is ever marked Accepted automatically."));
+  };
+
+  App.prototype.acceptComparison = function (row) {
+    var reason = (root.prompt && root.prompt(
+      "Reason for accepting this difference (required):", "")) || "";
+    reason = reason.trim();
+    if (!reason) {
+      toast("Not accepted — a reason is required.");
+      return;
+    }
+    var self = this;
+    if (!hasFrappe()) {
+      row.status = "Accepted";
+      row.accepted_reason = reason;
+      row.reviewed_by = "(mock)";
+      this.paintValidation();
+      toast("Accepted (mock — not persisted)");
+      return;
+    }
+    root.frappe.call({
+      method: "dashboard_studio.api.validation.accept_comparison",
+      args: { comparison: row.name, accepted_reason: reason },
+    }).then(function () {
+      self.state.comparisons = null; // re-read from the server
+      self.renderValidation();
+      toast("Difference accepted");
+    }).catch(function () { toast("Could not accept that difference."); });
   };
 
   // ---- Mapping view: source tables -> DocTypes, persisted shapes mocked ----
