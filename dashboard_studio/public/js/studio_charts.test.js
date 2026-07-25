@@ -25,6 +25,10 @@ assert.strictEqual((bar.html.match(/<rect /g) || []).length, 3, "bar renders one
 var line = charts.render("Line Chart", rows);
 assert.ok(line.html.indexOf("<polyline") !== -1, "line renders a polyline");
 
+// A single group must still be visible — a one-point polyline draws nothing.
+var oneLine = charts.render("Line Chart", [{ academic_year: "2024", count: 5 }]);
+assert.ok(oneLine.html.indexOf("<circle") !== -1, "single-point line renders a visible dot");
+
 var donut = charts.render("Donut Chart", rows);
 assert.strictEqual((donut.html.match(/<circle /g) || []).length, 3, "donut renders one segment per group");
 

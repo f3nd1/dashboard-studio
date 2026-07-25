@@ -67,6 +67,13 @@
   function line(rows) {
     var s = series(rows);
     var max = Math.max.apply(null, s.values.concat([1]));
+    if (s.values.length === 1) {
+      // A one-point polyline draws nothing, so mark the single value instead.
+      var only = (54 - (s.values[0] / max) * 48).toFixed(2);
+      return '<svg viewBox="0 0 100 60" preserveAspectRatio="none" class="dss-chart-svg">' +
+        '<circle cx="50" cy="' + only + '" r="2" fill="' + COLORS[0] + '"><title>' +
+        esc(s.labels[0]) + ": " + esc(s.values[0]) + "</title></circle></svg>";
+    }
     var step = s.values.length > 1 ? 92 / (s.values.length - 1) : 0;
     var points = s.values.map(function (v, i) {
       return (4 + i * step).toFixed(2) + "," + (54 - (v / max) * 48).toFixed(2);
