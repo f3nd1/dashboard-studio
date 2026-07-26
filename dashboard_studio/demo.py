@@ -154,16 +154,28 @@ def seed_demo_data():
     _set_comparison_rows(comparison)
 
     # ---------------------------------------------------------------- Path B
+    # Its OWN data source, not Path A's. DS Data Mapping belongs to a data
+    # source, not to a project, so two projects sharing one source see each
+    # other's mappings — Path A's canvas would show Path B's unconfirmed row and
+    # read as unfinished. Real behaviour, documented in MIGRATION_PROJECT_
+    # LIFECYCLE.md; the demo must not walk into it.
+    source_b = _upsert(
+        "DS Data Source",
+        {"source_name": DEMO_PREFIX + "Survey Export"},
+        {"source_type": "CSV", "is_active": 1,
+         "connection_notes": "Demo data. Remove with dashboard_studio.demo.remove_demo_data."},
+        log,
+    )
     _upsert(
         "DS Migration Project",
         {"project_name": DEMO_PREFIX + "Path B - Student Satisfaction"},
-        {"data_source": data_source, "status": "Mapping",
+        {"data_source": source_b, "status": "Mapping",
          "notes": "Demo: deliberately unfinished, so readiness has something to report."},
         log,
     )
     _upsert(
         "DS Data Mapping",
-        {"data_source": data_source, "external_table": "metabase_survey_v"},
+        {"data_source": source_b, "external_table": "metabase_survey_v"},
         {"external_field": "response_score", "target_doctype": source_doctype,
          "target_field": group_field, "mapping_status": "Suggested", "confidence_score": 60},
         log,
