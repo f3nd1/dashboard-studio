@@ -441,8 +441,13 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
   box-shadow: var(--dss-shadow-sm); }
 .dss-canvashero-kicker { color: var(--dss-gold); text-transform: uppercase;
   letter-spacing: .14em; font-size: 10px; font-weight: 900; }
+/* Colour stated, not inherited. The hero sets color:#fff on itself, but an
+   inherited value loses to ANY direct rule on the element — and Frappe's Desk
+   stylesheet gives h1 a dark colour, so the title rendered dark navy on dark
+   navy live while the standalone harness looked fine. Same reason .dss-title
+   below is stated too. */
 .dss-canvashero-title { margin: 6px 0 0; font-size: clamp(20px, 2.4vw, 30px);
-  font-weight: 800; letter-spacing: -.6px; }
+  font-weight: 800; letter-spacing: -.6px; color: #fff; }
 .dss-canvashero-sub { margin: 7px 0 0; max-width: 620px; font-size: 12px; line-height: 1.5;
   color: var(--dss-surface-3); }
 
