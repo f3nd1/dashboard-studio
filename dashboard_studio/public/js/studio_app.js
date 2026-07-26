@@ -1052,14 +1052,26 @@
   // Draw the chart's actual visual from its metric result rows. Results are
   // cached per metric so drag/resize refreshes never refetch. Mock sessions read
   // MOCK_METRIC_RESULTS; live sessions call run_ds_metric once per metric.
+  // The empty-card state, built as nodes rather than an HTML string: the hint
+  // carries a metric name, which is user-authored text. Concatenating it into
+  // innerHTML would make a chart title an injection point on every card.
+  function noChart(title, hint) {
+    var box = el("div", "dss-nochart", title);
+    if (hint) box.appendChild(el("span", null, hint));
+    return box;
+  }
+
   App.prototype.renderChartBody = function (body, chart) {
     var charts = root.DSStudioCharts;
-    if (!chart.metric) {
-      // The remedy belongs here, on the card that has the problem, rather than
-      // in the palette hint where it was one of three instructions on a control
-      // that does something else. This card is also a publish blocker.
-      body.innerHTML = '<div class="dss-nochart">No metric linked' +
-        '<span>Select this card and link a metric in the panel on the right.</span></div>';
+    // The remedy belongs here, on the card that has the problem, rather than in
+    // the palette hint where it was one of three instructions on a control that
+    // does something else. "No metric linked" used to be the only state handled
+    // this way; an unapproved metric took the fetch path and came back as
+    // Frappe's traceback dialog. Same treatment for every reason now.
+    var blocked = core.chartBlockReason(chart);
+    if (blocked) {
+      body.innerHTML = "";
+      body.appendChild(noChart(blocked.title, blocked.hint));
       return;
     }
     this._rowsCache = this._rowsCache || {};
@@ -1072,9 +1084,16 @@
       return;
     }
     if (cached !== undefined) {
-      body.innerHTML = cached === null
-        ? '<div class="dss-nochart">Metric failed to run</div>'
-        : charts.render(chart.chart_type, core.sortResultRows(cached, chart.sort_order)).html;
+      body.innerHTML = "";
+      if (cached && cached.__error) {
+        // The server's own sentence, not "Metric failed to run". The engine's
+        // refusals name the metric and the field; discarding that and printing a
+        // flat line is how a refusal that knew the answer stopped giving it.
+        body.appendChild(noChart("Metric could not run", cached.__error));
+      } else {
+        body.innerHTML =
+          charts.render(chart.chart_type, core.sortResultRows(cached, chart.sort_order)).html;
+      }
       return;
     }
     var self = this;
@@ -1095,8 +1114,13 @@
       // Cache the result either way, but only repaint if the user is still
       // looking at the Design view — otherwise this wipes the Mapping canvas.
       if (self.state.view === "design") self.refresh();
-    }).catch(function () {
-      self._rowsCache[chart.metric] = null; // remembered failure — no retry loop
+    }).catch(function (err) {
+      // Remembered failure — no retry loop. Kept as a message rather than null so
+      // the card can say WHAT failed: the checks above cannot cover a metric
+      // un-approved after this page loaded, or a source DocType since deleted.
+      self._rowsCache[chart.metric] = {
+        __error: refusalMessage(err, "The server refused to run this metric."),
+      };
       if (self.state.view === "design") self.refresh();
     });
   };
@@ -1815,10 +1839,21 @@
     var picker = el("select", "dss-input");
     picker.setAttribute("aria-label", "Chart to validate");
     charts.forEach(function (c) {
-      var opt = el("option", null, c.chart_title || c.name);
+      // run_validation executes the chart's own metric, so it hits exactly the
+      // refusals the Builder card checks for. Same helper, so the two cannot
+      // disagree about which charts can be run.
+      var blocked = core.chartBlockReason(c);
+      var opt = el("option", null,
+        (c.chart_title || c.name) + (blocked ? " — " + blocked.title.toLowerCase() : ""));
       opt.value = c.name;
+      opt.disabled = !!blocked;
+      if (blocked) opt.title = blocked.hint;
       picker.appendChild(opt);
     });
+    // A picker whose first option is disabled selects nothing; land on the first
+    // chart that can actually be validated.
+    var runnable = charts.filter(function (c) { return !core.chartBlockReason(c); });
+    if (runnable.length) picker.value = runnable[0].name;
     wrap.appendChild(picker);
 
     var box = el("textarea", "dss-input");
@@ -1839,6 +1874,25 @@
         note.textContent = "Running a validation needs the server (not available in sample mode).";
         return;
       }
+      var picked = (self.state.charts || []).filter(function (c) {
+        return c.name === picker.value;
+      })[0];
+      // No selectable chart at all: every option was disabled, so the browser
+      // reports an empty value. Without this the guard below fell straight
+      // through on `picked === undefined` and called the server anyway.
+      if (!picked) {
+        note.textContent = "No chart on this dashboard can be validated yet — " +
+          "each one's metric is unapproved, missing, or not a Count metric.";
+        return;
+      }
+      var blocked = core.chartBlockReason(picked);
+      if (blocked) {
+        // Refuse here rather than letting the server raise: the engine's refusal
+        // is a bare exception, so it reaches the browser as Frappe's traceback
+        // dialog rather than as this note.
+        note.textContent = blocked.title + ". " + blocked.hint;
+        return;
+      }
       note.textContent = "Comparing…";
       dsCall({
         method: "dashboard_studio.api.validation.run_validation",
@@ -1849,8 +1903,8 @@
         self.state.comparisons = null; // refetched by renderValidation
         self.refreshReadiness();       // a pass can clear the validation blocker
         self.render();
-      }).catch(function () {
-        note.textContent = "Could not run that validation.";
+      }).catch(function (err) {
+        note.textContent = refusalMessage(err, "Could not run that validation.");
       });
     });
     var actions = el("div", "dss-sqlimport-actions");

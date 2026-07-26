@@ -530,4 +530,27 @@ assert.ok(/cannot be published/.test(onKpi["KPI Card"].label),
   "an existing unpublishable chart does not say so");
 assert.strictEqual(onKpi["Table"].disabled, true, "the other blocked types unblocked too");
 
+// chartBlockReason: why a card cannot show live data, decided before asking.
+assert.strictEqual(core.chartBlockReason({ metric: "M", metric_status: "Approved",
+  metric_calculation: "Count" }), null, "an approved count metric was blocked");
+assert.strictEqual(core.chartBlockReason({ metric: "M" }), null,
+  "an older payload with no status must not invent a refusal");
+assert.strictEqual(core.chartBlockReason({}).title, "No metric linked");
+var draft = core.chartBlockReason({ metric: "DEMO Survey responses", metric_status: "Draft",
+  metric_calculation: "Count" });
+assert.strictEqual(draft.title, "Metric not yet approved");
+assert.ok(/DEMO Survey responses/.test(draft.hint), "the refusal does not name the metric");
+assert.ok(/DS Metric list/.test(draft.hint), "the refusal does not say what to do");
+assert.strictEqual(core.chartBlockReason({ metric: "M", metric_status: "Deprecated" }).title,
+  "Metric not yet approved");
+assert.ok(/Deprecated/.test(core.chartBlockReason({ metric: "M",
+  metric_status: "Deprecated" }).hint), "Deprecated reads as merely unapproved");
+assert.strictEqual(core.chartBlockReason({ metric: "M", metric_missing: true }).title,
+  "Metric not found");
+assert.strictEqual(core.chartBlockReason({ metric: "M", metric_status: "Approved",
+  metric_calculation: "Sum" }).title, "Metric cannot run yet");
+// Status is checked before calculation: a Draft Sum metric is unapproved first.
+assert.strictEqual(core.chartBlockReason({ metric: "M", metric_status: "Draft",
+  metric_calculation: "Sum" }).title, "Metric not yet approved");
+
 console.log("studio_core.test.js — all assertions passed");

@@ -156,9 +156,19 @@ def _make_fake_frappe(store):
         return _FakeDoc(data, store, doctype)
 
     def get_all(doctype, filters=None, fields=None, order_by=None, **kwargs):
+        if doctype == "DS Metric":
+            frappe._metric_reads = getattr(frappe, "_metric_reads", 0) + 1
         rows = list(store.get(doctype, {}).values())
         for key, value in (filters or {}).items():
-            rows = [r for r in rows if r.get(key) == value]
+            # TEST-FAKE GAP, fixed: only equality was understood, so every
+            # batched ["in", [...]] read matched NOTHING and returned an empty
+            # set without complaining — including publish_readiness's, which
+            # reaches here through get_studio_dashboard. Third fake in this repo
+            # with the same hole; each one is declared separately, which is why.
+            if isinstance(value, (list, tuple)) and len(value) == 2 and value[0] == "in":
+                rows = [r for r in rows if r.get(key) in value[1]]
+            else:
+                rows = [r for r in rows if r.get(key) == value]
         return [_Row(r) for r in rows]
 
     def set_value(doctype, name, field, value):

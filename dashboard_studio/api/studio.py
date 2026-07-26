@@ -114,6 +114,33 @@ def get_studio_dashboard(dashboard: str):
         ],
         order_by="pos_y asc, pos_x asc",
     )
+    # Why the linked metric's status travels with the chart: the Builder renders
+    # a card by CALLING run_ds_metric, and the engine refuses a metric that is
+    # not Approved. That refusal is correct, but as a bare exception it reaches
+    # the browser as Frappe's raw traceback dialog. Knowing the status here means
+    # the card can say so without making a call that is certain to fail — which
+    # is the only thing that stops the dialog, since a frontend catch runs after
+    # Frappe has already raised it.
+    #
+    # Read-only, and NOT a relaxation: run_ds_metric still refuses.
+    if charts:
+        linked = sorted({c["metric"] for c in charts if c.get("metric")})
+        known = {
+            m["name"]: m
+            for m in (frappe.get_all(
+                "DS Metric",
+                filters={"name": ["in", linked]},
+                fields=["name", "status", "calculation_type"],
+            ) if linked else [])
+        }
+        for c in charts:
+            found = known.get(c.get("metric")) if c.get("metric") else None
+            c["metric_status"] = found["status"] if found else None
+            c["metric_calculation"] = found["calculation_type"] if found else None
+            # A chart can outlive the metric it points at: Frappe does not clear
+            # a Link when the target is deleted if the delete was forced.
+            c["metric_missing"] = bool(c.get("metric") and not found)
+
     # Attach child filter rows (get_all does not return child tables).
     if charts:
         rows = frappe.get_all(

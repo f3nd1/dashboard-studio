@@ -29,6 +29,46 @@
   // publication. Reasons and counts: docs/CHART_TYPE_MAPPING.md.
   var UNPUBLISHABLE_CHART_TYPES = ["KPI Card", "Line Chart", "Table"];
 
+  // Why a chart cannot show live data, decided BEFORE asking the server.
+  //
+  // The engine refuses a metric that is not Approved, or whose calculation is
+  // not Count, by raising. Those refusals are right, but they arrive in the
+  // browser as Frappe's raw traceback dialog, and a .catch cannot suppress that
+  // — it runs after Frappe has already shown it. So the card checks first and
+  // does not make a call it knows will fail.
+  //
+  // Returns null when there is nothing blocking, i.e. go ahead and fetch.
+  function chartBlockReason(chart) {
+    chart = chart || {};
+    if (!chart.metric) {
+      return { title: "No metric linked",
+               hint: "Select this card and link a metric in the panel on the right." };
+    }
+    if (chart.metric_missing) {
+      return { title: "Metric not found",
+               hint: "This card points at “" + chart.metric + "”, which no longer exists. " +
+                     "Link a different metric in the panel on the right." };
+    }
+    // Absent status means an older payload that did not carry one. Say nothing
+    // and let the fetch decide, rather than inventing a refusal.
+    var status = chart.metric_status;
+    if (status && status !== "Approved") {
+      return { title: "Metric not yet approved",
+               hint: status === "Deprecated"
+                 ? "“" + chart.metric + "” is Deprecated, so it no longer runs. " +
+                   "Link a current metric, or restore this one in the DS Metric list."
+                 : "“" + chart.metric + "” is still " + status + ". Approve it in the " +
+                   "DS Metric list to see live data here." };
+    }
+    var calc = chart.metric_calculation;
+    if (calc && String(calc).toLowerCase() !== "count") {
+      return { title: "Metric cannot run yet",
+               hint: "“" + chart.metric + "” is a " + calc + " metric, and only Count " +
+                     "metrics can be executed today." };
+    }
+    return null;
+  }
+
   // One option list, used by every place a chart type can be chosen, so the rule
   // cannot be enforced in the picker and forgotten in the palette.
   //
@@ -710,6 +750,7 @@
     CHART_TYPES: CHART_TYPES,
     UNPUBLISHABLE_CHART_TYPES: UNPUBLISHABLE_CHART_TYPES,
     chartTypeOptions: chartTypeOptions,
+    chartBlockReason: chartBlockReason,
     OPERATORS: OPERATORS,
     GRID_COLUMNS: GRID_COLUMNS,
     MAPPING_STATUSES: MAPPING_STATUSES,
