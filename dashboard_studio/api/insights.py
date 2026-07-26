@@ -11,13 +11,19 @@ native SQL query those types only exist after execution. Studio would be
 guessing them from parsed SQL text, and a wrong guess renders a wrong chart in
 another app with no error this side can catch.
 
-Verified against the site on 2026-07-26 (record QRY-1308): this site runs
-Insights **v2**, whose ``Insights Query`` carries the SQL in a plain ``sql``
-field with ``is_native_query`` and a ``data_source`` Link. Insights v3 models the
-same thing completely differently — ``Insights Query v3`` requires a workbook and
-buries the SQL in an ``operations`` JSON array as ``{"type": "sql", "raw_sql":
-…}`` — so this module is v2-only and says so out loud rather than half-supporting
-both. ``_require_insights`` names the version problem if the DocType is absent.
+Verified against the site on 2026-07-26 (Insights **v2.2.3**): ``Insights Query``
+carries the SQL in a plain ``sql`` field with ``is_native_query`` and a
+``data_source`` Link. End-to-end confirmed live, not just in fixtures — a query
+created by this endpoint (QRY-1310) opened in the Insights editor and executed
+successfully. That also settles the one doubt the schema raised: ``sql`` is
+marked read-only in the DocType JSON, but a plain insert populates it and
+Insights runs it.
+
+Insights v3 models the same thing completely differently — ``Insights Query v3``
+requires a workbook and buries the SQL in an ``operations`` JSON array as
+``{"type": "sql", "raw_sql": …}`` — so this module is v2-only and says so out
+loud rather than half-supporting both. ``_require_insights`` names the version
+problem if the DocType is absent.
 
 **Security boundary, stated because it is a real one.** This writes SQL that
 another app will execute. Dashboard Studio never runs it: the record is stored,
@@ -47,13 +53,13 @@ SITE_DB = "Site DB"
 # missing role instead of surfacing as a bare permission error.
 INSIGHTS_ROLES = ("Insights User", "Insights Admin")
 
-# UNVERIFIED — the one thing in this module I could not confirm from source. The
-# Insights v2 single-query route is /query/build/<name>, but the SPA's base path
-# differs by install: a standalone v2 serves it at /insights, while a v3 install
-# running the legacy UI serves it at /insights_v2. If the link 404s, this
-# constant is the only thing to change. The Desk URL returned alongside it is
-# derived from Frappe itself and is correct either way, which is why both are
-# returned rather than one guess.
+# CONFIRMED on this site (Insights v2.2.3, 2026-07-26): opening QRY-1308 at this
+# path loaded the real chart editor. It is still a per-install value rather than
+# a fact about Insights — a standalone v2 mounts its SPA at /insights, while a v3
+# install running the legacy UI mounts it at /insights_v2 — so if this ever 404s
+# after an upgrade, this constant is the only thing to change. The Desk URL below
+# is derived from Frappe itself and is correct on any install, which is why both
+# are still returned.
 INSIGHTS_QUERY_PATH = "/insights/query/build/{name}"
 DESK_QUERY_PATH = "/app/insights-query/{name}"
 
