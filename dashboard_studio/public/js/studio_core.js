@@ -160,6 +160,32 @@
     return nodes;
   }
 
+  // Every source table the canvas knows about, with its mapping if it has one.
+  //
+  // The panel used to render `mappings` alone. The server withholds suggestions
+  // for any query it could not translate — correctly, flag-don't-guess — while
+  // applyAnalysis still adds a node for every table found. So the canvas grew
+  // and the panel did not, and a second and third query were invisible there.
+  // One list, derived from the canvas, keeps the two in agreement.
+  function mappingRows(nodes, mappings) {
+    var byTable = {};
+    (mappings || []).forEach(function (m) { byTable[m.external_table] = m; });
+    var rows = [];
+    var seen = {};
+    (nodes || []).forEach(function (n) {
+      if (!n || n.node_type !== "Source Table" || !n.label || seen[n.label]) return;
+      seen[n.label] = true;
+      rows.push(byTable[n.label] || {
+        external_table: n.label, target_doctype: "", mapping_status: "Unmapped",
+      });
+    });
+    // A mapping whose source node is gone is still real data — never drop it.
+    (mappings || []).forEach(function (m) {
+      if (!seen[m.external_table]) { seen[m.external_table] = true; rows.push(m); }
+    });
+    return rows;
+  }
+
   // DocTypes worth suggesting as a mapping target: the ones already on the
   // canvas, plus the source DocType of every metric this app knows about.
   //
@@ -618,6 +644,7 @@
     readinessChip: readinessChip,
     widthOptions: widthOptions,
     targetSuggestions: targetSuggestions,
+    mappingRows: mappingRows,
     dashboardSources: dashboardSources,
     sourceGlyph: sourceGlyph,
     SORT_ORDERS: SORT_ORDERS,

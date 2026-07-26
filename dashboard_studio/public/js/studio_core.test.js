@@ -437,4 +437,28 @@ assert.deepStrictEqual(
 assert.deepStrictEqual(core.targetSuggestions([], []), [], "nothing known, nothing suggested");
 assert.deepStrictEqual(core.targetSuggestions(null, null), [], "null is not a crash");
 
+// mappingRows: every source table on the canvas appears, mapped or not. This is
+// the three-query bug — an untranslatable query adds a node and no mapping, so a
+// panel driven by mappings alone never showed queries 2 and 3.
+var mapNodes = [
+  { node_type: "Source Table", label: "tabStudent Applicant" },
+  { node_type: "Target DocType", label: "Student Applicant" },
+  { node_type: "Source Table", label: "tabEmployee" },
+  { node_type: "Source Table", label: "tabAgent" },
+];
+var mapped = [{ external_table: "tabStudent Applicant", target_doctype: "Student Applicant",
+                mapping_status: "Suggested" }];
+var rows = core.mappingRows(mapNodes, mapped);
+assert.deepStrictEqual(rows.map(r => r.external_table),
+  ["tabStudent Applicant", "tabEmployee", "tabAgent"], "every source table is listed");
+assert.strictEqual(rows[0].target_doctype, "Student Applicant");
+assert.strictEqual(rows[1].target_doctype, "", "an unmapped table has an empty target");
+assert.strictEqual(rows[1].mapping_status, "Unmapped");
+assert.strictEqual(rows[0], mapped[0], "an existing mapping is the SAME object, so edits stick");
+// A mapping whose node was never added is data, not noise.
+assert.deepStrictEqual(
+  core.mappingRows([], [{ external_table: "tabOrphan", target_doctype: "X" }])
+    .map(r => r.external_table), ["tabOrphan"]);
+assert.deepStrictEqual(core.mappingRows(null, null), [], "null is not a crash");
+
 console.log("studio_core.test.js — all assertions passed");
