@@ -2497,13 +2497,6 @@
     save.addEventListener("click", function () { self.saveMappings(); });
     actions.appendChild(save);
 
-    // Re-analysis is additive on purpose, so there has to be a way to say
-    // "start again" that is not re-analysis. Confirmed mappings survive it.
-    var clear = el("button", "dss-btn", "Clear canvas");
-    clear.title = "Remove every table and mapping except the ones you confirmed";
-    clear.disabled = !(this.state.mapNodes || []).length;
-    clear.addEventListener("click", function () { self.clearCanvas(); });
-    actions.appendChild(clear);
     this.panel.appendChild(actions);
 
     // What the last save did. A save that writes nothing must say so here, not
@@ -2628,8 +2621,16 @@
         note.textContent = refusalMessage(err, "Could not analyze that query.");
       });
     });
+    // Clear canvas sits directly under Analyze SQL: they are the two things you
+    // do to the canvas, and it was in the far panel.
+    var clear = el("button", "dss-btn", "Clear canvas");
+    clear.title = "Remove every table and mapping except the ones you confirmed";
+    clear.disabled = !(this.state.mapNodes || []).length;
+    clear.addEventListener("click", function () { self.clearCanvas(); });
+
     var actions = el("div", "dss-sqlimport-actions");
     actions.appendChild(analyze);
+    actions.appendChild(clear);
     actions.appendChild(note);
     wrap.appendChild(actions);
     // The other prototype import routes (dashboard URL / API, result CSV) are
@@ -2888,7 +2889,7 @@
     this.state.pickedSource = null;
     this.state.saveResult = null;
     this.state.generatedMetrics = [];
-    this.refreshMapping();
+    this.render();   // the Clear button lives in the import block now
     toast(result.keptConfirmed
       ? "Canvas cleared — " + result.keptConfirmed + " confirmed mapping(s) kept"
       : "Canvas cleared");
