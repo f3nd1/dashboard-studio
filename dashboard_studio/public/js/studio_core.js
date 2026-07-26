@@ -160,6 +160,25 @@
     return nodes;
   }
 
+  // DocTypes worth suggesting as a mapping target: the ones already on the
+  // canvas, plus the source DocType of every metric this app knows about.
+  //
+  // Suggestions only — the control is an <input list>, not a select, because
+  // this list cannot be complete: there is no endpoint that enumerates every
+  // DocType on the site, and a closed list would lock someone out of the right
+  // answer. DS Data Mapping.target_doctype is a Link, so Frappe refuses a name
+  // that does not exist; the client suggests, the server validates.
+  function targetSuggestions(nodes, metrics) {
+    var seen = {};
+    (nodes || []).forEach(function (n) {
+      if (n && n.node_type === "Target DocType" && n.label) seen[n.label] = true;
+    });
+    (metrics || []).forEach(function (m) {
+      if (m && m.source_doctype) seen[m.source_doctype] = true;
+    });
+    return Object.keys(seen).sort();
+  }
+
   // ---- Data & DocTypes ----
 
   // Group schema edges by the DocType they start from, for a readable graph.
@@ -598,6 +617,7 @@
     sortResultRows: sortResultRows,
     readinessChip: readinessChip,
     widthOptions: widthOptions,
+    targetSuggestions: targetSuggestions,
     dashboardSources: dashboardSources,
     sourceGlyph: sourceGlyph,
     SORT_ORDERS: SORT_ORDERS,

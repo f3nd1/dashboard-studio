@@ -448,14 +448,33 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-node-label { font-size: 12px; font-weight: 800; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; margin-top: 2px; }
 
-.dss-map-row { font-size: 11px; font-weight: 600; padding: 8px 10px; border: 1px solid var(--dss-line);
-  border-radius: var(--dss-r-sm); margin-bottom: 6px; cursor: pointer; background: var(--dss-surface-2);
+/* The row is no longer one click target: the target is editable and the status
+   is its own button, so the row itself stops being clickable. */
+/* Two lines, not four columns: the panel is ~270px and a single row truncated
+   both the table name and the DocType to three characters each. */
+.dss-map-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "src src src" "arrow target status";
+  align-items: center; gap: 4px 6px;
+  font-size: 11px; font-weight: 600; padding: 7px 9px; border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-sm); margin-bottom: 6px; background: var(--dss-surface-2);
   transition: border-color .15s ease, background .15s ease; }
-.dss-map-row:hover { background: var(--dss-surface-3); }
+.dss-map-src { grid-area: src; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.dss-map-arrow { grid-area: arrow; color: var(--dss-muted); }
+.dss-map-target { grid-area: target; min-height: 26px; padding: 3px 7px; font-size: 11px; font-weight: 600; }
+.dss-map-status { grid-area: status; border: 1px solid var(--dss-line); border-radius: 999px; padding: 3px 8px;
+  background: var(--dss-surface); color: inherit; font: inherit; font-size: 9.5px;
+  font-weight: 800; text-transform: uppercase; letter-spacing: .06em; cursor: pointer;
+  white-space: nowrap; }
+.dss-map-status:hover { background: var(--dss-surface-3); }
+.dss-map-status:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(59, 118, 197, .3); }
 .dss-map-row.is-confirmed { border-color: var(--dss-green); background: var(--dss-green-100);
   color: var(--dss-green); }
 .dss-map-row.is-rejected { border-color: #f2caca; background: var(--dss-red-100);
-  color: var(--dss-red); text-decoration: line-through; }
+  color: var(--dss-red); }
+/* Struck through on the label only — never on the input, which stays editable
+   precisely so a rejected mapping can be corrected rather than deleted. */
+.dss-map-row.is-rejected .dss-map-src { text-decoration: line-through; }
 
 /* ---- Buttons ---- */
 .dss-btn { min-height: 34px; padding: 7px 12px; border: 1px solid var(--dss-line);

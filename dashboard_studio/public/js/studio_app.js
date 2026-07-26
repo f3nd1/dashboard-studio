@@ -2317,7 +2317,7 @@
     this.panel.appendChild(el("p", "dss-hint",
       this.state.pickedSource
         ? "Now click a Target DocType to map it."
-        : "Click a Source Table, then a Target DocType, to draw a mapping. Click a mapping to cycle its status."));
+        : "Click a Source Table, then a Target DocType, to draw a mapping. Edit a target below to point it somewhere else, or click its status to cycle it."));
 
     // Show what the parser concluded about the last analyzed query — especially
     // when it declined to translate it, which must never be silent.
@@ -2351,13 +2351,53 @@
     if (!this.state.mappings.length) {
       this.panel.appendChild(el("p", "dss-hint", "No mappings yet."));
     }
+    // Suggestions for the target picker, shared by every row.
+    var suggestions = core.targetSuggestions(this.state.mapNodes, this._metricList);
+    var listId = "dss-doctype-options";
+    var datalist = el("datalist");
+    datalist.id = listId;
+    suggestions.forEach(function (dt) {
+      var opt = el("option");
+      opt.value = dt;
+      datalist.appendChild(opt);
+    });
+    this.panel.appendChild(datalist);
+
     this.state.mappings.forEach(function (m) {
-      var row = el("div", "dss-map-row is-" + m.mapping_status.toLowerCase(),
-        m.external_table + " → " + m.target_doctype + "  [" + m.mapping_status + "]");
-      row.addEventListener("click", function () {
+      var row = el("div", "dss-map-row is-" + m.mapping_status.toLowerCase());
+      row.appendChild(el("span", "dss-map-src", m.external_table));
+      row.appendChild(el("span", "dss-map-arrow", "→"));
+
+      // The correction path. An <input list> rather than a select: there is no
+      // endpoint that enumerates every DocType on the site, so a closed list
+      // would lock someone out of the right answer. target_doctype is a Link, so
+      // Frappe refuses a name that does not exist — the client suggests, the
+      // server validates.
+      var target = el("input", "dss-input dss-map-target");
+      target.setAttribute("list", listId);
+      target.setAttribute("aria-label", "Target DocType for " + m.external_table);
+      target.value = m.target_doctype || "";
+      target.addEventListener("change", function () {
+        var next = target.value.trim();
+        if (!next || next === m.target_doctype) { target.value = m.target_doctype || ""; return; }
+        m.target_doctype = next;
+        // Retargeting is an edit, not a confirmation — back to Suggested so the
+        // status still means "a person agreed to THIS pair".
+        m.mapping_status = "Suggested";
+        self.state.mapNodes = core.mergeNodes(self.state.mapNodes,
+          [{ node_id: "tgt:" + next, node_type: "Target DocType", label: next, pos_x: 340 }]);
+        self.refreshMapping();
+      });
+      row.appendChild(target);
+
+      var status = el("button", "dss-map-status", m.mapping_status);
+      status.type = "button";
+      status.title = "Cycle Suggested → Confirmed → Rejected";
+      status.addEventListener("click", function () {
         m.mapping_status = core.nextMappingStatus(m.mapping_status);
         self.refreshMapping();
       });
+      row.appendChild(status);
       self.panel.appendChild(row);
     });
 

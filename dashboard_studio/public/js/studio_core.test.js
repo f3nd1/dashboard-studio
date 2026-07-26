@@ -426,4 +426,15 @@ assert.deepStrictEqual(core.dashboardSources([], resolve), [], "no charts");
 assert.deepStrictEqual(core.dashboardSources(srcCharts, function () { return null; }), [],
   "a metric list that has not loaded yields nothing, never a guessed source");
 
+// targetSuggestions: canvas targets plus every metric's source, distinct+sorted.
+assert.deepStrictEqual(
+  core.targetSuggestions(
+    [{ node_type: "Target DocType", label: "Student Applicant" },
+     { node_type: "Source Table", label: "tabStudent Applicant" },
+     { node_type: "Target DocType", label: "Employee" }],
+    [{ source_doctype: "Student Applicant" }, { source_doctype: "Agent" }, {}]),
+  ["Agent", "Employee", "Student Applicant"]);
+assert.deepStrictEqual(core.targetSuggestions([], []), [], "nothing known, nothing suggested");
+assert.deepStrictEqual(core.targetSuggestions(null, null), [], "null is not a crash");
+
 console.log("studio_core.test.js — all assertions passed");
