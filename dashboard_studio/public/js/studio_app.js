@@ -36,6 +36,10 @@
     validation: ["Result comparison", "Validation Centre",
       "Compare a reference result against this app's result for the same chart " +
       "before publishing. Differences are only ever accepted by a person."],
+    visualize: ["Visualize", "Turn a query into an Insights chart",
+      "Two steps: paste the query, then fill in the few things raw SQL cannot " +
+      "say — title, axes, shape. Studio creates the Insights query and stops " +
+      "there; the chart itself is built in Insights' own editor."],
     governance: ["Governance", "Review and publish",
       "A dashboard moves Draft → Technical Review → QA Approval → Published. " +
       "Whoever builds it cannot be the one who publishes it."],
@@ -673,7 +677,8 @@
     var tabs = el("div", "dss-tabs");
     tabs.setAttribute("role", "tablist");
     [["design", "Dashboard Builder"], ["mapping", "Source Mapping"],
-     ["data", "Data & DocTypes"], ["validation", "Validation"],
+     ["visualize", "Visualize"], ["data", "Data & DocTypes"],
+     ["validation", "Validation"],
      ["governance", "Governance & Publish"]].forEach(function (pair) {
       var v = pair[0];
       var active = self.state.view === v;
@@ -711,6 +716,18 @@
       heroBox.appendChild(el("h3", "dss-hero-title", hero[1]));
       heroBox.appendChild(el("p", "dss-hero-blurb", hero[2]));
       wrap.appendChild(heroBox);
+    }
+
+    // Visualize is a two-step flow, not a canvas with a side panel, so it takes
+    // over the workspace body instead of borrowing the shared main block. The
+    // canvas and panel are still created, detached, because code elsewhere reads
+    // them without checking which view is up.
+    if (this.state.view === "visualize") {
+      wrap.appendChild(this.buildVisualize());
+      this.canvas = el("div");
+      this.panel = el("div");
+      this.mount.appendChild(wrap);
+      return;
     }
 
     // Source Mapping is a fixed-height stack so the split is real: the query box
@@ -2663,6 +2680,277 @@
   // found and suggests identity mappings, which the user then confirms or
   // rejects. Returned as an element so the caller can place it prominently
   // instead of tucking it under the mapping list.
+  // ---------------------------------------------------------------- Visualize
+  //
+  // Its own workspace, deliberately: this was first shipped as one button bolted
+  // onto Source Mapping, which hid the fact that it is a different job with a
+  // different destination. Two steps, in order, and a visible line between what
+  // Studio does and what Insights does.
+  //
+  // Its SQL box is NOT shared with Source Mapping. Two Analyze buttons acting on
+  // one hidden box is the kind of coupling that reads as a bug the first time
+  // someone hits it.
+  App.prototype.buildVisualize = function () {
+    var grid = el("div", "dss-steps");
+    grid.appendChild(this.buildVizStepOne());
+    grid.appendChild(this.buildVizStepTwo());
+    return grid;
+  };
+
+  App.prototype.buildVizStepOne = function () {
+    var self = this;
+    var card = el("section", "dss-vizstep");
+    var head = el("div", "dss-vizstep-head");
+    head.appendChild(el("div", "dss-vizstep-eyebrow", "Step 1"));
+    head.appendChild(el("h3", "dss-vizstep-title", "Paste the source query"));
+    card.appendChild(head);
+    var body = el("div", "dss-vizstep-body");
+
+    var box = el("textarea", "dss-input dss-sqlbox");
+    box.placeholder = "SELECT `agent`, COUNT(*) FROM `tabStudent Applicant` GROUP BY `agent`";
+    box.setAttribute("aria-label", "Source SQL");
+    box.value = this.state.vizSql || "";
+    box.addEventListener("input", function () { self.state.vizSql = box.value; });
+    body.appendChild(box);
+
+    var note = el("div", "dss-sqlnote", this.state.vizAnalysis
+      ? this.vizAnalysisNote()
+      : "Not analyzed yet.");
+    var run = el("button", "dss-btn dss-btn-primary", "Analyze SQL");
+    run.addEventListener("click", function () {
+      var sql = (box.value || "").trim();
+      if (!sql) { note.textContent = "Paste a query first."; return; }
+      if (!hasFrappe()) {
+        note.textContent = "Analysis needs the server (not available in sample mode).";
+        return;
+      }
+      note.textContent = "Analyzing…";
+      dsCall({
+        method: "dashboard_studio.api.migration.analyze_migration_sql",
+        args: { sql: sql },
+      }).then(function (r) {
+        var analysis = (r.message || {}).analysis || {};
+        self.state.vizAnalysis = analysis;
+        // Re-guess from the new query. Anything the person had confirmed for a
+        // DIFFERENT query is not a confirmation of this one.
+        self.state.vizFields = core.insightsPrefill(analysis);
+        self.state.vizConfirmed = {};
+        self.state.insightsResult = null;
+        self.render();
+      }).catch(function (err) {
+        note.textContent = refusalMessage(err, "Could not analyze that query.");
+      });
+    });
+
+    var row = el("div", "dss-vizstep-actions");
+    row.appendChild(run);
+    row.appendChild(note);
+    body.appendChild(row);
+    card.appendChild(body);
+    return card;
+  };
+
+  App.prototype.vizAnalysisNote = function () {
+    var a = this.state.vizAnalysis || {};
+    var tables = (a.doctypes || []).length;
+    if (!a.supported) {
+      // Not a failure for this flow: Insights runs the SQL as written, so a
+      // query the DS parser will not translate can still be handed over. Only
+      // the guesses below get weaker.
+      return "Analyzed, but not translated — Insights will still run it as written. " +
+        "Check the fields on the right.";
+    }
+    return "Analyzed: " + tables + " table(s), grouped by " +
+      ((a.group_by || []).join(", ") || "nothing") + ".";
+  };
+
+  // Step 2 — the only thing Studio contributes. Kept to four controls on
+  // purpose: everything else (colour, reference line, curve, area) is Insights'
+  // job and rebuilding it here is what this workspace exists to avoid.
+  App.prototype.buildVizStepTwo = function () {
+    var self = this;
+    var ready = !!this.state.vizAnalysis;
+    var card = el("section", "dss-vizstep" + (ready ? "" : " is-waiting"));
+    var head = el("div", "dss-vizstep-head");
+    head.appendChild(el("div", "dss-vizstep-eyebrow", "Step 2 — Studio's job, and only this"));
+    head.appendChild(el("h3", "dss-vizstep-title", "Fill what SQL can't say"));
+    card.appendChild(head);
+    var body = el("div", "dss-vizstep-body");
+
+    if (!ready) {
+      body.appendChild(el("p", "dss-hint", "Analyze a query first."));
+      card.appendChild(body);
+      return card;
+    }
+
+    var fields = this.state.vizFields || {};
+    var confirmed = this.state.vizConfirmed || (this.state.vizConfirmed = {});
+
+    // Only the title travels with the record. Saying so here is the difference
+    // between a handoff and a form that quietly drops three of its four fields.
+    body.appendChild(this.vizField("title", "Chart title", fields.title,
+      "Stored on the Insights query.", true));
+    body.appendChild(this.vizField("x_axis", "X Axis field", fields.x_axis,
+      "From the GROUP BY column.", false));
+    body.appendChild(this.vizField("y_axis", "Y Axis field", fields.y_axis,
+      "From the aggregate column.", false));
+
+    // Chart type
+    var typeWrap = el("div", "dss-field");
+    var typeRow = el("div", "dss-guessrow");
+    typeRow.appendChild(el("label", "dss-field-label", "Suggested chart type"));
+    var typeTag = el("span", "dss-guesstag " + (confirmed.chart_type ? "is-confirmed" : "is-guessed"),
+      confirmed.chart_type ? "Confirmed" : "Guessed");
+    typeRow.appendChild(typeTag);
+    typeWrap.appendChild(typeRow);
+    var typeGrid = el("div", "dss-typegrid");
+    core.INSIGHTS_CHART_TYPES.forEach(function (option) {
+      var opt = el("button", "dss-typeopt" +
+        (fields.chart_type === option.value ? " is-active" : ""), option.label);
+      opt.type = "button";
+      opt.addEventListener("click", function () {
+        fields.chart_type = option.value;
+        confirmed.chart_type = true;
+        self.render();
+      });
+      typeGrid.appendChild(opt);
+    });
+    typeWrap.appendChild(typeGrid);
+    typeWrap.appendChild(el("p", "dss-hint",
+      "A starting point for Insights, not something Studio sends."));
+    body.appendChild(typeWrap);
+
+    body.appendChild(this.vizPreview(fields));
+
+    // Where this goes, before the button rather than after it.
+    var dest = el("div", "dss-destination");
+    dest.appendChild(el("span", "dss-destination-dot"));
+    dest.appendChild(el("span", null,
+      "Creates an Insights query holding this SQL. The chart is built in " +
+      "Insights — Studio does not create one."));
+    body.appendChild(dest);
+
+    var go = el("button", "dss-btn dss-btn-primary", "Create in Insights →");
+    go.addEventListener("click", function () { self.createInsightsQuery(); });
+    body.appendChild(go);
+
+    // Its own class, not a second .dss-sqlnote: Step 1 already has one, and a
+    // refusal landing in "the other element with the same class" is unreadable
+    // to anyone debugging it later.
+    if (this.state.vizError) {
+      body.appendChild(el("div", "dss-sqlnote dss-vizerror", this.state.vizError));
+    }
+
+    var result = this.buildInsightsResult();
+    if (result) body.appendChild(result);
+
+    card.appendChild(body);
+    return card;
+  };
+
+  // One editable field with its Guessed/Confirmed marker.
+  //
+  // The marker is flipped IN PLACE on input rather than by re-rendering: a
+  // re-render on every keystroke replaces the input mid-type and the caret and
+  // the rest of the word go with it. That fault has already been fixed twice in
+  // this app; do not reintroduce it here.
+  App.prototype.vizField = function (key, label, value, hint, sent) {
+    var self = this;
+    var wrap = el("div", "dss-field");
+    var row = el("div", "dss-guessrow");
+    row.appendChild(el("label", "dss-field-label", label));
+    var confirmed = (this.state.vizConfirmed || {})[key];
+    var tag = el("span", "dss-guesstag " + (confirmed ? "is-confirmed" : "is-guessed"),
+      confirmed ? "Confirmed" : "Guessed");
+    row.appendChild(tag);
+    if (sent) row.appendChild(el("span", "dss-senttag", "sent"));
+    wrap.appendChild(row);
+
+    var input = el("input", "dss-input");
+    input.type = "text";
+    input.value = value || "";
+    input.setAttribute("aria-label", label);
+    input.addEventListener("input", function () {
+      self.state.vizFields[key] = input.value;
+      self.state.vizConfirmed[key] = true;
+      tag.textContent = "Confirmed";
+      tag.className = "dss-guesstag is-confirmed";
+    });
+    wrap.appendChild(input);
+    if (hint) wrap.appendChild(el("p", "dss-hint", hint));
+    return wrap;
+  };
+
+  // A shape, NOT data. Studio never runs the query, so there are no numbers to
+  // draw and inventing some would be the mock-data-on-a-real-site fault this
+  // app has already shipped once. Bars carry no values and the caption says why.
+  App.prototype.vizPreview = function (fields) {
+    var card = el("div", "dss-vizpreview");
+    card.appendChild(el("div", "dss-vizpreview-title", fields.title || "Untitled"));
+    card.appendChild(el("div", "dss-vizpreview-sub",
+      "Shape only — Studio does not run the query. The real numbers appear in Insights."));
+    var area = el("div", "dss-vizpreview-area is-" + (fields.chart_type || "bar"));
+    if (fields.chart_type === "number") {
+      area.appendChild(el("div", "dss-vizpreview-kpi", "—"));
+    } else if (fields.chart_type === "donut") {
+      area.appendChild(el("div", "dss-vizpreview-donut"));
+    } else if (fields.chart_type === "table") {
+      [0, 1, 2, 3].forEach(function () { area.appendChild(el("div", "dss-vizpreview-row")); });
+    } else {
+      [58, 84, 40, 70, 30].forEach(function (h) {
+        var bar = el("div", "dss-vizpreview-bar");
+        bar.style.height = h + "%";
+        area.appendChild(bar);
+      });
+    }
+    card.appendChild(area);
+    var axes = el("div", "dss-vizpreview-axes");
+    axes.appendChild(el("span", null, "x: " + (fields.x_axis || "—")));
+    axes.appendChild(el("span", null, "y: " + (fields.y_axis || "—")));
+    card.appendChild(axes);
+    return card;
+  };
+
+  App.prototype.createInsightsQuery = function () {
+    var self = this;
+    var sql = (this.state.vizSql || "").trim();
+    var fields = this.state.vizFields || {};
+    if (!sql) { this.state.vizError = "Paste a query first."; this.render(); return; }
+    if (!hasFrappe()) {
+      this.state.vizError = "Creating an Insights query needs the server (not available in sample mode).";
+      this.render();
+      return;
+    }
+    this.state.vizError = "Creating in Insights…";
+    this.render();
+    dsCall({
+      method: "dashboard_studio.api.insights.create_insights_query",
+      args: {
+        sql: sql,
+        title: fields.title || null,
+        analysis: JSON.stringify(this.state.vizAnalysis || null),
+      },
+    }).then(function (r) {
+      var made = r.message;
+      if (!made || !made.name) {
+        self.state.vizError = "The server reported no Insights query. Nothing was created.";
+        self.render();
+        return;
+      }
+      // Carry the axes across, so the handoff note survives the round trip.
+      made.x_axis = fields.x_axis;
+      made.y_axis = fields.y_axis;
+      made.chart_type = fields.chart_type;
+      self.state.insightsResult = made;
+      self.state.vizError = "";
+      self.render();
+    }).catch(function (err) {
+      self.state.insightsResult = null;
+      self.state.vizError = refusalMessage(err, "Could not create that Insights query.");
+      self.render();
+    });
+  };
+
   // The outcome of the last Insights handoff. Persistent, like the save result:
   // a toast that has already faded is not an answer to "did that work?".
   //
@@ -2683,6 +2971,23 @@
       (made.reused
         ? "The same SQL was already there, so nothing new was created."
         : "Build the chart in Insights — Studio does not create one.")));
+    // The three things Studio guessed but does NOT send. Repeated here because
+    // this card is what stays on screen after the handoff — without it the
+    // Step 2 answers are lost the moment the person switches to Insights.
+    if (made.x_axis || made.y_axis || made.chart_type) {
+      var todo = el("div", "dss-handoff-todo");
+      todo.appendChild(el("div", "dss-handoff-todo-head", "Set these in Insights"));
+      [["X Axis", made.x_axis], ["Y Axis", made.y_axis], ["Chart type", made.chart_type]]
+        .forEach(function (pair) {
+          if (!pair[1]) return;
+          var row = el("div", "dss-handoff-todo-row");
+          row.appendChild(el("span", "dss-handoff-todo-key", pair[0]));
+          row.appendChild(el("span", "dss-handoff-todo-val", String(pair[1])));
+          todo.appendChild(row);
+        });
+      box.appendChild(todo);
+    }
+
     var links = el("div", "dss-insights-links");
     [["Open in Insights", made.insights_url], ["Open the record", made.desk_url]]
       .forEach(function (pair) {
@@ -2760,50 +3065,14 @@
     clear.disabled = !(this.state.mapNodes || []).length;
     clear.addEventListener("click", function () { self.clearCanvas(); });
 
-    // Hand the SQL to Insights as a real Query. Insights owns charting from
-    // there — Studio creates the Query and stops, deliberately. Chart creation
-    // is NOT attempted: a valid Insights chart config has to declare a data type
-    // per axis column, and for native SQL those only exist after execution.
-    var toInsights = el("button", "dss-btn", "Create in Insights");
-    toInsights.title = "Create a native Insights query holding this SQL, then " +
-      "build the chart in Insights itself";
-    toInsights.addEventListener("click", function () {
-      var sql = (box.value || "").trim();
-      if (!sql) { note.textContent = "Paste a query first."; return; }
-      if (!hasFrappe()) {
-        note.textContent = "Creating an Insights query needs the server (not available in mock mode).";
-        return;
-      }
-      note.textContent = "Creating in Insights…";
-      dsCall({
-        method: "dashboard_studio.api.insights.create_insights_query",
-        args: { sql: sql, analysis: JSON.stringify(self.state.lastAnalysis || null) },
-      }).then(function (r) {
-        var made = r.message;
-        if (!made || !made.name) {
-          note.textContent = "The server reported no Insights query. Nothing was created.";
-          return;
-        }
-        self.state.insightsResult = made;
-        note.textContent = "";
-        // render(), not refreshMapping(): the result card lives in the import
-        // block, which refreshMapping does not redraw — the same trap the Clear
-        // canvas button hit.
-        self.render();
-      }).catch(function (err) {
-        self.state.insightsResult = null;
-        note.textContent = refusalMessage(err, "Could not create that Insights query.");
-      });
-    });
-
+    // No "Create in Insights" here. It lives in its own Visualize workspace: a
+    // handoff to a different app, with its own two-step flow, is not a fourth
+    // button under the mapping canvas.
     var actions = el("div", "dss-sqlimport-actions");
     actions.appendChild(analyze);
     actions.appendChild(clear);
-    actions.appendChild(toInsights);
     actions.appendChild(note);
     wrap.appendChild(actions);
-    var handoff = this.buildInsightsResult();
-    if (handoff) wrap.appendChild(handoff);
     // The other prototype import routes (dashboard URL / API, result CSV) are
     // not built — say so rather than showing dead controls.
     wrap.appendChild(el("p", "dss-hint dss-note",

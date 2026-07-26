@@ -423,6 +423,95 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-saveresult.is-ok { background: var(--dss-green-100); border: 1px solid #b9e0c4; }
 .dss-saveresult.is-warn { background: var(--dss-orange-100); border: 1px solid #f0d19a; }
 .dss-saveresult-title { font-size: 12px; font-weight: 800; color: var(--dss-ink); }
+/* ---- Visualize: the two-step handoff to Insights ----
+ *
+ * Prefixed dss-vizstep-, NOT dss-step-: .dss-step is already the governance
+ * stepper pill (border-radius 999px) further down this file, and the later rule
+ * won. The step cards rendered as giant ellipses while every DOM assertion
+ * still passed, because the elements were all present and correctly classed.
+ *
+ * Two columns so the steps read as a sequence at a glance, stacking on narrow
+ * screens. Step 2 stays VISIBLE but inert before a query is analyzed — hiding
+ * it would make the second half of the job invisible until you had already
+ * guessed you needed to do the first half.
+ */
+.dss-steps { display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+  align-items: start; }
+@media (max-width: 1080px) { .dss-steps { grid-template-columns: 1fr; } }
+.dss-vizstep { background: var(--dss-surface); border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-lg); overflow: hidden; }
+.dss-vizstep.is-waiting { opacity: .55; }
+.dss-vizstep-head { padding: 13px 17px; border-bottom: 1px solid var(--dss-line);
+  background: var(--dss-surface-2); }
+.dss-vizstep-eyebrow { font-size: 10px; font-weight: 800; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--dss-muted); }
+.dss-vizstep-title { margin: 3px 0 0; font-size: 14.5px; font-weight: 800; }
+.dss-vizstep-body { padding: 17px; }
+.dss-vizstep-actions { display: flex; align-items: center; gap: 11px; margin-top: 11px;
+  flex-wrap: wrap; }
+textarea.dss-sqlbox { min-height: 190px; font-family: ui-monospace, SFMono-Regular,
+  Menlo, monospace; font-size: 12px; line-height: 1.55; }
+
+.dss-field { margin-bottom: 15px; }
+.dss-field-label { font-size: 12px; font-weight: 700; color: var(--dss-ink-700); }
+.dss-guessrow { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+/* Guessed vs Confirmed, the same amber/green pair the mapping statuses use —
+   a guess this app has not had confirmed is never shown as settled. */
+.dss-guesstag { font-size: 9.5px; font-weight: 800; letter-spacing: .05em;
+  text-transform: uppercase; padding: 2px 7px; border-radius: 5px; white-space: nowrap; }
+.dss-guesstag.is-guessed { color: var(--dss-orange); background: var(--dss-orange-100);
+  border: 1px solid #f0d19a; }
+.dss-guesstag.is-confirmed { color: var(--dss-green); background: var(--dss-green-100);
+  border: 1px solid #c9e3d7; }
+/* Marks the ONE field that actually travels with the record. */
+.dss-senttag { margin-left: auto; font-size: 9.5px; font-weight: 800; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--dss-blue); }
+
+.dss-typegrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; }
+.dss-typeopt { padding: 9px 4px; border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-sm); background: var(--dss-surface); cursor: pointer;
+  font: inherit; font-size: 11px; font-weight: 700; color: var(--dss-ink-700); }
+.dss-typeopt:hover { border-color: var(--dss-line-dark); }
+.dss-typeopt.is-active { border-color: var(--dss-blue); background: var(--dss-blue-100);
+  color: var(--dss-navy); box-shadow: 0 0 0 3px rgba(59, 118, 197, .12); }
+
+/* SHAPE ONLY. No numbers anywhere in here on purpose — Studio never runs the
+   query, and drawing invented values on a real site is a fault this app has
+   already shipped once. */
+.dss-vizpreview { margin: 4px 0 15px; padding: 14px; border: 1px solid var(--dss-line);
+  border-radius: var(--dss-r-md); background: var(--dss-surface-2); }
+.dss-vizpreview-title { font-size: 13px; font-weight: 800; }
+.dss-vizpreview-sub { font-size: 10.5px; color: var(--dss-muted); margin-bottom: 12px; }
+.dss-vizpreview-area { height: 130px; display: flex; align-items: flex-end; gap: 9px; }
+.dss-vizpreview-area.is-number, .dss-vizpreview-area.is-donut { align-items: center;
+  justify-content: center; }
+.dss-vizpreview-area.is-table { flex-direction: column; align-items: stretch;
+  justify-content: center; gap: 7px; }
+.dss-vizpreview-bar { flex: 1; background: var(--dss-blue); opacity: .35;
+  border-radius: 4px 4px 0 0; }
+.dss-vizpreview-kpi { font-size: 40px; font-weight: 800; color: var(--dss-line-dark); }
+.dss-vizpreview-donut { width: 104px; height: 104px; border-radius: 50%;
+  border: 18px solid var(--dss-blue); opacity: .35; }
+.dss-vizpreview-row { height: 12px; border-radius: 4px; background: var(--dss-line); }
+.dss-vizpreview-axes { display: flex; gap: 14px; margin-top: 9px; font-size: 10.5px;
+  font-weight: 700; color: var(--dss-muted); }
+
+.dss-vizerror { margin-top: 9px; color: var(--dss-red); font-weight: 600; }
+.dss-destination { display: flex; align-items: center; gap: 9px; margin-bottom: 12px;
+  padding: 9px 11px; border: 1px dashed var(--dss-line-dark); border-radius: var(--dss-r-sm);
+  font-size: 11.5px; color: var(--dss-ink-700); }
+.dss-destination-dot { flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--dss-green); }
+
+/* What Studio guessed but did NOT send — kept on screen after the handoff,
+   because these answers are otherwise lost the moment you leave for Insights. */
+.dss-handoff-todo { margin-top: 9px; padding-top: 8px; border-top: 1px dashed #b9e0c4; }
+.dss-handoff-todo-head { font-size: 9.5px; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--dss-ink-700); margin-bottom: 4px; }
+.dss-handoff-todo-row { display: flex; gap: 8px; font-size: 11px; }
+.dss-handoff-todo-key { min-width: 70px; color: var(--dss-muted); font-weight: 700; }
+.dss-handoff-todo-val { font-weight: 700; color: var(--dss-ink); }
+
 /* Both handoff links, side by side. Two because only the Desk one is certain —
    see INSIGHTS_QUERY_PATH in api/insights.py. */
 .dss-insights-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
