@@ -38,8 +38,8 @@
       "before publishing. Differences are only ever accepted by a person."],
     visualize: ["Visualize", "Turn a query into an Insights chart",
       "Two steps: paste the query, then fill in the few things raw SQL cannot " +
-      "say — title, axes, shape. Studio creates the Insights query and stops " +
-      "there; the chart itself is built in Insights' own editor."],
+      "say — title, axes, shape. Studio creates the Insights query; once you have " +
+      "run it there, it can set the axes on the chart Insights made for it."],
     governance: ["Governance", "Review and publish",
       "A dashboard moves Draft → Technical Review → QA Approval → Published. " +
       "Whoever builds it cannot be the one who publishes it."],
@@ -2822,7 +2822,7 @@
     });
     typeWrap.appendChild(typeGrid);
     typeWrap.appendChild(el("p", "dss-hint",
-      "A starting point for Insights, not something Studio sends."));
+      "Applied by “Set the axes in Insights” after the query has been run there."));
     body.appendChild(typeWrap);
 
     this._vizPreview = this.vizPreview(fields);
@@ -2832,8 +2832,8 @@
     var dest = el("div", "dss-destination");
     dest.appendChild(el("span", "dss-destination-dot"));
     dest.appendChild(el("span", null,
-      "Creates an Insights query holding this SQL. The chart is built in " +
-      "Insights — Studio does not create one."));
+      "Creates an Insights query holding this SQL. Insights makes the chart " +
+      "itself; Studio can set its axes once you have run the query there."));
     body.appendChild(dest);
 
     var go = el("button", "dss-btn dss-btn-primary", "Create in Insights →");
@@ -3003,6 +3003,10 @@
   // which is the single thing about this handoff that could not be confirmed
   // from source. If the first link 404s the second still opens the record.
   App.prototype.buildInsightsResult = function () {
+    // `self`, declared. Without it the click handler below resolved `self` to
+    // window.self — a real object, so no ReferenceError, just a silent
+    // "not a function" on click. Same slip this file has had before.
+    var self = this;
     var made = this.state.insightsResult;
     if (!made) return null;
     var box = el("div", "dss-saveresult is-ok");
@@ -3012,15 +3016,18 @@
         : "Created in Insights — " + made.name));
     box.appendChild(el("div", "dss-saveresult-detail",
       "“" + made.title + "”, a native query against " + made.data_source + ". " +
-      (made.reused
-        ? "The same SQL was already there, so nothing new was created."
-        : "Build the chart in Insights — Studio does not create one.")));
-    // The three things Studio guessed but does NOT send. Repeated here because
-    // this card is what stays on screen after the handoff — without it the
-    // Step 2 answers are lost the moment the person switches to Insights.
+      (made.applied
+        ? "The axes below were read from the columns the query actually returned."
+        : made.reused
+          ? "The same SQL was already there, so nothing new was created."
+          : "Run it in Insights, then set the axes from here.")));
+    // What Studio guessed. Still shown, because until the query has been RUN in
+    // Insights there is nothing to apply automatically — the real column labels
+    // and their types only exist after execution.
     if (made.x_axis || made.y_axis || made.chart_type) {
       var todo = el("div", "dss-handoff-todo");
-      todo.appendChild(el("div", "dss-handoff-todo-head", "Set these in Insights"));
+      todo.appendChild(el("div", "dss-handoff-todo-head",
+        made.applied ? "Set in Insights" : "Set these in Insights"));
       [["X Axis", made.x_axis], ["Y Axis", made.y_axis], ["Chart type", made.chart_type]]
         .forEach(function (pair) {
           if (!pair[1]) return;
@@ -3042,7 +3049,60 @@
         links.appendChild(a);
       });
     box.appendChild(links);
+
+    // Second action, after the person has run the query in Insights. Studio does
+    // not execute it: no result yet is a refusal that says to press Run, which
+    // is why this is a separate button rather than part of creation.
+    if (!made.applied) {
+      var apply = el("button", "dss-btn", "Set the axes in Insights");
+      apply.title = "Reads the columns the query actually returned and sets them " +
+        "on the chart Insights made. Run the query in Insights first.";
+      apply.addEventListener("click", function () { self.applyInsightsChart(); });
+      box.appendChild(apply);
+    }
+    if (this.state.insightsApplyError) {
+      box.appendChild(el("div", "dss-vizerror", this.state.insightsApplyError));
+    }
     return box;
+  };
+
+  App.prototype.applyInsightsChart = function () {
+    var self = this;
+    var made = this.state.insightsResult || {};
+    var fields = this.state.vizFields || {};
+    if (!made.name || !hasFrappe()) return;
+    this.state.insightsApplyError = "Reading the query's columns…";
+    this.render();
+    dsCall({
+      method: "dashboard_studio.api.insights.apply_insights_chart",
+      args: {
+        query: made.name,
+        chart_type: fields.chart_type || "bar",
+        // Sent only when the person confirmed them. An unconfirmed guess came
+        // from parsed SQL, and the server picks better from the real columns.
+        x_axis: (this.state.vizConfirmed || {}).x_axis ? fields.x_axis : null,
+        y_axis: (this.state.vizConfirmed || {}).y_axis ? fields.y_axis : null,
+      },
+    }).then(function (r) {
+      var set = r.message;
+      if (!set || !set.chart) {
+        self.state.insightsApplyError = "The server reported no chart. Nothing was set.";
+        self.render();
+        return;
+      }
+      // Report what the SERVER set, not what was asked for — it reads the real
+      // columns and may well have picked something else.
+      self.state.insightsResult = Object.assign({}, made, {
+        applied: true, chart: set.chart, chart_type: set.chart_type,
+        x_axis: set.x_axis, y_axis: set.y_axis,
+      });
+      self.state.insightsApplyError = "";
+      self.render();
+    }).catch(function (err) {
+      self.state.insightsApplyError =
+        refusalMessage(err, "Could not set the axes on that chart.");
+      self.render();
+    });
   };
 
   App.prototype.buildSqlImport = function () {
