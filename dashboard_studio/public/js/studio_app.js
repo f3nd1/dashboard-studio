@@ -2236,8 +2236,11 @@
   App.prototype.renderMapNode = function (node) {
     var self = this;
     var isSource = node.node_type === "Source Table";
+    var fromLastQuery = (this.state.lastQueryTables || []).indexOf(node.label) !== -1;
     var div = el("div", "dss-node " + (isSource ? "dss-node-src" : "dss-node-tgt") +
-      (this.state.pickedSource === node.node_id ? " is-picked" : ""));
+      (this.state.pickedSource === node.node_id ? " is-picked" : "") +
+      (fromLastQuery ? " is-fresh" : ""));
+    if (fromLastQuery) div.title = "Named by the query you just analyzed";
     div.style.left = node.pos_x + "px";
     div.style.top = node.pos_y + "px";
     div.appendChild(el("div", "dss-node-kind", node.node_type));
@@ -2412,9 +2415,12 @@
     rows.forEach(function (m) {
       var row = el("div", "dss-map-row is-" + m.mapping_status.toLowerCase());
       row.setAttribute("data-table", m.external_table);
+      if ((self.state.lastQueryTables || []).indexOf(m.external_table) !== -1) {
+        row.className += " is-fresh";
+        row.title = "Named by the query you just analyzed";
+      }
       if (self.state.pickedSource === "src:" + m.external_table) row.className += " is-picked";
       row.appendChild(el("span", "dss-map-src", m.external_table));
-      row.appendChild(el("span", "dss-map-arrow", "→"));
 
       // The correction path. An <input list> rather than a select: there is no
       // endpoint that enumerates every DocType on the site, so a closed list
@@ -2424,6 +2430,11 @@
       var target = el("input", "dss-input dss-map-target");
       target.setAttribute("list", listId);
       target.setAttribute("aria-label", "Target DocType for " + m.external_table);
+      target.placeholder = "Target DocType…";
+      // The full value must be readable, not clipped to its first word: the
+      // panel is 240px and the input was 64px, which is why picking a target
+      // felt like nothing was happening.
+      target.title = m.target_doctype || "";
       target.value = m.target_doctype || "";
       target.addEventListener("change", function () {
         var next = target.value.trim();
@@ -2459,6 +2470,16 @@
     var save = el("button", "dss-btn dss-btn-primary", "Save mappings");
     save.addEventListener("click", function () { self.saveMappings(); });
     this.panel.appendChild(save);
+
+    // What the last save did. A save that writes nothing must say so here, not
+    // only in a toast that has already gone.
+    var saveResult = this.state.saveResult;
+    if (saveResult) {
+      var box = el("div", "dss-saveresult" + (saveResult.ok ? " is-ok" : " is-warn"));
+      box.appendChild(el("div", "dss-saveresult-title", saveResult.title));
+      box.appendChild(el("div", "dss-saveresult-detail", saveResult.detail));
+      this.panel.appendChild(box);
+    }
 
     // What the save generated. Every analyzed query is reported — created,
     // reused, or skipped with the reason — because a silent skip is a metric
@@ -2558,6 +2579,11 @@
       nodes: this.state.mapNodes.length - before,
       mappings: this.state.mappings.added || 0,
     };
+    // Which tables THIS query named. Marked on the canvas and in the panel until
+    // the next analysis replaces it, so a re-analysis that adds nothing still
+    // shows what was just run. Persistent rather than a flash: a highlight you
+    // blinked past is the same as no highlight, and it needs no timer.
+    this.state.lastQueryTables = (analysis.doctypes || []).map(function (d) { return "tab" + d; });
     this.state.lastAnalysis = analysis;
     // Keep the query itself for the next save — it is the evidence, and it
     // matters most for the queries that were NOT translated.
@@ -2577,14 +2603,21 @@
     var canvasNodes = core.serializeCanvasNodes(this.state.mapNodes || []);
     var analyzedQueries = this.state.analyzedQueries || [];
 
-    // Without a ?project= there is nothing to save against, so keep the mock
-    // path — the payload shape is identical either way.
+    // Without a ?project= there is nothing to save against. This used to pass
+    // silently with a toast, so a button labelled "Save mappings" appeared to
+    // work and wrote nothing. Say so where the result would have gone.
     if (!this.options.project || !hasFrappe()) {
-      if (root.console) {
-        root.console.log("[Dashboard Studio] mock mapping payload",
-          { mappings: mappings, canvas_nodes: canvasNodes, source_queries: analyzedQueries });
-      }
-      toast("Captured " + mappings.length + " mapping(s) (mock — no mapping project)");
+      this.state.saveResult = {
+        ok: false,
+        title: "Nothing was saved",
+        detail: "This editor was opened without a mapping project, so there is " +
+          "nowhere to save to. Open it as /app/dashboard-studio?project=<DS Migration " +
+          "Project> and press Save mappings again. The analysis above is not lost — " +
+          "re-analysing the same query is a no-op.",
+      };
+      this.state.generatedMetrics = [];
+      this.renderMappingPanel();
+      toast("Not saved — no mapping project. See the panel.");
       return;
     }
 
@@ -2601,12 +2634,26 @@
       // Recorded evidence is now on the project, so it need not be resent.
       self.state.analyzedQueries = [];
       self.state.generatedMetrics = result.metrics || [];
-      toast("Saved " + (result.saved_mappings || 0) + " mapping(s)" +
-        (result.recorded_queries ? ", " + result.recorded_queries + " query(ies) kept as evidence" : "") +
-        " — project is now " + (result.status || "updated"));
+      var saved = result.saved_mappings || 0;
+      self.state.saveResult = {
+        ok: true,
+        title: "Saved " + saved + " mapping" + (saved === 1 ? "" : "s"),
+        detail: (result.recorded_queries
+            ? result.recorded_queries + " query(ies) kept as evidence. " : "") +
+          "The project is now " + (result.status || "updated") + ". " +
+          (result.metrics && result.metrics.length
+            ? "Metrics from those queries are listed below."
+            : "Confirm a mapping and save again to generate its DS Metric."),
+      };
+      toast(self.state.saveResult.title);
       self.renderMappingPanel();
     }).catch(function (err) {
-      toast(refusalMessage(err, "Could not save those mappings."));
+      self.state.saveResult = {
+        ok: false, title: "Not saved",
+        detail: refusalMessage(err, "The server refused those mappings."),
+      };
+      self.renderMappingPanel();
+      toast(self.state.saveResult.title);
     });
   };
 
