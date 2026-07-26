@@ -376,6 +376,18 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-analysis.is-ok { background: var(--dss-green-100); border: 1px solid #b7ddcd; color: var(--dss-green); }
 .dss-analysis.is-warn { background: var(--dss-orange-100); border: 1px solid #f0d19a; color: var(--dss-orange); }
 
+/* Preview of an unapproved metric's real numbers, under the card that offers it. */
+.dss-genmetric-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.dss-genmetric-where { min-height: 24px; padding: 2px 6px; font-size: 11px; flex: 1 1 100%; }
+.dss-preview { margin-top: 8px; padding: 8px 9px; border-radius: var(--dss-r-sm);
+  background: var(--dss-surface); border: 1px solid var(--dss-line); }
+.dss-preview.is-error { background: var(--dss-red-100); border-color: #f2caca; }
+.dss-preview-head { font-size: 9.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--dss-muted); margin-bottom: 5px; }
+.dss-preview-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.dss-preview-table td { padding: 2px 0; border-top: 1px solid var(--dss-line); }
+.dss-preview-table td:first-child { overflow-wrap: anywhere; }
+
 /* The outcome of the last save. Persistent — a toast that has already faded is
    not an answer to "did that work?". */
 .dss-saveresult { margin-top: 10px; padding: 9px 11px; border-radius: var(--dss-r-sm); }

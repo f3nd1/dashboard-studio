@@ -2523,6 +2523,38 @@
           ? (row.created ? "Created as Draft — approve it before a chart can use it."
                          : "Already existed; reused rather than duplicated.")
           : row.skipped));
+
+        // The handoff to the Builder. Preview answers "are these numbers sane?"
+        // before approval; Create chart makes the DS Chart and switches views.
+        // Neither belongs in Source Mapping beyond this point — the Builder owns
+        // charts, and this workspace owns the query that produced the metric.
+        if (row.metric) {
+          var acts = el("div", "dss-genmetric-actions");
+          var preview = el("button", "dss-btn dss-btn-small", "Preview numbers");
+          preview.title = "Run this metric now, even though it is not approved yet";
+          preview.addEventListener("click", function () { self.previewMetric(row.metric); });
+          acts.appendChild(preview);
+
+          var where = el("select", "dss-input dss-genmetric-where");
+          where.setAttribute("aria-label", "Dashboard to create the chart on");
+          // `self`, not `this` — this runs inside a forEach callback.
+          (self.state.dashboards || []).forEach(function (d) {
+            var o = el("option", null, core.dashboardTitle(d));
+            o.value = d.name;
+            if (d.name === self.currentDashboard()) o.selected = true;
+            where.appendChild(o);
+          });
+          var make = el("button", "dss-btn dss-btn-small", "Create chart");
+          make.disabled = !(self.state.dashboards || []).length;
+          make.addEventListener("click", function () {
+            self.createChartFromMetric(row.metric, where.value);
+          });
+          acts.appendChild(where);
+          acts.appendChild(make);
+          item.appendChild(acts);
+        }
+        var pv = self.state.metricPreview;
+        if (pv && pv.metric === row.metric) item.appendChild(self.buildMetricPreview(pv));
         self.panel.appendChild(item);
       });
     }
@@ -2623,6 +2655,83 @@
       }]);
     }
     this.refreshMapping();
+  };
+
+  App.prototype.buildMetricPreview = function (pv) {
+    var box = el("div", "dss-preview");
+    if (pv.loading) { box.appendChild(el("div", "dss-hint", "Running…")); return box; }
+    if (pv.error) {
+      box.className += " is-error";
+      box.appendChild(el("div", "dss-hint", pv.error));
+      return box;
+    }
+    var rows = pv.rows || [];
+    box.appendChild(el("div", "dss-preview-head",
+      rows.length + " group(s) · " + (pv.status || "?") + " · " + (pv.source_doctype || "")));
+    if (!rows.length) {
+      box.appendChild(el("div", "dss-hint", "No rows. Worth knowing BEFORE approving it."));
+      return box;
+    }
+    // ponytail: the first 8 groups. This is a sanity check, not a chart — the
+    // chart is what Create chart makes.
+    var table = el("table", "dss-preview-table");
+    rows.slice(0, 8).forEach(function (r) {
+      var keys = Object.keys(r);
+      var valueKey = keys.indexOf("count") !== -1 ? "count" : keys[keys.length - 1];
+      var dimKey = keys.filter(function (k) { return k !== valueKey; })[0];
+      var tr = el("tr");
+      tr.appendChild(el("td", null, r[dimKey] == null ? "(blank)" : String(r[dimKey])));
+      tr.appendChild(el("td", "dss-num", String(r[valueKey])));
+      table.appendChild(tr);
+    });
+    box.appendChild(table);
+    if (rows.length > 8) {
+      box.appendChild(el("div", "dss-hint", "…and " + (rows.length - 8) + " more."));
+    }
+    return box;
+  };
+
+  // Run an unapproved metric so approval is a decision, not a formality. Its own
+  // endpoint, deliberately: list_ds_metrics stays Approved-only everywhere a
+  // chart is built for real.
+  App.prototype.previewMetric = function (metricName) {
+    var self = this;
+    if (!hasFrappe()) { toast("Previewing a metric needs the server."); return; }
+    this.state.metricPreview = { metric: metricName, loading: true };
+    this.renderMappingPanel();
+    root.frappe.call({
+      method: "dashboard_studio.api.metrics.preview_ds_metric",
+      args: { metric_name: metricName },
+    }).then(function (r) {
+      self.state.metricPreview = Object.assign({ metric: metricName }, r.message || {});
+      self.renderMappingPanel();
+    }).catch(function (err) {
+      self.state.metricPreview = {
+        metric: metricName,
+        error: refusalMessage(err, "Could not run that metric."),
+      };
+      self.renderMappingPanel();
+    });
+  };
+
+  // Create the chart on a chosen dashboard, then hand over to the Builder — the
+  // workspace that owns charts — with it open and selected.
+  App.prototype.createChartFromMetric = function (metricName, dashboard) {
+    var self = this;
+    if (!hasFrappe() || !dashboard) { toast("Creating a chart needs a dashboard."); return; }
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.create_chart",
+      args: { dashboard: dashboard, chart_type: "Bar Chart", metric: metricName },
+    }).then(function (r) {
+      var chart = r.message || {};
+      toast("Created “" + (chart.chart_title || "chart") + "” — opening the Builder");
+      self.state.view = "design";
+      self.state.selected = chart.name;
+      // openDashboard re-reads and re-renders; the Builder then owns it.
+      self.openDashboard(dashboard);
+    }).catch(function (err) {
+      toast(refusalMessage(err, "Could not create that chart."));
+    });
   };
 
   App.prototype.clearCanvas = function () {

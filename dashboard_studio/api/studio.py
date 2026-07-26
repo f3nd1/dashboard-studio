@@ -495,7 +495,9 @@ def _next_free_row(dashboard: str):
 
 
 @frappe.whitelist()
-def create_chart(dashboard: str, chart_type: str = "KPI Card", copy_from: str = None):
+def create_chart(
+    dashboard: str, chart_type: str = "KPI Card", copy_from: str = None, metric: str = None
+):
     """Add a chart to a dashboard, or duplicate one that is already on it.
 
     Both paths land the new card on the first free row rather than on top of an
@@ -505,6 +507,13 @@ def create_chart(dashboard: str, chart_type: str = "KPI Card", copy_from: str = 
     filters over. It is restricted to the same dashboard: duplicating across
     dashboards would silently move a chart's metric into a different governance
     scope.
+
+    ``metric`` links the new chart to a DS Metric on creation, which is what the
+    Source Mapping workspace uses after generating one. Deliberately no status
+    check: DS Chart.metric is a Link with no status constraint, a chart may be
+    built before its metric is approved, and the engine still refuses to RUN an
+    unapproved one. Adding a check here would be a second, weaker copy of the
+    gate that already exists.
     """
     frappe.only_for(DS_WRITE_ROLES)
     source = frappe.get_doc("DS Chart", copy_from) if copy_from else None
@@ -524,7 +533,7 @@ def create_chart(dashboard: str, chart_type: str = "KPI Card", copy_from: str = 
                 f"{source.chart_title} (copy)" if source else f"New {resolved_type}"
             ),
             "section": (source.section if source else None),
-            "metric": (source.metric if source else None),
+            "metric": (source.metric if source else (metric or None)),
             "description": (source.description if source else ""),
             "pos_x": 0,
             "pos_y": _next_free_row(dashboard),

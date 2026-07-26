@@ -140,5 +140,28 @@ class TestChartApi(unittest.TestCase):
         self.assertIn("other", self.store["DS Chart"])
 
 
+    # ---- create from a migration-generated metric ----
+    def test_create_links_the_metric_it_is_given(self):
+        created = self.studio.create_chart("D1", "Bar Chart", metric="M-new")
+        self.assertEqual(created["metric"], "M-new")
+        self.assertEqual(created["chart_type"], "Bar Chart")
+        self.assertEqual(created["dashboard"], "D1")
+
+    def test_a_duplicate_still_takes_its_source_metric_not_the_argument(self):
+        """copy_from means copy; the metric argument must not override it."""
+        created = self.studio.create_chart("D1", copy_from="c1", metric="M-other")
+        self.assertEqual(created["metric"], "M1", "the duplicate lost its source's metric")
+
+    def test_no_metric_argument_still_creates_an_unlinked_chart(self):
+        self.assertIsNone(self.studio.create_chart("D1", "Table")["metric"])
+
+    def test_an_unapproved_metric_is_not_refused_here(self):
+        """DS Chart.metric has no status constraint, and the engine already
+        refuses to RUN an unapproved metric. A second check here would be a
+        weaker copy of the gate that exists."""
+        self.assertEqual(
+            self.studio.create_chart("D1", "Bar Chart", metric="M-draft")["metric"], "M-draft")
+
+
 if __name__ == "__main__":
     unittest.main()
