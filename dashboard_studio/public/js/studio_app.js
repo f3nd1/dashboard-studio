@@ -28,7 +28,8 @@
   var HEROES = {
     mapping: ["Source mapping", "Map a source query onto DocTypes",
       "Paste the query behind a Metabase card. Tables it finds become nodes you " +
-      "map to DocTypes; anything it cannot safely translate is reported, never guessed."],
+      "map to DocTypes; anything it cannot safely translate is reported with " +
+      "reasons and nothing is suggested for it."],
     data: ["Source of truth", "Records, relationships and safe fields",
       "What this app has stored, how those records link to each other, and which " +
       "fields each metric is allowed to read."],
@@ -1725,7 +1726,7 @@
     var self = this;
     var wrap = el("div", "dss-sqlimport");
     var head = el("div", "dss-sqlimport-head");
-    head.appendChild(el("div", "dss-kicker", "Step 1 — reference result"));
+    head.appendChild(el("div", "dss-kicker", "Reference result"));
     head.appendChild(el("h3", "dss-sqlimport-title", "Run a validation"));
     wrap.appendChild(head);
     wrap.appendChild(el("p", "dss-hint",
@@ -2391,13 +2392,9 @@
     var self = this;
     var wrap = el("div", "dss-sqlimport");
     var head = el("div", "dss-sqlimport-head");
-    head.appendChild(el("div", "dss-kicker", "Step 1 — import"));
+    head.appendChild(el("div", "dss-kicker", "Import"));
     head.appendChild(el("h3", "dss-sqlimport-title", "Paste the Metabase SQL"));
     wrap.appendChild(head);
-    wrap.appendChild(el("p", "dss-hint",
-      "Copy the query behind a Metabase card and paste it here. Tables it finds " +
-      "become nodes on the canvas below; a query it cannot safely translate is " +
-      "reported with reasons and nothing is suggested for it."));
 
     var box = el("textarea", "dss-input");
     box.placeholder = "SELECT COUNT(*) FROM `tabStudent Applicant` WHERE …";
