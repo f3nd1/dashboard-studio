@@ -26,7 +26,7 @@
   // Workspace header: kicker / title / what this screen is for. The Design view
   // has no entry — its heading is the dashboard title in the toolbar.
   var HEROES = {
-    mapping: ["Metabase migration", "Map a Metabase query onto DocTypes",
+    mapping: ["Source mapping", "Map a source query onto DocTypes",
       "Paste the query behind a Metabase card. Tables it finds become nodes you " +
       "map to DocTypes; anything it cannot safely translate is reported, never guessed."],
     data: ["Source of truth", "Records, relationships and safe fields",
@@ -636,7 +636,7 @@
     // Workspace tab bar (underlined active tab), not a row of buttons.
     var tabs = el("div", "dss-tabs");
     tabs.setAttribute("role", "tablist");
-    [["design", "Dashboard Builder"], ["mapping", "Metabase Migration"],
+    [["design", "Dashboard Builder"], ["mapping", "Source Mapping"],
      ["data", "Data & DocTypes"], ["validation", "Validation"],
      ["governance", "Governance & Publish"]].forEach(function (pair) {
       var v = pair[0];
@@ -2169,7 +2169,7 @@
       return;
     }
     if (this.options.project && hasFrappe()) {
-      this.canvas.innerHTML = '<div class="dss-nochart">Loading migration project…</div>';
+      this.canvas.innerHTML = '<div class="dss-nochart">Loading mapping project…</div>';
       root.frappe.call({
         method: "dashboard_studio.api.studio.get_migration_project",
         args: { project: this.options.project },
@@ -2193,7 +2193,7 @@
         // retry. Falling back to demo data made a broken call look like a
         // working migration.
         if (self.state.view === "mapping") {
-          self.canvasError("Could not load that migration project.", self.renderMapping);
+          self.canvasError("Could not load that mapping project.", self.renderMapping);
           self.renderMappingPanel();
         }
       });
@@ -2301,8 +2301,8 @@
     if (!this.state.mapNodes.length) {
       this.canvas.appendChild(el("div", "dss-nochart",
         this.options.project
-          ? "This migration project has nothing mapped yet."
-          : "Opened without a migration project, so there is nothing to load." +
+          ? "This mapping project has nothing mapped yet."
+          : "Opened without a mapping project, so there is nothing to load." +
             " Paste a query above to analyze it; mappings can only be saved from a project."));
     }
     this.state.mapNodes.forEach(function (n) { self.renderMapNode(n); });
@@ -2448,7 +2448,7 @@
         root.console.log("[Dashboard Studio] mock mapping payload",
           { mappings: mappings, canvas_nodes: canvasNodes, source_queries: analyzedQueries });
       }
-      toast("Captured " + mappings.length + " mapping(s) (mock — no migration project)");
+      toast("Captured " + mappings.length + " mapping(s) (mock — no mapping project)");
       return;
     }
 
