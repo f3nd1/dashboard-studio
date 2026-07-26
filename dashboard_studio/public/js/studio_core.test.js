@@ -553,4 +553,40 @@ assert.strictEqual(core.chartBlockReason({ metric: "M", metric_status: "Approved
 assert.strictEqual(core.chartBlockReason({ metric: "M", metric_status: "Draft",
   metric_calculation: "Sum" }).title, "Metric not yet approved");
 
+// insightsPrefill: what Studio can say that raw SQL cannot.
+var pf = core.insightsPrefill({
+  doctypes: ["Student Applicant"], group_by: ["agent"],
+  aggregations: [{ function: "COUNT", argument: "*" }],
+});
+assert.deepStrictEqual(pf, { title: "Count of Student Applicant by agent",
+  x_axis: "agent", y_axis: "count", chart_type: "bar" });
+
+// A named aggregate column, not COUNT(*), becomes the Y axis.
+assert.strictEqual(core.insightsPrefill({ doctypes: ["Fee"], group_by: ["term"],
+  aggregations: [{ function: "SUM", argument: "`amount`" }] }).y_axis, "amount",
+  "backticks survived into the axis name");
+assert.strictEqual(core.insightsPrefill({ doctypes: ["Fee"], group_by: ["term"],
+  aggregations: [{ function: "SUM", argument: "amount" }] }).title,
+  "Sum of Fee by term");
+
+// The title degrades the same way the endpoint's does — the queries most worth
+// sending to Insights are the ones the parser could NOT translate.
+assert.strictEqual(core.insightsPrefill({ doctypes: ["Employee"] }).title, "Employee query");
+assert.strictEqual(core.insightsPrefill({ doctypes: ["B", "A"] }).title, "A + B query",
+  "two tables are not named in a stable order");
+assert.strictEqual(core.insightsPrefill(null).title, "Imported SQL query");
+assert.strictEqual(core.insightsPrefill({}).x_axis, "", "an axis was invented from nothing");
+
+// suggestedChartType: a suggestion has to be drawable from what the query returns.
+assert.strictEqual(core.suggestedChartType({ group_by: [], aggregations: [{ function: "COUNT" }] }),
+  "number", "one number with no dimension is a KPI, not a bar of one");
+assert.strictEqual(core.suggestedChartType({ group_by: ["a"], aggregations: [{ function: "COUNT" }] }),
+  "bar");
+assert.strictEqual(core.suggestedChartType({ group_by: ["a", "b"], aggregations: [{ function: "COUNT" }] }),
+  "table", "two dimensions cannot be a bar chart");
+assert.strictEqual(core.suggestedChartType({ group_by: ["a"], aggregations: [] }), "table");
+assert.strictEqual(core.suggestedChartType(null), "table");
+assert.deepStrictEqual(core.INSIGHTS_CHART_TYPES.map(function (t) { return t.value; }),
+  ["bar", "line", "donut", "number", "table"]);
+
 console.log("studio_core.test.js — all assertions passed");

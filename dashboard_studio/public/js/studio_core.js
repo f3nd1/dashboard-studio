@@ -29,6 +29,75 @@
   // publication. Reasons and counts: docs/CHART_TYPE_MAPPING.md.
   var UNPUBLISHABLE_CHART_TYPES = ["KPI Card", "Line Chart", "Table"];
 
+  // The five shapes the Visualize step offers as a starting suggestion. Studio
+  // does NOT send the type — Insights owns charting — so this is a hint the
+  // person carries across, which is why it is not checked against Insights'
+  // own chart list. Insights v2's list is not read anywhere in this repo and
+  // guessing it would be asserting something unverified.
+  var INSIGHTS_CHART_TYPES = [
+    { value: "bar", label: "Bar" },
+    { value: "line", label: "Line" },
+    { value: "donut", label: "Donut" },
+    { value: "number", label: "KPI" },
+    { value: "table", label: "Table" },
+  ];
+
+  // What Studio can fill in that raw SQL cannot say on its own.
+  //
+  // Everything here is a GUESS until a person edits it — the Visualize step
+  // marks each field Guessed/Confirmed on that basis. Only `title` is actually
+  // sent: it lives on the Insights Query. The axes and the type are a handoff
+  // note for the person to apply in Insights' own editor, because creating the
+  // Chart would mean guessing a data_type per column and drawing a wrong chart
+  // in another app with no error this side can catch.
+  //
+  // ponytail: `title` is derived here AND in api/insights.query_title, because
+  // the panel needs a title before it calls the server while the endpoint needs
+  // one for callers that send none. They are kept in step by hand. The ceiling
+  // is a cosmetic mismatch in a default title — no number can differ — so a
+  // drift guard would cost more than the fault it prevents.
+  function insightsPrefill(analysis) {
+    analysis = analysis || {};
+    var doctypes = (analysis.doctypes || []).filter(Boolean);
+    var groupBy = (analysis.group_by || []).filter(Boolean);
+    var aggregations = analysis.aggregations || [];
+    var first = aggregations[0] || {};
+    var fn = String(first.function || "").toUpperCase();
+    var argument = String(first.argument || "").replace(/[`\s]/g, "");
+
+    var title;
+    if (doctypes.length === 1 && groupBy.length && fn) {
+      title = fn.charAt(0) + fn.slice(1).toLowerCase() + " of " + doctypes[0] + " by " + groupBy[0];
+    } else if (doctypes.length === 1) {
+      title = doctypes[0] + " query";
+    } else if (doctypes.length > 1) {
+      title = doctypes.slice().sort().slice(0, 3).join(" + ") + " query";
+    } else {
+      title = "Imported SQL query";
+    }
+
+    return {
+      title: title,
+      // The GROUP BY column and the aggregate column — the two things a chart
+      // needs and a SELECT does not label as such.
+      x_axis: groupBy[0] || "",
+      y_axis: fn === "COUNT" && (argument === "*" || !argument) ? "count" : argument,
+      chart_type: suggestedChartType(analysis),
+    };
+  }
+
+  function suggestedChartType(analysis) {
+    analysis = analysis || {};
+    var groupBy = (analysis.group_by || []).filter(Boolean);
+    var aggregations = analysis.aggregations || [];
+    // One number and nothing to break it down by is a KPI, not a bar of one.
+    if (!groupBy.length && aggregations.length === 1) return "number";
+    if (groupBy.length === 1 && aggregations.length === 1) return "bar";
+    // More than one dimension, or nothing aggregated, is a list — saying "bar"
+    // would be a suggestion that cannot be drawn from what the query returns.
+    return "table";
+  }
+
   // Why a chart cannot show live data, decided BEFORE asking the server.
   //
   // The engine refuses a metric that is not Approved, or whose calculation is
@@ -751,6 +820,9 @@
     UNPUBLISHABLE_CHART_TYPES: UNPUBLISHABLE_CHART_TYPES,
     chartTypeOptions: chartTypeOptions,
     chartBlockReason: chartBlockReason,
+    INSIGHTS_CHART_TYPES: INSIGHTS_CHART_TYPES,
+    insightsPrefill: insightsPrefill,
+    suggestedChartType: suggestedChartType,
     OPERATORS: OPERATORS,
     GRID_COLUMNS: GRID_COLUMNS,
     MAPPING_STATUSES: MAPPING_STATUSES,
