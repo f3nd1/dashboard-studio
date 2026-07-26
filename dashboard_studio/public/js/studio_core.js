@@ -98,6 +98,18 @@
     return "table";
   }
 
+  // Guessed / Confirmed / Not detected, decided in one place so the field and
+  // the preview cannot disagree about whether there is an axis.
+  //
+  // "Not detected" is a third state on purpose. A join with no outer GROUP BY
+  // yields no dimension and no aggregate to read, and labelling an empty box
+  // "Guessed" claims a guess that was never made — the same over-claim this app
+  // refuses everywhere else.
+  function axisState(value, confirmed) {
+    if (!String(value == null ? "" : value).trim()) return "missing";
+    return confirmed ? "confirmed" : "guessed";
+  }
+
   // Why a chart cannot show live data, decided BEFORE asking the server.
   //
   // The engine refuses a metric that is not Approved, or whose calculation is
@@ -822,6 +834,7 @@
     chartBlockReason: chartBlockReason,
     INSIGHTS_CHART_TYPES: INSIGHTS_CHART_TYPES,
     insightsPrefill: insightsPrefill,
+    axisState: axisState,
     suggestedChartType: suggestedChartType,
     OPERATORS: OPERATORS,
     GRID_COLUMNS: GRID_COLUMNS,

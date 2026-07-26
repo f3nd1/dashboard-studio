@@ -2790,10 +2790,15 @@
     // between a handoff and a form that quietly drops three of its four fields.
     body.appendChild(this.vizField("title", "Chart title", fields.title,
       "Stored on the Insights query.", true));
+    // Each axis carries its own "nothing to guess from" sentence. A join with no
+    // outer GROUP BY has neither a dimension nor an aggregate to read, and the
+    // fields used to render as an empty box under a "Guessed" tag.
     body.appendChild(this.vizField("x_axis", "X Axis field", fields.x_axis,
-      "From the GROUP BY column.", false));
+      "From the GROUP BY column.", false,
+      "No GROUP BY in this query — set the X axis in Insights."));
     body.appendChild(this.vizField("y_axis", "Y Axis field", fields.y_axis,
-      "From the aggregate column.", false));
+      "From the aggregate column.", false,
+      "No aggregate column in this query — set the Y axis in Insights."));
 
     // Chart type
     var typeWrap = el("div", "dss-field");
@@ -2820,7 +2825,8 @@
       "A starting point for Insights, not something Studio sends."));
     body.appendChild(typeWrap);
 
-    body.appendChild(this.vizPreview(fields));
+    this._vizPreview = this.vizPreview(fields);
+    body.appendChild(this._vizPreview);
 
     // Where this goes, before the button rather than after it.
     var dest = el("div", "dss-destination");
@@ -2854,14 +2860,15 @@
   // re-render on every keystroke replaces the input mid-type and the caret and
   // the rest of the word go with it. That fault has already been fixed twice in
   // this app; do not reintroduce it here.
-  App.prototype.vizField = function (key, label, value, hint, sent) {
+  App.prototype.vizField = function (key, label, value, hint, sent, missingHint) {
     var self = this;
     var wrap = el("div", "dss-field");
     var row = el("div", "dss-guessrow");
     row.appendChild(el("label", "dss-field-label", label));
     var confirmed = (this.state.vizConfirmed || {})[key];
-    var tag = el("span", "dss-guesstag " + (confirmed ? "is-confirmed" : "is-guessed"),
-      confirmed ? "Confirmed" : "Guessed");
+    var state = core.axisState(value, confirmed);
+    var TAGS = { confirmed: "Confirmed", guessed: "Guessed", missing: "Not detected" };
+    var tag = el("span", "dss-guesstag is-" + state, TAGS[state]);
     row.appendChild(tag);
     if (sent) row.appendChild(el("span", "dss-senttag", "sent"));
     wrap.appendChild(row);
@@ -2869,15 +2876,35 @@
     var input = el("input", "dss-input");
     input.type = "text";
     input.value = value || "";
+    // The native placeholder, not a disabled box: nothing was detected, but the
+    // person can still type what they know.
+    if (state === "missing" && missingHint) input.placeholder = missingHint;
     input.setAttribute("aria-label", label);
     input.addEventListener("input", function () {
       self.state.vizFields[key] = input.value;
-      self.state.vizConfirmed[key] = true;
-      tag.textContent = "Confirmed";
-      tag.className = "dss-guesstag is-confirmed";
+      var now = core.axisState(input.value, true);
+      self.state.vizConfirmed[key] = now !== "missing";
+      // Flipped in place, never by re-rendering: a re-render per keystroke
+      // replaces the input mid-type and takes the caret with it.
+      tag.textContent = TAGS[now];
+      tag.className = "dss-guesstag is-" + now;
     });
+    // The preview reads these values at build time, so it goes stale the moment
+    // anything is typed — the axes line kept saying "not detected" after an axis
+    // had been filled in. Repaint on `change` (blur), when the caret is already
+    // gone, so this cannot eat characters mid-type.
+    //
+    // Repaints ONLY the preview, never the whole step. A full render() here
+    // rebuilt the DOM during blur, so clicking Create in Insights straight from
+    // a focused field destroyed the button between mousedown and mouseup and the
+    // click never fired — the same suppression already fixed on the map canvas.
+    input.addEventListener("change", function () { self.repaintVizPreview(); });
     wrap.appendChild(input);
-    if (hint) wrap.appendChild(el("p", "dss-hint", hint));
+    var shown = state === "missing" && missingHint ? missingHint : hint;
+    if (shown) {
+      wrap.appendChild(el("p", "dss-hint" + (state === "missing" ? " dss-hint-missing" : ""),
+        shown));
+    }
     return wrap;
   };
 
@@ -2904,11 +2931,28 @@
       });
     }
     card.appendChild(area);
+    // "x: — y: —" said nothing twice. When neither axis was detected, say what
+    // that means instead; when one was, show the one there is.
+    var haveX = core.axisState(fields.x_axis) !== "missing";
+    var haveY = core.axisState(fields.y_axis) !== "missing";
     var axes = el("div", "dss-vizpreview-axes");
-    axes.appendChild(el("span", null, "x: " + (fields.x_axis || "—")));
-    axes.appendChild(el("span", null, "y: " + (fields.y_axis || "—")));
+    if (!haveX && !haveY) {
+      axes.classList.add("is-missing");
+      axes.appendChild(el("span", null, "Axes not detected — set them in Insights."));
+    } else {
+      if (haveX) axes.appendChild(el("span", null, "x: " + fields.x_axis));
+      if (haveY) axes.appendChild(el("span", null, "y: " + fields.y_axis));
+    }
     card.appendChild(axes);
     return card;
+  };
+
+  App.prototype.repaintVizPreview = function () {
+    var current = this._vizPreview;
+    if (!current || !current.parentNode) return;
+    var fresh = this.vizPreview(this.state.vizFields || {});
+    current.parentNode.replaceChild(fresh, current);
+    this._vizPreview = fresh;
   };
 
   App.prototype.createInsightsQuery = function () {

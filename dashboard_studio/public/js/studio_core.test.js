@@ -589,4 +589,20 @@ assert.strictEqual(core.suggestedChartType(null), "table");
 assert.deepStrictEqual(core.INSIGHTS_CHART_TYPES.map(function (t) { return t.value; }),
   ["bar", "line", "donut", "number", "table"]);
 
+// axisState: an empty axis is NOT a guess.
+assert.strictEqual(core.axisState("agent", false), "guessed");
+assert.strictEqual(core.axisState("agent", true), "confirmed");
+assert.strictEqual(core.axisState("", false), "missing");
+assert.strictEqual(core.axisState("   ", true), "missing",
+  "whitespace counted as a detected axis");
+assert.strictEqual(core.axisState(null, false), "missing");
+assert.strictEqual(core.axisState(undefined, true), "missing");
+// The join case that produced the blank boxes: both axes missing, title fine.
+var joined = core.insightsPrefill({ supported: false,
+  doctypes: ["Student Admission UCC", "Student Applicant"], group_by: [], aggregations: [] });
+assert.strictEqual(joined.title, "Student Admission UCC + Student Applicant query");
+assert.strictEqual(core.axisState(joined.x_axis, false), "missing");
+assert.strictEqual(core.axisState(joined.y_axis, false), "missing");
+assert.strictEqual(joined.chart_type, "table", "the chart-type fallback changed");
+
 console.log("studio_core.test.js — all assertions passed");

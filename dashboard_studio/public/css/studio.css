@@ -463,6 +463,11 @@ textarea.dss-sqlbox { min-height: 190px; font-family: ui-monospace, SFMono-Regul
   border: 1px solid #f0d19a; }
 .dss-guesstag.is-confirmed { color: var(--dss-green); background: var(--dss-green-100);
   border: 1px solid #c9e3d7; }
+/* Nothing was detected — quieter than a guess, because it is not one. */
+.dss-guesstag.is-missing { color: var(--dss-muted); background: var(--dss-surface-3);
+  border: 1px solid var(--dss-line); }
+.dss-hint-missing { color: var(--dss-orange); }
+.dss-vizpreview-axes.is-missing { color: var(--dss-muted); font-weight: 600; }
 /* Marks the ONE field that actually travels with the record. */
 .dss-senttag { margin-left: auto; font-size: 9.5px; font-weight: 800; letter-spacing: .05em;
   text-transform: uppercase; color: var(--dss-blue); }
