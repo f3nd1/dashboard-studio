@@ -60,6 +60,38 @@ def run_ds_metric(metric_name: str):
     return execute_query_plan(plan, permission_check=lambda: None)
 
 
+@frappe.whitelist()
+def preview_ds_metric(metric_name: str):
+    """Run a metric that has NOT been approved yet, so approval is a real decision.
+
+    Deliberately separate from run_ds_metric, and deliberately NOT reflected in
+    list_ds_metrics: the Approved-only filter stays everywhere a chart is built
+    for real. This path exists so someone can look at the numbers before signing
+    off, and nowhere else.
+
+    Gated tighter than run_ds_metric. Running an Approved metric is a read any DS
+    user may do, because approval is the control that made it safe; an
+    unapproved one has passed nobody, and the engine's fetch uses frappe.get_all
+    (which ignores DocType permissions), so a Viewer could otherwise count rows
+    in a DocType they cannot read. Authors and approvers only.
+    """
+    frappe.only_for((
+        "Dashboard Studio Editor",
+        "Dashboard Studio QA Approver",
+        "System Manager",
+    ))
+    metric = frappe.get_doc("DS Metric", metric_name)
+    plan = build_plan_from_ds_metric(metric.as_dict(), allow_draft=True)
+    rows = execute_query_plan(plan, permission_check=lambda: None)
+    return {
+        "metric": metric_name,
+        "status": metric.status,
+        "source_doctype": metric.source_doctype,
+        "group_by_field": metric.group_by_field,
+        "rows": rows,
+    }
+
+
 def _load_json(value, default):
     if not value:
         return default

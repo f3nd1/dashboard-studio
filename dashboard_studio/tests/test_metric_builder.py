@@ -145,5 +145,54 @@ class TestMetricFromAnalysis(unittest.TestCase):
         self.assertEqual(plan["measure"], {"field": "name", "aggregation": "count"})
 
 
+class TestDraftPreview(unittest.TestCase):
+    """allow_draft relaxes the approval check and NOTHING else."""
+
+    def _metric(self, **over):
+        from dashboard_studio.integrations.metabase.metric_builder import metric_from_analysis
+
+        fields, _ = metric_from_analysis(analyze_sql(AGENT_SQL))
+        return dict(fields, metric_filters=[], **over)
+
+    def test_a_draft_metric_is_refused_without_the_flag(self):
+        from dashboard_studio.analytics.query_engine import build_plan_from_ds_metric
+
+        with self.assertRaises(ValueError) as caught:
+            build_plan_from_ds_metric(self._metric())
+        self.assertIn("Draft", str(caught.exception))
+
+    def test_and_runs_with_it(self):
+        from dashboard_studio.analytics.query_engine import build_plan_from_ds_metric
+
+        plan = build_plan_from_ds_metric(self._metric(), allow_draft=True)
+        self.assertEqual(plan["source"]["doctype"], "Student Applicant")
+        self.assertEqual(plan["group_by"], ["agent"])
+
+    def test_allow_draft_does_not_relax_the_field_allowlist(self):
+        """The one that matters: preview must not become a way around
+        block-by-default, which is the actual security control."""
+        from dashboard_studio.analytics.query_engine import build_plan_from_ds_metric
+
+        with self.assertRaises(ValueError) as caught:
+            build_plan_from_ds_metric(self._metric(allowed_fields=""), allow_draft=True)
+        self.assertIn("allowed_fields", str(caught.exception))
+
+    def test_allow_draft_does_not_relax_count_only(self):
+        from dashboard_studio.analytics.query_engine import build_plan_from_ds_metric
+
+        with self.assertRaises(NotImplementedError):
+            build_plan_from_ds_metric(
+                self._metric(calculation_type="Sum"), allow_draft=True)
+
+    def test_allow_draft_does_not_relax_field_name_syntax(self):
+        from dashboard_studio.analytics.query_engine import build_plan_from_ds_metric
+
+        with self.assertRaises(ValueError):
+            build_plan_from_ds_metric(
+                self._metric(group_by_field="agent; DROP TABLE x",
+                             allowed_fields="agent; DROP TABLE x\nname"),
+                allow_draft=True)
+
+
 if __name__ == "__main__":
     unittest.main()

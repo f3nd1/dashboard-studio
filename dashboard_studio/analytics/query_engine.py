@@ -32,7 +32,9 @@ _DS_STATIC = "Static"
 _DS_APPROVED = "Approved"
 
 
-def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
+def build_plan_from_ds_metric(
+    metric: dict[str, Any], *, allow_draft: bool = False
+) -> dict[str, Any]:
     """Adapter: turn a DS Metric record into the config the generic engine already runs.
 
     Connects the DS Metric schema to the proven slice — a single source DocType,
@@ -43,6 +45,13 @@ def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
     Pure and Frappe-free so it stays unit-testable without a live Bench. Pass a
     plain dict (``frappe.get_doc(...).as_dict()`` shape); child rows in
     ``metric_filters`` are dicts too.
+
+    ``allow_draft`` relaxes ONLY the approval check, for the preview path — an
+    approver has to see what a metric produces before signing it off, or approval
+    is a formality. Every other guard still applies: the field allowlist,
+    block-by-default, count-only, and the field-name syntax rule. A named
+    argument rather than a caller faking ``status``, so the bypass is greppable
+    and a future Approved-only rule is not silently relaxed with it.
 
     FIELD ALLOWLIST (block-by-default): the metric's ``allowed_fields`` (newline-
     or comma-separated) constrains which fields it may reference. If it is empty,
@@ -55,7 +64,7 @@ def build_plan_from_ds_metric(metric: dict[str, Any]) -> dict[str, Any]:
     """
 
     status = (metric.get("status") or "").strip()
-    if status != _DS_APPROVED:
+    if status != _DS_APPROVED and not allow_draft:
         raise ValueError(
             f"DS Metric '{metric.get('metric_name') or '<unnamed>'}' is {status or 'unset'}; "
             f"only {_DS_APPROVED} metrics can be executed."
