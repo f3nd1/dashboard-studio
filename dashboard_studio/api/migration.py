@@ -11,13 +11,16 @@ def supported_features():
         "implemented": [
             "paste_sql",
             "source_mapping",
+            "result_comparison",   # the Validation Centre — api/validation.py
+            "metric_generation",   # confirmed mapping -> Draft DS Metric
         ],
         "planned": [
             "metabase_dashboard_inventory",
             "saved_question_resolution",
-            "result_comparison",
+            "chart_generation",
+            "publish_to_sophia",
         ],
-        "status": "scaffold",
+        "status": "partial",
     }
 
 
