@@ -378,7 +378,69 @@ def save_migration_mapping_set(project: str, mappings=None, canvas_nodes=None, s
         doc.status = "Mapping"
     doc.save()
 
-    return {"saved_mappings": saved, "recorded_queries": recorded, "status": doc.status}
+    metrics = _metrics_from_confirmed_mappings(doc, mappings)
+
+    return {
+        "saved_mappings": saved,
+        "recorded_queries": recorded,
+        "status": doc.status,
+        "metrics": metrics,
+    }
+
+
+def _metrics_from_confirmed_mappings(doc, mappings):
+    """Create the DS Metric each confirmed mapping's query already describes.
+
+    Confirming a mapping is the moment someone says "this source table really is
+    that DocType". Until then the analysis describes nothing anyone has agreed
+    to, so nothing is written.
+
+    Always Draft — see metric_builder for why a parser cannot approve a metric.
+    The metric name is derived, and DS Metric is ``autoname: field:metric_name``,
+    so re-analysing the same query resolves to the record that already exists
+    instead of creating a second one.
+
+    Returns one entry per source query, each either created/existing or skipped
+    with the reason, because a silent skip here is a metric someone thinks they
+    have.
+    """
+    from dashboard_studio.integrations.metabase.metric_builder import metric_from_analysis
+    from dashboard_studio.integrations.metabase.parser import analyze_sql
+
+    confirmed = {
+        str(row.get("target_doctype") or "").strip()
+        for row in mappings
+        if row.get("mapping_status") == "Confirmed"
+    }
+    if not confirmed:
+        return []
+
+    out = []
+    for row in doc.get("source_queries") or []:
+        sql = (row.get("source_sql") or "").strip()
+        if not sql:
+            continue
+        # Re-parsed here rather than trusting a structure posted by the client:
+        # this decides what a metric measures, so it reads the SQL itself.
+        analysis = analyze_sql(sql)
+        fields, reason = metric_from_analysis(analysis)
+        if not fields:
+            out.append({"sql": sql, "skipped": reason})
+            continue
+        if fields["source_doctype"] not in confirmed:
+            out.append({
+                "sql": sql,
+                "skipped": f"{fields['source_doctype']} has no confirmed mapping yet",
+            })
+            continue
+
+        name = fields["metric_name"]
+        if frappe.db.exists("DS Metric", name):
+            out.append({"sql": sql, "metric": name, "created": False})
+            continue
+        frappe.get_doc(dict(fields, doctype="DS Metric")).insert()
+        out.append({"sql": sql, "metric": name, "created": True})
+    return out
 
 
 def _append_source_queries(doc, rows):

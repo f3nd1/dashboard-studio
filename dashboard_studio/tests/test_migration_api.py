@@ -53,10 +53,17 @@ class _FakeDoc:
         return dict(self._data)
 
     def _persist(self):
+        from dashboard_studio.tests.test_section_api import _autoname_field
+
         if self._store is None:
             return
         table = self._store.setdefault(self._doctype, {})
         name = self._data.get("name")
+        if not name:
+            # autoname: field:x means the record's primary key IS that field,
+            # which is what makes "reuse the existing metric" work.
+            keyed = _autoname_field(self._doctype)
+            name = self._data.get(keyed) if keyed else None
         if not name:
             name = f"{self._doctype}-{len(table) + 1}"
             self._data["name"] = name
@@ -67,6 +74,17 @@ class _FakeDoc:
         return self
 
     def insert(self):
+        # Frappe raises MandatoryError on insert when a reqd field is empty. The
+        # generated DS Metric goes through this path, so the fake has to hold it
+        # to the same rule the site will — see docs/TEST_FAKE_GAPS.md.
+        from dashboard_studio.tests.test_section_api import _doctype_fields
+
+        for field in _doctype_fields(self._doctype):
+            if not field.get("reqd"):
+                continue
+            value = self._data.get(field["fieldname"])
+            if value is None or value == "":
+                raise _ValidationError(f"[{self._doctype}]: {field['fieldname']} is required")
         self._persist()
         return self
 
@@ -126,7 +144,10 @@ def _make_fake_frappe(store):
     frappe.get_doc = get_doc
     frappe.get_all = get_all
     frappe.throw = throw
-    frappe.db = types.SimpleNamespace(get_value=_get_value)
+    def _exists(doctype, name):
+        return name if name in store.get(doctype, {}) else None
+
+    frappe.db = types.SimpleNamespace(get_value=_get_value, exists=_exists)
     return frappe
 
 
@@ -337,6 +358,97 @@ class TestMigrationMappingApi(unittest.TestCase):
         )
         self.assertEqual(result["saved_mappings"], 1)
         self.assertEqual(len(self.store["DS Migration Project"]["P1"]["canvas_nodes"]), 1)
+
+
+class TestMetricGeneration(TestMigrationMappingApi):
+    """Confirming a mapping creates the DS Metric its query already describes."""
+
+    AGENT_SQL = (
+        "SELECT `tabStudent Applicant`.`agent`, COUNT(*) "
+        "FROM `tabStudent Applicant` GROUP BY `tabStudent Applicant`.`agent`"
+    )
+
+    def _save(self, status="Confirmed", sql=None):
+        return self.studio.save_migration_mapping_set(
+            "P1",
+            mappings=[{"external_table": "tabStudent Applicant",
+                       "target_doctype": "Student Applicant",
+                       "mapping_status": status}],
+            source_queries=[{"source_sql": sql or self.AGENT_SQL, "supported": True}],
+        )
+
+    def _metrics(self):
+        return self.store.get("DS Metric", {})
+
+    def test_a_confirmed_mapping_creates_the_metric(self):
+        result = self._save()
+        self.assertEqual(result["metrics"],
+                         [{"sql": self.AGENT_SQL,
+                           "metric": "Count of Student Applicant by agent",
+                           "created": True}])
+        metric = self._metrics()["Count of Student Applicant by agent"]
+        self.assertEqual(metric["source_doctype"], "Student Applicant")
+        self.assertEqual(metric["group_by_field"], "agent")
+        self.assertEqual(metric["calculation_type"], "Count")
+        self.assertEqual(metric["allowed_fields"], "agent\nname")
+
+    def test_it_is_created_as_draft(self):
+        self._save()
+        self.assertEqual(self._metrics()["Count of Student Applicant by agent"]["status"],
+                         "Draft")
+
+    def test_a_suggested_mapping_creates_nothing(self):
+        """Confirming is the human agreeing the table IS that DocType."""
+        result = self._save(status="Suggested")
+        self.assertEqual(result["metrics"], [])
+        self.assertEqual(self._metrics(), {})
+
+    def test_analysing_the_same_query_twice_reuses_the_metric(self):
+        self._save()
+        result = self._save()
+        self.assertEqual(len(self._metrics()), 1, "a second metric was created")
+        self.assertEqual(result["metrics"][0]["created"], False)
+        self.assertEqual(result["metrics"][0]["metric"], "Count of Student Applicant by agent")
+
+    def test_a_filtered_query_is_skipped_with_its_reason(self):
+        """Silently dropping the WHERE would count more rows than the query did."""
+        result = self._save(sql=(
+            "SELECT `tabStudent Applicant`.`agent`, COUNT(*) FROM `tabStudent Applicant` "
+            "WHERE `tabStudent Applicant`.`application_status` = 'Admitted' "
+            "GROUP BY `tabStudent Applicant`.`agent`"
+        ))
+        self.assertEqual(self._metrics(), {})
+        self.assertIn("application_status", result["metrics"][0]["skipped"])
+
+    def test_a_query_for_an_unconfirmed_doctype_is_skipped_by_name(self):
+        result = self.studio.save_migration_mapping_set(
+            "P1",
+            mappings=[{"external_table": "tabAgent", "target_doctype": "Agent",
+                       "mapping_status": "Confirmed"}],
+            source_queries=[{"source_sql": self.AGENT_SQL, "supported": True}],
+        )
+        self.assertEqual(self._metrics(), {})
+        self.assertIn("Student Applicant has no confirmed mapping",
+                      result["metrics"][0]["skipped"])
+
+    def test_evidence_from_an_earlier_save_is_still_considered(self):
+        """Queries accumulate; confirming later must pick up what was analysed."""
+        self._save(status="Suggested")
+        self.assertEqual(self._metrics(), {})
+        result = self.studio.save_migration_mapping_set(
+            "P1",
+            mappings=[{"external_table": "tabStudent Applicant",
+                       "target_doctype": "Student Applicant",
+                       "mapping_status": "Confirmed"}],
+            source_queries=[],          # nothing new pasted, just a confirmation
+        )
+        self.assertEqual(result["metrics"][0]["created"], True)
+        self.assertIn("Count of Student Applicant by agent", self._metrics())
+
+    def test_viewer_still_cannot_reach_it(self):
+        self._as("Dashboard Studio Viewer")
+        with self.assertRaises(_PermissionError):
+            self._save()
 
 
 if __name__ == "__main__":

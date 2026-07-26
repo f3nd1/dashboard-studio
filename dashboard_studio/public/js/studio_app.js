@@ -2350,6 +2350,24 @@
     var save = el("button", "dss-btn dss-btn-primary", "Save mappings");
     save.addEventListener("click", function () { self.saveMappings(); });
     this.panel.appendChild(save);
+
+    // What the save generated. Every analyzed query is reported — created,
+    // reused, or skipped with the reason — because a silent skip is a metric
+    // someone thinks they have.
+    var generated = this.state.generatedMetrics;
+    if (generated && generated.length) {
+      this.panel.appendChild(el("div", "dss-kicker", "Metrics from these queries"));
+      generated.forEach(function (row) {
+        var item = el("div", "dss-genmetric" + (row.metric ? "" : " is-skipped"));
+        item.appendChild(el("div", "dss-genmetric-name",
+          row.metric || "No metric generated"));
+        item.appendChild(el("div", "dss-genmetric-note", row.metric
+          ? (row.created ? "Created as Draft — approve it before a chart can use it."
+                         : "Already existed; reused rather than duplicated.")
+          : row.skipped));
+        self.panel.appendChild(item);
+      });
+    }
   };
 
   // Paste Metabase SQL — the way a migration starts. The parser reports what it
@@ -2464,9 +2482,13 @@
       var result = r.message || {};
       // Recorded evidence is now on the project, so it need not be resent.
       self.state.analyzedQueries = [];
+      self.state.generatedMetrics = result.metrics || [];
       toast("Saved " + (result.saved_mappings || 0) + " mapping(s)" +
         (result.recorded_queries ? ", " + result.recorded_queries + " query(ies) kept as evidence" : "") +
         " — project is now " + (result.status || "updated"));
+      self.renderMappingPanel();
+    }).catch(function (err) {
+      toast(refusalMessage(err, "Could not save those mappings."));
     });
   };
 

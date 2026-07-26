@@ -42,6 +42,28 @@ def _doctype_fields(doctype):
         return _json.load(handle)["fields"]
 
 
+def _autoname_field(doctype):
+    """The field an `autoname: field:x` DocType takes its primary key from.
+
+    Four DS DocTypes name themselves from a field. A fake that invents
+    "DS Metric-1" instead hides every de-duplication rule that relies on the
+    natural key — see docs/TEST_FAKE_GAPS.md.
+    """
+    import json as _json
+    import os
+
+    folder = doctype.lower().replace(" ", "_")
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "dashboard_studio", "doctype", folder, folder + ".json",
+    )
+    if not os.path.exists(path):
+        return None
+    with open(path) as handle:
+        autoname = _json.load(handle).get("autoname") or ""
+    return autoname.split("field:", 1)[1] if autoname.startswith("field:") else None
+
+
 class _FakeDoc:
     def __init__(self, data, store=None, doctype=None):
         object.__setattr__(self, "_data", dict(data))
