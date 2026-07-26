@@ -896,10 +896,23 @@
     drawable.forEach(function (type) {
       var item = el("button", "dss-palette-item");
       item.type = "button";
-      item.title = "Add a " + type + " to this dashboard";
+      // The palette is where charts are CREATED, so this is the constraint that
+      // matters most: three of the eight drawable types have no plugin on the
+      // receiving platform, and creating one makes work that cannot be published.
+      var blocked = core.UNPUBLISHABLE_CHART_TYPES.indexOf(type) !== -1;
+      if (blocked) {
+        item.disabled = true;
+        item.className += " is-blocked";
+        item.title = type + " cannot be published: the receiving platform has no " +
+          "plugin for it and would draw it as a bar chart with no warning. " +
+          "See docs/CHART_TYPE_MAPPING.md.";
+      } else {
+        item.title = "Add a " + type + " to this dashboard";
+        item.addEventListener("click", function () { self.addChart(type); });
+      }
       item.appendChild(el("span", "dss-palette-glyph", PALETTE_GLYPHS[type] || "▦"));
       item.appendChild(el("span", "dss-palette-label", type));
-      item.addEventListener("click", function () { self.addChart(type); });
+      if (blocked) item.appendChild(el("span", "dss-palette-note", "not publishable"));
       list.appendChild(item);
     });
     wrap.appendChild(list);
@@ -1371,10 +1384,14 @@
     // choice is informed rather than discovered as a stub on the card.
     var renderable = (root.DSStudioCharts || {}).SUPPORTED_CHART_TYPES || [];
     var typeSelect = el("select", "dss-input");
-    core.CHART_TYPES.forEach(function (t) {
-      var o = el("option", null, renderable.indexOf(t) === -1 ? t + " — no chart yet" : t);
-      o.value = t;
-      if (t === chart.chart_type) o.selected = true;
+    core.chartTypeOptions(chart.chart_type, renderable).forEach(function (opt) {
+      var o = el("option", null, opt.label);
+      o.value = opt.value;
+      o.selected = opt.selected;
+      // Disabled, not omitted: a type that is missing from the list teaches
+      // nothing, and the reason is the useful part.
+      o.disabled = opt.disabled;
+      if (opt.reason) o.title = opt.reason;
       typeSelect.appendChild(o);
     });
     // Width as the mockup's percentage select. No new field — these are

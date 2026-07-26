@@ -502,4 +502,32 @@ assert.deepStrictEqual(core.clearedCanvas(cnodes, []).nodes, [], "nothing confir
 assert.deepStrictEqual(core.clearedCanvas(null, null),
   { nodes: [], mappings: [], keptConfirmed: 0 });
 
+// chartTypeOptions: the publish constraint, in the one place both pickers read.
+var opts = core.chartTypeOptions("Bar Chart", ["Bar Chart", "KPI Card", "Table"]);
+assert.strictEqual(opts.length, core.CHART_TYPES.length, "every type is still offered");
+var byValue = {};
+opts.forEach(function (o) { byValue[o.value] = o; });
+assert.strictEqual(byValue["KPI Card"].disabled, true, "KPI Card is selectable");
+assert.strictEqual(byValue["Line Chart"].disabled, true, "Line Chart is selectable");
+assert.strictEqual(byValue["Table"].disabled, true, "Table is selectable");
+assert.strictEqual(byValue["Bar Chart"].disabled, false, "a publishable type was blocked");
+assert.strictEqual(byValue["Donut Chart"].disabled, false, "a publishable type was blocked");
+assert.ok(/not publishable/.test(byValue["Table"].label), "the label does not say why");
+assert.ok(/CHART_TYPE_MAPPING/.test(byValue["Table"].reason), "the reason cites no source");
+assert.strictEqual(byValue["Bar Chart"].reason, null, "a publishable type carries a refusal");
+// A type Sophia cannot draw and this app cannot draw either says the publish
+// thing, not the drawing thing — publishing is the harder constraint.
+assert.ok(/not publishable/.test(byValue["Line Chart"].label));
+assert.ok(/no chart yet/.test(byValue["Gauge"].label), "undrawable type lost its note");
+
+// The CURRENT type is never disabled: an existing KPI Card must stay editable
+// and must not be silently retyped by a picker that refuses to show it.
+var onKpi = {};
+core.chartTypeOptions("KPI Card", []).forEach(function (o) { onKpi[o.value] = o; });
+assert.strictEqual(onKpi["KPI Card"].disabled, false, "an existing KPI Card became uneditable");
+assert.strictEqual(onKpi["KPI Card"].selected, true);
+assert.ok(/cannot be published/.test(onKpi["KPI Card"].label),
+  "an existing unpublishable chart does not say so");
+assert.strictEqual(onKpi["Table"].disabled, true, "the other blocked types unblocked too");
+
 console.log("studio_core.test.js — all assertions passed");

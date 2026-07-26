@@ -18,6 +18,46 @@
     "Network Diagram", "Reconciliation Diagram", "Maturity Ladder", "Risk Matrix",
   ];
 
+  // Types the receiving platform has NO plugin for. Copy of
+  // dashboard_studio/sophia.py; a Python test asserts the two stay equal, the
+  // same drift guard CHART_TYPES has against the DS Chart Select.
+  //
+  // Why this is a constraint and not a note: Sophia's renderChart does
+  //   CHART_PLUGINS.get(type) || CHART_PLUGINS.get("bar")
+  // so an unknown type is drawn as a BAR CHART with no error anywhere. Offering
+  // one of these is offering a chart that silently becomes something else on
+  // publication. Reasons and counts: docs/CHART_TYPE_MAPPING.md.
+  var UNPUBLISHABLE_CHART_TYPES = ["KPI Card", "Line Chart", "Table"];
+
+  // One option list, used by every place a chart type can be chosen, so the rule
+  // cannot be enforced in the picker and forgotten in the palette.
+  //
+  // `current` is never disabled: an existing KPI Card must stay editable and
+  // must not be silently retyped by a picker that refuses to show what it is.
+  // The publish gate is what refuses it, and it names the chart.
+  function chartTypeOptions(current, drawable) {
+    var canDraw = drawable || null;
+    return CHART_TYPES.map(function (type) {
+      var blocked = UNPUBLISHABLE_CHART_TYPES.indexOf(type) !== -1 && type !== current;
+      var label = type;
+      if (UNPUBLISHABLE_CHART_TYPES.indexOf(type) !== -1) {
+        label += type === current ? " — cannot be published" : " — not publishable";
+      } else if (canDraw && canDraw.indexOf(type) === -1) {
+        label += " — no chart yet";
+      }
+      return {
+        value: type,
+        label: label,
+        disabled: blocked,
+        selected: type === current,
+        reason: UNPUBLISHABLE_CHART_TYPES.indexOf(type) !== -1
+          ? "The receiving platform has no plugin for this type — it would be " +
+            "drawn as a bar chart with no warning. See docs/CHART_TYPE_MAPPING.md."
+          : null,
+      };
+    });
+  }
+
   // Mirrors DS Chart/Metric Filter `operator` options that the query engine
   // actually accepts (like/between are deliberately excluded — the engine
   // rejects them, so the editor should not offer them as valid).
@@ -668,6 +708,8 @@
 
   var api = {
     CHART_TYPES: CHART_TYPES,
+    UNPUBLISHABLE_CHART_TYPES: UNPUBLISHABLE_CHART_TYPES,
+    chartTypeOptions: chartTypeOptions,
     OPERATORS: OPERATORS,
     GRID_COLUMNS: GRID_COLUMNS,
     MAPPING_STATUSES: MAPPING_STATUSES,

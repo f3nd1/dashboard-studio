@@ -157,5 +157,37 @@ class TestSophiaPluginTable(unittest.TestCase):
             self.assertTrue(sophia.refusal_for(name))
 
 
+
+class TestPluginTableDoesNotDrift(unittest.TestCase):
+    """The plugin rule now exists in Python AND in JavaScript. Neither is
+    generated from the other, so this is the guard that they stay equal — the
+    same guard CHART_TYPES already has against the DS Chart Select."""
+
+    def _core_js(self):
+        import pathlib
+
+        path = pathlib.Path(__file__).resolve().parents[1] / "public/js/studio_core.js"
+        return path.read_text()
+
+    def _js_array(self, name):
+        import re
+
+        source = self._core_js()
+        match = re.search(name + r"\s*=\s*\[(.*?)\]", source, re.S)
+        self.assertIsNotNone(match, f"{name} not found in studio_core.js")
+        return [v.strip().strip('"') for v in match.group(1).split(",") if v.strip()]
+
+    def test_js_blocklist_matches_sophia_py(self):
+        from dashboard_studio import sophia
+
+        self.assertEqual(
+            self._js_array("UNPUBLISHABLE_CHART_TYPES"), sophia.unsupported_types()
+        )
+
+    def test_js_chart_types_match_the_plugin_table(self):
+        from dashboard_studio import sophia
+
+        self.assertEqual(self._js_array("CHART_TYPES"), list(sophia.CHART_PLUGINS))
+
 if __name__ == "__main__":
     unittest.main()

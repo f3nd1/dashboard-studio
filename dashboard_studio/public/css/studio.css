@@ -175,6 +175,20 @@
   font-weight: 600; color: var(--dss-ink); text-align: left; }
 .dss-palette-item:hover { background: var(--dss-surface-2); border-color: var(--dss-line-dark); }
 .dss-palette-item:focus-visible { outline: 2px solid var(--dss-blue); outline-offset: 1px; }
+/* A type the receiving platform cannot draw. Shown, not hidden — the label and
+   the reason are the point; a missing row teaches nothing. */
+.dss-palette-item.is-blocked { cursor: not-allowed; background: var(--dss-surface-2);
+  border-style: dashed; color: var(--dss-muted); }
+.dss-palette-item.is-blocked:hover { background: var(--dss-surface-2);
+  border-color: var(--dss-line); }
+.dss-palette-item.is-blocked .dss-palette-glyph { background: var(--dss-surface-3);
+  color: var(--dss-muted); }
+/* Its own line, not beside the label: side by side it took ~75px of a 162px row
+   and clipped "Line Chart" to "Line …". The label is the thing being read. */
+.dss-palette-item.is-blocked { flex-wrap: wrap; }
+.dss-palette-note { flex-basis: 100%; margin-left: 31px; font-size: 9px; font-weight: 800;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--dss-orange); }
+
 .dss-palette-glyph { flex: none; display: flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; border-radius: 6px; background: var(--dss-blue-100);
   color: var(--dss-blue); font-size: 12px; }
