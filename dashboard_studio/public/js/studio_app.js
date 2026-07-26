@@ -2597,6 +2597,15 @@
         note.textContent = "SQL analysis needs the server (not available in mock mode).";
         return;
       }
+      // Start fresh. Same rule as the Clear canvas button — confirmed mappings
+      // survive, untouched Suggested/Unmapped leftovers do not — but silent, and
+      // WITHOUT dropping the analyzed-query evidence, which belongs to the save
+      // rather than to the canvas.
+      var swept = core.clearedCanvas(self.state.mapNodes, self.state.mappings);
+      self.state.mapNodes = swept.nodes;
+      self.state.mappings = swept.mappings;
+      self.state.pickedSource = null;
+
       note.textContent = "Analyzing…";
       root.frappe.call({
         method: "dashboard_studio.api.migration.analyze_migration_sql",
