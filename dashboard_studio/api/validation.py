@@ -117,7 +117,7 @@ def list_comparisons(chart: str = None, migration_project: str = None):
         filters["chart"] = chart
     if migration_project:
         filters["migration_project"] = migration_project
-    return frappe.get_all(
+    rows = frappe.get_all(
         "DS Validation Comparison",
         filters=filters or None,
         fields=[
@@ -128,6 +128,23 @@ def list_comparisons(chart: str = None, migration_project: str = None):
         order_by="comparison_date desc, modified desc",
         limit=100,
     )
+    # DS Chart has no autoname, so `chart` is a hash. Displaying it put
+    # "thu5c209k3" in the Validation table where every other view shows the
+    # chart's title. One batched read, not one per row — the same shape
+    # publish_readiness uses for the same reason.
+    linked = sorted({r["chart"] for r in rows if r.get("chart")})
+    if linked:
+        titles = {
+            c["name"]: c["chart_title"]
+            for c in frappe.get_all(
+                "DS Chart", filters={"name": ["in", linked]}, fields=["name", "chart_title"]
+            )
+        }
+        for row in rows:
+            # Falls back to the hash rather than blank: a deleted chart still has
+            # to be identifiable in its own comparison row.
+            row["chart_title"] = titles.get(row.get("chart")) or row.get("chart")
+    return rows
 
 
 @frappe.whitelist()

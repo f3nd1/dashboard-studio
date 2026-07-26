@@ -81,9 +81,17 @@ def _make_fake_frappe(store):
         return _FakeDoc(data, store, doctype)
 
     def get_all(doctype, filters=None, fields=None, order_by=None, limit=None, **kwargs):
+        if doctype == "DS Chart":
+            frappe._chart_reads = getattr(frappe, "_chart_reads", 0) + 1
         rows = list(store.get(doctype, {}).values())
         for key, value in (filters or {}).items():
-            rows = [r for r in rows if r.get(key) == value]
+            # TEST-FAKE GAP, fixed: this only understood equality, so a batched
+            # ["in", [...]] read matched NOTHING and the caller silently saw an
+            # empty result. Same gap that hid the readiness batch read.
+            if isinstance(value, (list, tuple)) and len(value) == 2 and value[0] == "in":
+                rows = [r for r in rows if r.get(key) in value[1]]
+            else:
+                rows = [r for r in rows if r.get(key) == value]
         return [dict(r) for r in rows]
 
     frappe.only_for = only_for
@@ -133,6 +141,32 @@ class TestValidationApi(unittest.TestCase):
 
     def _comparisons(self):
         return list(self.store["DS Validation Comparison"].values())
+
+    # ---- the chart column ----
+    def test_list_comparisons_carries_the_chart_title(self):
+        """DS Chart has no autoname, so `chart` is a hash — unreadable on its own."""
+        self.validation.run_validation("C1", self.source, self.source)
+        row = self.validation.list_comparisons()[0]
+        self.assertEqual(row["chart_title"], "Applicants by Year")
+        # The raw link is still carried: it is what accept_comparison and the
+        # readiness gate key on.
+        self.assertEqual(row["chart"], "C1")
+
+    def test_a_deleted_chart_still_identifies_its_comparison(self):
+        self.validation.run_validation("C1", self.source, self.source)
+        del self.store["DS Chart"]["C1"]
+        row = self.validation.list_comparisons()[0]
+        self.assertEqual(row["chart_title"], "C1", "a blank cell would identify nothing")
+
+    def test_one_read_regardless_of_row_count(self):
+        """Per-row title lookups would be N+1 on a page that loads on every visit."""
+        self.validation.run_validation("C1", self.source, self.source)
+        self.validation.run_validation("C1", self.source, self.source)
+        self.validation.run_validation("C-nometric", self.source, self.source)
+        self.frappe._chart_reads = 0
+        rows = self.validation.list_comparisons()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(self.frappe._chart_reads, 1)
 
     # ---- role gating ----
     def test_viewer_can_read_but_not_run_or_accept(self):

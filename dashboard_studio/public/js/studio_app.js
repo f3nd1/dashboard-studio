@@ -1899,7 +1899,8 @@
       var tr = el("tr", "is-" + String(row.status || "").toLowerCase());
       var chartCell = el("td");
       var expand = el("button", "dss-expand",
-        (self.state.expandedComparison === row.name ? "▾ " : "▸ ") + (row.chart || "—"));
+        (self.state.expandedComparison === row.name ? "▾ " : "▸ ") +
+        (row.chart_title || row.chart || "—"));
       expand.title = "Show the per-group breakdown";
       expand.addEventListener("click", function () { self.toggleComparison(row); });
       chartCell.appendChild(expand);
