@@ -34,15 +34,25 @@ class _ValidationError(Exception):
 
 
 class _FakeDoc:
-    def __init__(self, data, store):
+    def __init__(self, data, store, doctype=None):
         object.__setattr__(self, "_data", dict(data))
         object.__setattr__(self, "_store", store)
+        object.__setattr__(self, "_doctype", doctype or data.get("doctype"))
 
     def __getattr__(self, key):
         try:
             return self._data[key]
         except KeyError:
             raise AttributeError(key)
+
+    # Assignment has to land in _data, not on the Python object: without this a
+    # `doc.chart_type = "Bar"` would set an attribute the store never sees and
+    # every write assertion would pass while writing nothing.
+    def __setattr__(self, key, value):
+        self._data[key] = value
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
 
     def insert(self):
         table = self._store.setdefault(self._data["doctype"], {})
@@ -51,6 +61,10 @@ class _FakeDoc:
         # the reuse key has to be the SQL.
         self._data["name"] = f"QRY-{1300 + len(table) + 1}"
         table[self._data["name"]] = dict(self._data)
+        return self
+
+    def save(self):
+        self._store.setdefault(self._doctype, {})[self._data["name"]] = dict(self._data)
         return self
 
 
@@ -90,7 +104,23 @@ def _make_fake_frappe(store, roles, doctypes=("Insights Query",), sources=("Site
     frappe.only_for = only_for
     frappe.whitelist = whitelist
     frappe.get_all = get_all
-    frappe.get_doc = lambda payload: _FakeDoc(payload, store)
+    class _DoesNotExistError(Exception):
+        pass
+
+    def get_doc(doctype, name=None):
+        # Two signatures, like the real thing: a payload dict to insert, or
+        # (doctype, name) to fetch. The fake modelled only the first, so the
+        # first call that read a record back blew up rather than being wrong.
+        if isinstance(doctype, dict):
+            return _FakeDoc(doctype, store)
+        data = store.get(doctype, {}).get(name)
+        if data is None:
+            raise _DoesNotExistError(f"{doctype} {name} not found")
+        return _FakeDoc(data, store, doctype)
+
+    frappe.DoesNotExistError = _DoesNotExistError
+    frappe.get_doc = get_doc
+    frappe.as_json = lambda value: __import__("json").dumps(value)
     frappe.get_roles = lambda: list(frappe._roles)
     frappe.parse_json = __import__("json").loads
     frappe.throw = lambda msg: (_ for _ in ()).throw(_ValidationError(msg))
@@ -263,3 +293,192 @@ class TestTitle(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# The column row of a real executed result: metadata first, then data rows.
+COLUMNS = [
+    [{"label": "student_category", "type": "String", "options": {}},
+     {"label": "count", "type": "Integer", "options": {}}],
+    ["Local", 42], ["International", 17],
+]
+# What a real chart looks like before Studio touches it — colours and label
+# rotation a person already set, which must survive.
+STYLED = {"rotateLabels": "45", "colors": ["#123456"], "title": "Hand-written title",
+          "query": "QRY-1321"}
+
+
+def _chart_store(results=COLUMNS, options=None, chart="CHART-1"):
+    return {
+        "Insights Query": {"QRY-1": {"name": "QRY-1", "chart": chart, "title": "Q"}},
+        "Insights Chart": {"CHART-1": {"name": "CHART-1", "query": "QRY-1",
+                                       "chart_type": "", "options": options or {}}},
+        "Insights Query Result": ({"RES-1": {"name": "RES-1", "query": "QRY-1",
+                                             "results": results}} if results is not None else {}),
+    }
+
+
+class _ChartBase(_Base):
+    results = COLUMNS
+    options = None
+    chart = "CHART-1"
+
+    def setUp(self):
+        super().setUp()
+        self.store.update(_chart_store(self.results, self.options, self.chart))
+
+    def chart_doc(self):
+        return self.store["Insights Chart"]["CHART-1"]
+
+    def apply(self, **kwargs):
+        return self.api.apply_insights_chart("QRY-1", **kwargs)
+
+    def refused(self, **kwargs):
+        with self.assertRaises(_ValidationError) as caught:
+            self.apply(**kwargs)
+        return str(caught.exception)
+
+
+class TestApplyChart(_ChartBase):
+    def test_sets_the_axes_from_the_real_executed_columns(self):
+        result = self.apply()
+        self.assertEqual((result["x_axis"], result["y_axis"]), ("student_category", "count"))
+        options = __import__("json").loads(self.chart_doc()["options"])
+        self.assertEqual(options["xAxis"], [{"column": "student_category"}],
+                         "xAxis must be an ARRAY — confirmed from a real record")
+        self.assertEqual(options["yAxis"],
+                         [{"column": "count", "series_options": {"type": "bar"}}])
+        self.assertEqual(self.chart_doc()["chart_type"], "Bar")
+
+    def test_it_updates_the_existing_chart_and_never_inserts(self):
+        self.apply()
+        self.assertEqual(list(self.store["Insights Chart"]), ["CHART-1"],
+                         "a second chart was created — Insights already made one")
+
+    def test_a_persons_styling_survives(self):
+        self.options = dict(STYLED)
+        self.setUp()
+        self.apply()
+        options = __import__("json").loads(self.chart_doc()["options"])
+        self.assertEqual(options["rotateLabels"], "45")
+        self.assertEqual(options["colors"], ["#123456"])
+        self.assertEqual(options["title"], "Hand-written title")
+
+    def test_an_explicit_pair_is_honoured(self):
+        result = self.apply(x_axis="count", y_axis="count")
+        self.assertEqual((result["x_axis"], result["y_axis"]), ("count", "count"))
+
+    def test_line_gets_its_own_series_type(self):
+        self.apply(chart_type="line")
+        options = __import__("json").loads(self.chart_doc()["options"])
+        self.assertEqual(options["yAxis"][0]["series_options"], {"type": "line"})
+        self.assertEqual(self.chart_doc()["chart_type"], "Line")
+
+    def test_unconfirmed_series_types_are_left_for_insights_to_default(self):
+        """Row and Scatter series names are not confirmed, so nothing is invented."""
+        self.apply(chart_type="row")
+        options = __import__("json").loads(self.chart_doc()["options"])
+        self.assertEqual(options["yAxis"][0]["series_options"], {})
+        self.assertEqual(self.chart_doc()["chart_type"], "Row")
+
+
+class TestApplyChartRefusals(_ChartBase):
+    def test_a_string_y_axis_is_refused_by_name(self):
+        message = self.refused(y_axis="student_category")
+        self.assertIn("student_category", message)
+        self.assertIn("String", message)
+        self.assertEqual(self.chart_doc()["chart_type"], "", "it wrote despite refusing")
+
+    def test_no_numeric_column_at_all_is_refused_and_lists_the_types(self):
+        self.results = [[{"label": "a", "type": "String"}, {"label": "b", "type": "Datetime"}],
+                        ["x", "y"]]
+        self.setUp()
+        message = self.refused()
+        self.assertIn("nothing", message)
+        self.assertIn("a (String)", message)
+        self.assertIn("b (Datetime)", message)
+
+    def test_an_axis_the_query_never_returned_is_refused_with_the_real_labels(self):
+        message = self.refused(x_axis="agent")
+        self.assertIn("'agent' is not a column", message)
+        self.assertIn("student_category", message)
+        self.assertIn("count", message)
+
+    def test_a_query_that_has_not_been_run_is_refused_not_executed(self):
+        self.results = None
+        self.setUp()
+        message = self.refused()
+        self.assertIn("has not been run", message)
+        self.assertIn("press Run", message)
+
+    def test_a_query_with_no_chart_link_is_refused(self):
+        self.chart = ""
+        self.setUp()
+        self.assertIn("no chart linked", self.refused())
+
+    def test_a_non_axis_chart_type_is_refused_by_name(self):
+        message = self.refused(chart_type="Pie")
+        self.assertIn("Pie", message)
+        self.assertIn("Bar, Line, Row, Scatter", message)
+
+    def test_one_column_only_leaves_nothing_for_the_x_axis(self):
+        self.results = [[{"label": "count", "type": "Integer"}], [5]]
+        self.setUp()
+        self.assertIn("only one column", self.refused())
+
+    def test_missing_insights_role_still_refuses_first(self):
+        self.frappe._roles = {"Dashboard Studio Editor"}
+        self.assertIn("Insights User", self.refused())
+
+
+class TestPickAxes(_Base):
+    """The choice itself, Frappe-free."""
+
+    def cols(self, *pairs):
+        return [{"label": label, "type": kind} for label, kind in pairs]
+
+    def test_picks_the_first_numeric_as_y_and_another_as_x(self):
+        x, y, reason = self.api.pick_axes(
+            self.cols(("year", "String"), ("total", "Decimal"), ("n", "Integer")))
+        self.assertEqual((x, y, reason), ("year", "total", None))
+
+    def test_the_measure_is_never_also_the_x_axis(self):
+        x, y, reason = self.api.pick_axes(self.cols(("total", "Decimal"), ("year", "String")))
+        self.assertEqual((x, y), ("year", "total"))
+        self.assertIsNone(reason)
+
+    def test_a_duration_read_as_string_is_refused(self):
+        """The Process Duration case: a computed column comes back String."""
+        _, _, reason = self.api.pick_axes(
+            self.cols(("applicant", "String"), ("process_duration", "String")))
+        self.assertIn("nothing", reason)
+        self.assertIn("process_duration (String)", reason)
+
+    def test_an_all_null_column_reads_as_string_and_is_refused_by_name(self):
+        _, _, reason = self.api.pick_axes(
+            self.cols(("term", "String"), ("fee", "String")), y_axis="fee")
+        self.assertIn("'fee' as String", reason)
+        self.assertIn("empty, mixed, or a computed value", reason)
+
+    def test_no_columns_at_all(self):
+        _, _, reason = self.api.pick_axes([])
+        self.assertIn("no result columns", reason)
+
+
+class TestResultColumns(_Base):
+    def test_reads_the_metadata_row_only(self):
+        self.assertEqual(
+            self.api.result_columns(COLUMNS),
+            [{"label": "student_category", "type": "String"},
+             {"label": "count", "type": "Integer"}],
+        )
+
+    def test_a_column_with_no_type_defaults_to_string(self):
+        """ResultColumn.from_dict does the same — an unknown type IS String."""
+        self.assertEqual(self.api.result_columns([[{"label": "x"}], ["v"]]),
+                         [{"label": "x", "type": "String"}])
+
+    def test_junk_is_survived_rather_than_crashed_on(self):
+        self.assertEqual(self.api.result_columns(None), [])
+        self.assertEqual(self.api.result_columns([]), [])
+        self.assertEqual(self.api.result_columns(["not a row"]), [])
+        self.assertEqual(self.api.result_columns([[{"label": ""}, "junk"]]), [])
