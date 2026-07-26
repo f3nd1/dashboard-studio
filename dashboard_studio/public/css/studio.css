@@ -646,6 +646,16 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
   { background: var(--dss-surface-3); }
 .dss-gov-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 14px 14px; }
 .dss-btn.is-disabled { opacity: .5; cursor: not-allowed; }
+/* The publish artefact, shown for copying. Monospace because it is JSON a
+   person has to read before pasting, not prose. */
+/* textarea.dss-exportbox, not .dss-exportbox: textarea.dss-input already sets
+   min-height, and a bare class (0,1,0) loses to it (0,1,1). Measured, not
+   assumed — the first version of this rule rendered a 50px box. */
+textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-monospace,
+  SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.45;
+  white-space: pre; overflow: auto; }
+.dss-exportbox + .dss-btn { margin-top: 8px; }
+
 .dss-gov-warn { font-size: 11px; font-weight: 600; color: var(--dss-orange);
   background: var(--dss-orange-100); border-top: 1px solid #f0d19a; padding: 9px 14px; }
 .dss-ver-row { display: flex; justify-content: space-between; gap: 8px; font-size: 10px;

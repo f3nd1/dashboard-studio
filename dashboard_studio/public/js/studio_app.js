@@ -2154,6 +2154,7 @@
         " charts — changing it affects all of them."));
     });
     this.canvas.appendChild(impactBand);
+    this.canvas.appendChild(this.buildExportBand());
 
     // Native Frappe version history, not a bespoke one.
     this.panel.appendChild(el("h3", "dss-panel-title", "Version history"));
@@ -2774,6 +2775,81 @@
       self.openDashboard(dashboard);
     }).catch(function (err) {
       toast(refusalMessage(err, "Could not create that chart."));
+    });
+  };
+
+  // Export for Sophia — option 2 of PUBLISH_TO_SOPHIA_DESIGN.md §3. It shows
+  // JSON for a person to copy. There is deliberately nothing here that writes
+  // anywhere: no "apply", no target, no automation.
+  App.prototype.buildExportBand = function () {
+    var self = this;
+    var band = el("div", "dss-band");
+    var head = el("div", "dss-band-head");
+    head.appendChild(el("span", "dss-band-toggle", "Export for the platform"));
+    band.appendChild(head);
+    band.appendChild(el("p", "dss-hint",
+      "Generates the publish artefact as JSON for someone to apply by hand. " +
+      "It writes nothing, here or on the receiving platform."));
+
+    var go = el("button", "dss-btn", "Generate export");
+    go.addEventListener("click", function () { self.generateExport(); });
+    band.appendChild(go);
+
+    var result = this.state.exportResult;
+    if (!result) return band;
+
+    if (!result.ok) {
+      var refused = el("div", "dss-gov-blockers");
+      refused.appendChild(el("div", "dss-gov-blockers-head",
+        "Not exported — " + result.refusals.length + " reason(s)"));
+      result.refusals.forEach(function (r) {
+        var item = el("div", "dss-gov-blocker");
+        item.appendChild(el("div", "dss-gov-blocker-what", r.rule.replace(/_/g, " ")));
+        item.appendChild(el("div", "dss-gov-blocker-who", r.message));
+        refused.appendChild(item);
+      });
+      band.appendChild(refused);
+      return band;
+    }
+
+    // textContent, not innerHTML: the artefact is data and must stay data even
+    // on the way to the clipboard.
+    var box = el("textarea", "dss-input dss-exportbox");
+    box.value = result.json;
+    box.readOnly = true;
+    box.setAttribute("aria-label", "Publish artefact JSON");
+    band.appendChild(box);
+
+    var copy = el("button", "dss-btn dss-btn-primary", "Copy JSON");
+    copy.addEventListener("click", function () {
+      box.select();
+      if (root.navigator && root.navigator.clipboard) {
+        root.navigator.clipboard.writeText(result.json).then(function () {
+          toast("Artefact copied. Applying it is a manual step.");
+        }).catch(function () { toast("Select the text and copy it manually."); });
+      } else {
+        toast("Select the text and copy it manually.");
+      }
+    });
+    band.appendChild(copy);
+
+    (result.artefact.unresolved || []).forEach(function (line) {
+      band.appendChild(el("div", "dss-gov-warn", line));
+    });
+    return band;
+  };
+
+  App.prototype.generateExport = function () {
+    var self = this;
+    dsCall({
+      method: "dashboard_studio.api.sophia_export.export_dashboard",
+      args: { dashboard: this.options.dashboard },
+    }).then(function (r) {
+      self.state.exportResult = r.message || { ok: false, refusals: [
+        { rule: "no_response", message: "The server returned no artefact and no reason." }] };
+      self.renderGovernance();
+    }).catch(function (err) {
+      toast(refusalMessage(err, "Could not generate the export."));
     });
   };
 
