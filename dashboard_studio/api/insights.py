@@ -231,31 +231,138 @@ def _merge_chart_options(existing, x, y, series_type):
     return merged
 
 
+def _mask_sql(text):
+    """``(masked, error)`` — the SQL with comments and string CONTENTS blanked.
+
+    Same length as the input, so an offset in the mask is an offset in the
+    original. The guard below reads this instead of the raw text, because both
+    of its checks were being fooled by it: a leading comment hid the SELECT, and
+    a semicolon inside a comment or a string looked like a second statement.
+
+    **Quote-aware on purpose, and this is the whole security argument.** The
+    obvious implementation — strip comments, then check — is a bypass::
+
+        SELECT '/*' AS a FROM t; DROP TABLE t
+
+    A stripper that does not know it is inside a string sees ``/*``, treats the
+    rest as an unterminated comment, swallows the ``;`` and the ``DROP``, and the
+    guard waves it through. Scanning left to right with quote state cannot do
+    that.
+
+    Every ambiguity resolves toward CODE, never toward comment. Mistaking a
+    comment for code costs a false refusal; mistaking code for a comment hides a
+    statement. So:
+
+    - ``--`` starts a comment only when followed by whitespace or end of line,
+      which is MySQL's actual rule — ``SELECT 1--2`` is arithmetic, not a comment;
+    - ``/*!`` is MySQL's *executable* comment and really runs, so it is treated
+      as code and will fail the SELECT check rather than being skipped;
+    - an unterminated comment or string is an error, never "swallow to the end".
+
+    ponytail: no ``#`` line comments. Recognising one would mean skipping its
+    contents, which is the direction that hides things; not recognising it means
+    a query starting with ``#`` is refused, which is merely annoying. Add it only
+    with the same care as the rest.
+    """
+    out = []
+    index, end = 0, len(text)
+    while index < end:
+        char = text[index]
+
+        if char == "/" and text.startswith("/*", index):
+            if text.startswith("/*!", index):
+                out.append(char)          # executes; leave it as code
+                index += 1
+                continue
+            close = text.find("*/", index + 2)
+            if close == -1:
+                return None, ("That query has a /* comment that is never closed, so "
+                              "where the statement really begins cannot be told.")
+            out.append(" " * (close + 2 - index))
+            index = close + 2
+            continue
+
+        if (char == "-" and text.startswith("--", index)
+                and (index + 2 >= end or text[index + 2] in " \t\r\n")):
+            close = text.find("\n", index)
+            close = end if close == -1 else close
+            out.append(" " * (close - index))
+            index = close
+            continue
+
+        if char in "'\"`":
+            quote = char
+            out.append(char)
+            index += 1
+            closed = False
+            while index < end:
+                inner = text[index]
+                # Backticks quote identifiers and take no backslash escape.
+                if inner == "\\" and quote != "`" and index + 1 < end:
+                    out.append("  ")
+                    index += 2
+                    continue
+                if inner == quote:
+                    if index + 1 < end and text[index + 1] == quote:
+                        out.append("  ")      # doubled quote, still inside
+                        index += 2
+                        continue
+                    out.append(quote)
+                    index += 1
+                    closed = True
+                    break
+                out.append(" ")
+                index += 1
+            if not closed:
+                return None, ("That query has a quote that is never closed, so it "
+                              "cannot be read safely.")
+            continue
+
+        out.append(char)
+        index += 1
+    return "".join(out), None
+
+
 def _normalised_sql(sql):
     """The SQL as it will be stored, or a refusal reason.
 
     Returns ``(sql, reason)`` — exactly one is set.
 
-    ponytail: a start-of-statement check plus a no-second-statement check, not a
-    SQL parser. Insights validates again before it executes, so this is the
-    cheap outer guard whose only job is that Studio never writes a destructive
-    statement into another app's record. Replace it with the real parser if this
-    ever needs to allow anything more interesting than SELECT.
+    ponytail: a start-of-statement check plus a no-second-statement check over a
+    comment/string mask, not a SQL parser. Insights validates again before it
+    executes, so this is the cheap outer guard whose only job is that Studio
+    never writes a destructive statement into another app's record. Replace it
+    with the real parser if this ever needs to allow more than SELECT.
     """
     text = (sql or "").strip()
     if not text:
         return None, "There is no SQL to send. Paste a query first."
-    # One trailing semicolon is ordinary; any other is a second statement.
-    text = text.rstrip().rstrip(";").rstrip()
-    if ";" in text:
+
+    masked, error = _mask_sql(text)
+    if error:
+        return None, error
+
+    # One trailing semicolon is ordinary; any other is a second statement. Cut it
+    # by POSITION in the mask, so a semicolon inside a comment or a string is
+    # neither mistaken for the terminator nor for a second statement.
+    trimmed = masked.rstrip()
+    if trimmed.endswith(";"):
+        text = text[: len(trimmed) - 1].rstrip()
+        masked = masked[: len(trimmed) - 1]
+    if ";" in masked:
         return None, (
             "That looks like more than one statement. Send a single SELECT — "
             "Insights runs what is stored here."
         )
-    if not text.lower().lstrip("( \n\t").startswith(_READ_ONLY_STARTS):
+
+    statement = masked.lstrip("( \n\t\r")
+    if not statement.strip():
+        return None, ("There is no statement here — only a comment. Paste the "
+                      "query itself as well.")
+    if not statement.lower().startswith(_READ_ONLY_STARTS):
         return None, (
             "Only a SELECT (or WITH) query can be sent to Insights. This one starts "
-            f"with '{text.split()[0]}', and Dashboard Studio will not file a "
+            f"with '{statement.split()[0]}', and Dashboard Studio will not file a "
             "statement that writes."
         )
     return text, None

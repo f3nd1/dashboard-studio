@@ -482,3 +482,130 @@ class TestResultColumns(_Base):
         self.assertEqual(self.api.result_columns([]), [])
         self.assertEqual(self.api.result_columns(["not a row"]), [])
         self.assertEqual(self.api.result_columns([[{"label": ""}, "junk"]]), [])
+
+
+# The shape that was wrongly refused live: a block comment, a blank line, then
+# WITH … SELECT. Trimmed from the real commission query.
+COMMENTED_SQL = """/* Recruitment-agent commission earned from submitted student payments.
+   Date basis: Payment Entry posting_date; one row per agent. */
+
+WITH payment_schedule_count AS (
+  SELECT `parent`, COUNT(*) AS `n` FROM `tabPayment Schedule` GROUP BY `parent`
+)
+SELECT `agent`, SUM(`amount`) AS `commission`
+FROM `tabPayment Entry` JOIN payment_schedule_count USING (`parent`)
+GROUP BY `agent`"""
+
+
+class TestLeadingComments(_Base):
+    """The guard reads a comment/string mask now, not raw text."""
+
+    def created(self, sql):
+        self.api.create_insights_query(sql)
+        return self.queries()[0]["sql"]
+
+    # ------------------------------------------------------- must be ACCEPTED
+    def test_the_exact_query_shape_that_was_refused_live(self):
+        stored = self.created(COMMENTED_SQL)
+        self.assertEqual(stored, COMMENTED_SQL,
+                         "the comment must be stored with the query, not stripped from it")
+
+    def test_a_semicolon_inside_the_comment_is_not_a_second_statement(self):
+        """The live comment contains 'posting_date;' — prose, not SQL."""
+        self.assertIn(";", COMMENTED_SQL.split("*/")[0], "fixture no longer covers this")
+        self.created(COMMENTED_SQL)   # refuses if the mask is not applied
+
+    def test_a_leading_line_comment_is_skipped(self):
+        stored = self.created("-- what this counts\nSELECT 1 FROM `tabUser`")
+        self.assertTrue(stored.startswith("-- what this counts"))
+
+    def test_several_comments_and_blank_lines_before_the_statement(self):
+        self.created("/* one */\n\n-- two\n\n/* three */\nSELECT 1 FROM `tabUser`")
+
+    def test_a_semicolon_inside_a_string_literal_is_not_a_separator(self):
+        self.created("SELECT ';' AS `sep` FROM `tabUser`")
+
+    def test_no_comment_at_all_still_works_unchanged(self):
+        self.assertEqual(self.created(SQL), SQL)
+
+    def test_a_trailing_semicolon_is_still_stripped_after_a_comment(self):
+        stored = self.created("/* note */ SELECT 1 FROM `tabUser`;")
+        self.assertEqual(stored, "/* note */ SELECT 1 FROM `tabUser`")
+
+    def test_double_dash_without_whitespace_is_arithmetic_not_a_comment(self):
+        """MySQL's real rule. Treating it as a comment is the unsafe direction."""
+        self.created("SELECT 1--2 AS `n` FROM `tabUser`")
+
+    # -------------------------------------------------------- must be REFUSED
+    def test_a_write_hidden_behind_a_comment_is_still_refused(self):
+        message = self.refusal("/* looks safe */ DELETE FROM `tabUser`")
+        self.assertIn("will not file a statement that writes", message)
+        self.assertIn("DELETE", message, "the refusal must name the real first word")
+        self.assertEqual(self.queries(), [])
+
+    def test_a_write_behind_a_line_comment_is_still_refused(self):
+        self.assertIn("will not file a statement that writes",
+                      self.refusal("-- harmless\nDROP TABLE `tabUser`"))
+
+    def test_a_comment_open_inside_a_string_cannot_swallow_a_second_statement(self):
+        """THE bypass this mask exists to stop.
+
+        A stripper that is not quote-aware sees the /* inside the string, treats
+        the rest as an unterminated comment, and the ; and the DROP vanish.
+        """
+        message = self.refusal("SELECT '/*' AS `a` FROM `tabUser`; DROP TABLE `tabUser`")
+        self.assertIn("more than one statement", message)
+        self.assertEqual(self.queries(), [])
+
+    def test_an_unterminated_block_comment_is_refused_not_swallowed(self):
+        message = self.refusal("/* note that never closes\nSELECT 1 FROM `tabUser`")
+        self.assertIn("never closed", message)
+
+    def test_an_unterminated_comment_cannot_hide_a_write(self):
+        self.assertIn("never closed", self.refusal("/* x ; DELETE FROM `tabUser`"))
+
+    def test_an_executable_comment_is_treated_as_code_not_skipped(self):
+        """/*! … */ RUNS in MySQL, so skipping it would skip real SQL."""
+        message = self.refusal("/*!40001 SELECT 1 */ DELETE FROM `tabUser`")
+        self.assertIn("will not file a statement that writes", message)
+
+    def test_an_unterminated_string_is_refused(self):
+        self.assertIn("never closed", self.refusal("SELECT 'oops FROM `tabUser`"))
+
+    def test_a_comment_with_no_statement_after_it_says_so(self):
+        message = self.refusal("/* just a note */")
+        self.assertIn("only a comment", message)
+
+
+class TestMaskSql(_Base):
+    """The mask itself — same length in, same length out, so offsets line up."""
+
+    def test_length_is_preserved(self):
+        for text in (COMMENTED_SQL, SQL, "SELECT '/*' FROM t", "-- x\nSELECT 1"):
+            masked, error = self.api._mask_sql(text)
+            self.assertIsNone(error, text)
+            self.assertEqual(len(masked), len(text), text)
+
+    def test_comment_bodies_are_blanked_and_code_is_not(self):
+        masked, _ = self.api._mask_sql("/* drop */ SELECT 1")
+        self.assertNotIn("drop", masked)
+        self.assertIn("SELECT 1", masked)
+
+    def test_string_contents_are_blanked_but_the_quotes_remain(self):
+        masked, _ = self.api._mask_sql("SELECT 'a;b' FROM t")
+        self.assertNotIn(";", masked)
+        self.assertEqual(masked.count("'"), 2)
+
+    def test_a_doubled_quote_does_not_end_the_string(self):
+        masked, error = self.api._mask_sql("SELECT 'it''s; fine' FROM t")
+        self.assertIsNone(error)
+        self.assertNotIn(";", masked)
+
+    def test_a_backslash_escaped_quote_does_not_end_the_string(self):
+        masked, error = self.api._mask_sql("SELECT 'a\\'; b' FROM t")
+        self.assertIsNone(error)
+        self.assertNotIn(";", masked)
+
+    def test_backticked_identifiers_survive_a_backslash(self):
+        masked, error = self.api._mask_sql("SELECT `a\\` FROM t")
+        self.assertIsNone(error)
