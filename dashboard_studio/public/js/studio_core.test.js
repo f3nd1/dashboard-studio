@@ -461,4 +461,45 @@ assert.deepStrictEqual(
     .map(r => r.external_table), ["tabOrphan"]);
 assert.deepStrictEqual(core.mappingRows(null, null), [], "null is not a crash");
 
+// describeMeasure: what the node card shows under the table name.
+assert.strictEqual(core.describeMeasure(
+  { supported: true, aggregations: [{ function: "COUNT" }], group_by: ["agent"] }), "Count by agent");
+assert.strictEqual(core.describeMeasure(
+  { supported: true, aggregations: [{ function: "SUM" }], group_by: ["program"] }), "Sum by program");
+assert.strictEqual(core.describeMeasure(
+  { supported: true, aggregations: [{ function: "COUNT" }], group_by: [] }), "Count");
+assert.strictEqual(core.describeMeasure({ supported: false, reasons: ["subquery"] }), "not translated",
+  "an untranslated query must not look like a translated one on the card");
+assert.strictEqual(core.describeMeasure(null), "not translated");
+
+// The newest query about a table wins the subtitle.
+var n1 = core.analysisToNodes(
+  { supported: true, doctypes: ["Student Applicant"], aggregations: [{ function: "COUNT" }],
+    group_by: ["agent"] }, []);
+assert.strictEqual(n1[0].measure, "Count by agent");
+var n2 = core.mergeNodes(n1, core.analysisToNodes(
+  { supported: true, doctypes: ["Student Applicant"], aggregations: [{ function: "COUNT" }],
+    group_by: ["nationality"] }, []));
+assert.strictEqual(n2.length, 1, "same table, still one node");
+assert.strictEqual(n2[0].measure, "Count by nationality", "the card still described the older query");
+
+// clearedCanvas: confirmed work survives, everything else goes.
+var cnodes = [
+  { node_id: "src:tabA", node_type: "Source Table", label: "tabA" },
+  { node_id: "tgt:A", node_type: "Target DocType", label: "A" },
+  { node_id: "src:tabB", node_type: "Source Table", label: "tabB" },
+  { node_id: "tgt:B", node_type: "Target DocType", label: "B" },
+];
+var cmaps = [
+  { external_table: "tabA", target_doctype: "A", mapping_status: "Confirmed" },
+  { external_table: "tabB", target_doctype: "B", mapping_status: "Suggested" },
+];
+var cleared = core.clearedCanvas(cnodes, cmaps);
+assert.deepStrictEqual(cleared.nodes.map(n => n.node_id), ["src:tabA", "tgt:A"]);
+assert.deepStrictEqual(cleared.mappings.map(m => m.external_table), ["tabA"]);
+assert.strictEqual(cleared.keptConfirmed, 1);
+assert.deepStrictEqual(core.clearedCanvas(cnodes, []).nodes, [], "nothing confirmed, nothing kept");
+assert.deepStrictEqual(core.clearedCanvas(null, null),
+  { nodes: [], mappings: [], keptConfirmed: 0 });
+
 console.log("studio_core.test.js — all assertions passed");

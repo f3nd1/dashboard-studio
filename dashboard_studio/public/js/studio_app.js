@@ -2229,6 +2229,15 @@
     return core.analysisToNodes(mock.MOCK_ANALYSIS, mock.MOCK_TARGET_DOCTYPES);
   };
 
+  // Is this node part of a Confirmed mapping? Confirmed work never dims and is
+  // never cleared — it is the only thing here someone deliberately agreed to.
+  App.prototype.isConfirmedNode = function (node) {
+    return (this.state.mappings || []).some(function (m) {
+      return m.mapping_status === "Confirmed" &&
+        ("src:" + m.external_table === node.node_id || "tgt:" + m.target_doctype === node.node_id);
+    });
+  };
+
   App.prototype._node = function (nodeId) {
     return (this.state.mapNodes || []).filter(function (n) { return n.node_id === nodeId; })[0];
   };
@@ -2237,14 +2246,23 @@
     var self = this;
     var isSource = node.node_type === "Source Table";
     var fromLastQuery = (this.state.lastQueryTables || []).indexOf(node.label) !== -1;
+    // Left over from an earlier query and never confirmed. Dimmed rather than
+    // removed: it may still be work in progress, but it should not compete with
+    // what was just analyzed.
+    var stale = !fromLastQuery && (this.state.lastQueryTables || []).length &&
+      !this.isConfirmedNode(node);
     var div = el("div", "dss-node " + (isSource ? "dss-node-src" : "dss-node-tgt") +
       (this.state.pickedSource === node.node_id ? " is-picked" : "") +
-      (fromLastQuery ? " is-fresh" : ""));
+      (fromLastQuery ? " is-fresh" : "") + (stale ? " is-stale" : ""));
     if (fromLastQuery) div.title = "Named by the query you just analyzed";
+    else if (stale) div.title = "From an earlier query, not confirmed";
     div.style.left = node.pos_x + "px";
     div.style.top = node.pos_y + "px";
     div.appendChild(el("div", "dss-node-kind", node.node_type));
     div.appendChild(el("div", "dss-node-label", node.label));
+    // What the query actually measured. Without it, "grouped by nationality" and
+    // "grouped by agent" on the same table drew identical cards.
+    if (node.measure) div.appendChild(el("div", "dss-node-measure", node.measure));
 
     // A drag that ends over the node still fires a click; without this the
     // drag would also pick a source, or silently create a mapping.
@@ -2467,9 +2485,19 @@
       self.panel.appendChild(row);
     });
 
+    var actions = el("div", "dss-map-actions");
     var save = el("button", "dss-btn dss-btn-primary", "Save mappings");
     save.addEventListener("click", function () { self.saveMappings(); });
-    this.panel.appendChild(save);
+    actions.appendChild(save);
+
+    // Re-analysis is additive on purpose, so there has to be a way to say
+    // "start again" that is not re-analysis. Confirmed mappings survive it.
+    var clear = el("button", "dss-btn", "Clear canvas");
+    clear.title = "Remove every table and mapping except the ones you confirmed";
+    clear.disabled = !(this.state.mapNodes || []).length;
+    clear.addEventListener("click", function () { self.clearCanvas(); });
+    actions.appendChild(clear);
+    this.panel.appendChild(actions);
 
     // What the last save did. A save that writes nothing must say so here, not
     // only in a toast that has already gone.
@@ -2595,6 +2623,36 @@
       }]);
     }
     this.refreshMapping();
+  };
+
+  App.prototype.clearCanvas = function () {
+    var result = core.clearedCanvas(this.state.mapNodes, this.state.mappings);
+    var losing = (this.state.mapNodes || []).length - result.nodes.length;
+    if (!losing) { toast("Nothing to clear."); return; }
+    // Native confirm: one line, and the only destructive action in this view.
+    if (root.confirm && !root.confirm(
+        "Remove " + losing + " table(s) and their mappings from the canvas?" +
+        (result.keptConfirmed
+          ? "\n\n" + result.keptConfirmed + " confirmed mapping(s) will be kept."
+          : "") +
+        "\n\nNothing already saved to the project is deleted — re-analyse a query to bring it back.")) {
+      return;
+    }
+    this.state.mapNodes = result.nodes;
+    this.state.mappings = result.mappings;
+    this.state.lastQueryTables = [];
+    this.state.lastAnalysis = null;
+    this.state.lastAdded = null;
+    // Evidence queries belong to the canvas that produced them; keeping them
+    // would record SQL on the next save for tables that are no longer here.
+    this.state.analyzedQueries = [];
+    this.state.pickedSource = null;
+    this.state.saveResult = null;
+    this.state.generatedMetrics = [];
+    this.refreshMapping();
+    toast(result.keptConfirmed
+      ? "Canvas cleared — " + result.keptConfirmed + " confirmed mapping(s) kept"
+      : "Canvas cleared");
   };
 
   App.prototype.saveMappings = function () {

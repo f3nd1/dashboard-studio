@@ -140,15 +140,34 @@
     });
   }
 
+  // What a query measured, for the node card. Two queries on the same table
+  // grouped by different fields produced identical cards; this is the one line
+  // that tells them apart, and it is already in the analysis.
+  //
+  // Display only — serializeCanvasNodes drops it, so nothing new is persisted.
+  function describeMeasure(analysis) {
+    var a = analysis || {};
+    if (!a.supported) return "not translated";
+    var agg = (a.aggregations || [])[0];
+    var fn = agg && agg.function
+      ? agg.function.charAt(0) + agg.function.slice(1).toLowerCase()
+      : "";
+    var by = (a.group_by || [])[0];
+    if (fn && by) return fn + " by " + by;
+    if (fn) return fn;
+    return by ? "grouped by " + by : "";
+  }
+
   // Lay out analyze_sql output as Source Table nodes (left) and candidate
   // DocTypes as Target DocType nodes (right). analyze_sql returns DocType-ified
   // names, so the source label restores the physical `tab` prefix.
   function analysisToNodes(analysis, targetDoctypes) {
     var nodes = [];
+    var measure = describeMeasure(analysis);
     ((analysis || {}).doctypes || []).forEach(function (dt, i) {
       nodes.push({
         node_id: "src:tab" + dt, node_type: "Source Table",
-        label: "tab" + dt, pos_x: 20, pos_y: 16 + i * 64,
+        label: "tab" + dt, measure: measure, pos_x: 20, pos_y: 16 + i * 64,
       });
     });
     (targetDoctypes || []).forEach(function (dt, i) {
@@ -184,6 +203,25 @@
       if (!seen[m.external_table]) { seen[m.external_table] = true; rows.push(m); }
     });
     return rows;
+  }
+
+  // What survives "Clear canvas". Confirmed mappings and their nodes are work
+  // someone did on purpose; everything else came from a query and can be
+  // re-analysed for free. Returns {nodes, mappings, keptConfirmed}.
+  function clearedCanvas(nodes, mappings) {
+    var confirmed = (mappings || []).filter(function (m) {
+      return m.mapping_status === "Confirmed";
+    });
+    var keep = {};
+    confirmed.forEach(function (m) {
+      keep["src:" + m.external_table] = true;
+      keep["tgt:" + m.target_doctype] = true;
+    });
+    return {
+      nodes: (nodes || []).filter(function (n) { return keep[n.node_id]; }),
+      mappings: confirmed,
+      keptConfirmed: confirmed.length,
+    };
   }
 
   // DocTypes worth suggesting as a mapping target: the ones already on the
@@ -567,7 +605,15 @@
       bottom[n.node_type] = Math.max(bottom[n.node_type] || 0, (n.pos_y || 0) + 64);
     });
     (incoming || []).forEach(function (n) {
-      if (!n || !n.node_id || seen[n.node_id]) return;
+      if (!n || !n.node_id) return;
+      if (seen[n.node_id]) {
+        // Already placed: keep its position, but take the newer query's measure
+        // or the card would still describe the query before last.
+        if (n.measure) {
+          merged.forEach(function (m) { if (m.node_id === n.node_id) m.measure = n.measure; });
+        }
+        return;
+      }
       seen[n.node_id] = true;
       var y = bottom[n.node_type] || 16;
       bottom[n.node_type] = y + 64;
@@ -645,6 +691,8 @@
     widthOptions: widthOptions,
     targetSuggestions: targetSuggestions,
     mappingRows: mappingRows,
+    describeMeasure: describeMeasure,
+    clearedCanvas: clearedCanvas,
     dashboardSources: dashboardSources,
     sourceGlyph: sourceGlyph,
     SORT_ORDERS: SORT_ORDERS,
