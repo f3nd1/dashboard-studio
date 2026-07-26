@@ -482,6 +482,7 @@
   function mergeMappings(existing, incoming) {
     var merged = (existing || []).slice();
     var seen = {};
+    var added = 0;
     merged.forEach(function (m) { seen[m.external_table + " " + m.target_doctype] = true; });
     (incoming || []).forEach(function (m) {
       if (!m || !m.external_table || !m.target_doctype) return;
@@ -493,20 +494,39 @@
         target_doctype: m.target_doctype,
         mapping_status: m.mapping_status || "Suggested",
       });
+      added += 1;
     });
+    // The count travels with the list: re-analysing a query that suggests
+    // mappings already present is a no-op, and the panel has to be able to say
+    // that rather than looking like it ignored the query.
+    merged.added = added;
     return merged;
   }
 
   // Add newly discovered nodes without moving ones already on the canvas — a
   // re-analysis must not undo the arrangement someone has made.
+  // Add nodes a new analysis discovered, keeping everything already placed.
+  //
+  // Incoming positions are RE-COMPUTED, not trusted: analysisToNodes numbers
+  // from 0 within its own analysis, so every analysis puts its first source node
+  // at y=16. Appending them verbatim stacked each new query's nodes exactly on
+  // top of the previous query's — which read as "the canvas is stale", and made
+  // an older mapping's line appear to connect the newer pair sitting on those
+  // coordinates. Place them below what is already there instead.
   function mergeNodes(existing, incoming) {
     var merged = (existing || []).slice();
     var seen = {};
-    merged.forEach(function (n) { seen[n.node_id] = true; });
+    var bottom = {};
+    merged.forEach(function (n) {
+      seen[n.node_id] = true;
+      bottom[n.node_type] = Math.max(bottom[n.node_type] || 0, (n.pos_y || 0) + 64);
+    });
     (incoming || []).forEach(function (n) {
       if (!n || !n.node_id || seen[n.node_id]) return;
       seen[n.node_id] = true;
-      merged.push(n);
+      var y = bottom[n.node_type] || 16;
+      bottom[n.node_type] = y + 64;
+      merged.push(Object.assign({}, n, { pos_y: y }));
     });
     return merged;
   }

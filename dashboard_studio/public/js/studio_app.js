@@ -2321,16 +2321,29 @@
     // Show what the parser concluded about the last analyzed query — especially
     // when it declined to translate it, which must never be silent.
     var analysis = this.state.lastAnalysis;
+    var added = this.state.lastAdded || { nodes: 0, mappings: 0 };
+    // What the LAST query did, in its own terms. Without this the list is
+    // cumulative with nothing marking which query produced what, so a query that
+    // added nothing new is indistinguishable from one that was ignored.
+    function whatChanged() {
+      if (added.mappings) {
+        return " Added " + added.mappings + " mapping(s)" +
+          (added.nodes ? " and " + added.nodes + " node(s)" : "") + " below.";
+      }
+      if (added.nodes) return " Added " + added.nodes + " node(s) to the canvas.";
+      return " Everything it names was already on the canvas — nothing new to add.";
+    }
     if (analysis) {
       if (analysis.supported) {
         this.panel.appendChild(el("div", "dss-analysis is-ok",
-          "SQL analyzed: " + (analysis.doctypes || []).length + " table(s) found" +
+          "Last query: " + (analysis.doctypes || []).length + " table(s) found" +
           ((analysis.group_by || []).length ? ", grouped by " + analysis.group_by.join(", ") : "") +
-          ". Suggested mappings are marked Suggested until you confirm them."));
+          "." + whatChanged() + " Mappings stay Suggested until you confirm them."));
       } else {
         this.panel.appendChild(el("div", "dss-analysis is-warn",
-          "This query was not translated — " + (analysis.reasons || []).join("; ") +
-          ". Tables found are shown so you can map them by hand; nothing was suggested automatically."));
+          "Last query was not translated — " + (analysis.reasons || []).join("; ") +
+          "." + whatChanged() +
+          " Its tables are on the canvas unmapped; draw the mapping by hand if it is right."));
       }
     }
 
@@ -2438,8 +2451,16 @@
   // for a query the parser judged safe to translate.
   App.prototype.applyAnalysis = function (analysis, suggestions, sql) {
     var discovered = core.analysisToNodes(analysis, analysis.doctypes || []);
+    var before = this.state.mapNodes.length;
     this.state.mapNodes = core.mergeNodes(this.state.mapNodes, discovered);
     this.state.mappings = core.mergeMappings(this.state.mappings, suggestions);
+    // What this analysis actually changed. Re-analysing a query whose tables and
+    // mappings are already on the canvas is a legitimate no-op, and the panel
+    // has to say so rather than looking like it ignored the query.
+    this.state.lastAdded = {
+      nodes: this.state.mapNodes.length - before,
+      mappings: this.state.mappings.added || 0,
+    };
     this.state.lastAnalysis = analysis;
     // Keep the query itself for the next save — it is the evidence, and it
     // matters most for the queries that were NOT translated.
