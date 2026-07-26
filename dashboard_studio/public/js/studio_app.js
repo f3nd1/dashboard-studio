@@ -678,9 +678,16 @@
       wrap.appendChild(heroBox);
     }
 
+    // Source Mapping is a fixed-height stack so the split is real: the query box
+    // takes a quarter, the canvas the rest. Without a bounded parent the box
+    // grows to its content and pushes the canvas below the fold, which is what
+    // "make it 25/75" kept failing to do.
+    var stack = this.state.view === "mapping" ? el("div", "dss-mapstack") : wrap;
+    if (stack !== wrap) wrap.appendChild(stack);
+
     // Pasting SQL is how a migration actually starts, so it leads the workspace
     // rather than sitting under the mapping list in the side panel.
-    if (this.state.view === "mapping") wrap.appendChild(this.buildSqlImport());
+    if (this.state.view === "mapping") stack.appendChild(this.buildSqlImport());
     if (this.state.view === "validation") wrap.appendChild(this.buildValidationRun());
 
     var main = el("div", "dss-main");
@@ -692,11 +699,13 @@
       main.appendChild(this.buildPalette());
     }
     this.canvas = el("div", "dss-canvas");
-    this.canvas.style.minHeight = "480px";
+    // Mapping sizes the canvas from the stack; every other view still needs a
+    // floor so an empty canvas is not a 0px sliver.
+    if (this.state.view !== "mapping") this.canvas.style.minHeight = "480px";
     main.appendChild(this.canvas);
     this.panel = el("div", "dss-panel");
     main.appendChild(this.panel);
-    wrap.appendChild(main);
+    stack.appendChild(main);
 
     this.mount.appendChild(wrap);
     if (this.state.view === "mapping") {
@@ -2238,6 +2247,10 @@
       }
       if (isSource) {
         self.state.pickedSource = self.state.pickedSource === node.node_id ? null : node.node_id;
+        // Clicking a node is now a way INTO its mapping, not only a way to draw
+        // one: its row is highlighted, scrolled to, and its target field focused,
+        // so the correction can be made from the canvas.
+        if (self.state.pickedSource) self._focusRow = node.label;
       } else if (self.state.pickedSource) {
         var source = self._node(self.state.pickedSource);
         var externalTable = source.label;
@@ -2308,6 +2321,18 @@
     }
     this.state.mapNodes.forEach(function (n) { self.renderMapNode(n); });
     this.renderMappingPanel();
+
+    // After the panel exists, not before — the row was only just created.
+    var focus = this._focusRow;
+    this._focusRow = null;
+    if (focus) {
+      var row = this.panel.querySelector('[data-table="' + focus.replace(/"/g, '\\"') + '"]');
+      if (row) {
+        row.scrollIntoView({ block: "nearest" });
+        var input = row.querySelector(".dss-map-target");
+        if (input) input.focus();
+      }
+    }
   };
 
   App.prototype.renderMappingPanel = function () {
@@ -2348,8 +2373,8 @@
       }
     }
 
-    if (!this.state.mappings.length) {
-      this.panel.appendChild(el("p", "dss-hint", "No mappings yet."));
+    if (!core.mappingRows(this.state.mapNodes, this.state.mappings).length) {
+      this.panel.appendChild(el("p", "dss-hint", "No source tables yet — analyze a query above."));
     }
     // Suggestions for the target picker, shared by every row.
     var suggestions = core.targetSuggestions(this.state.mapNodes, this._metricList);
@@ -2363,8 +2388,13 @@
     });
     this.panel.appendChild(datalist);
 
-    this.state.mappings.forEach(function (m) {
+    // Derived from the canvas so the two can never disagree: a table the parser
+    // found but could not map still gets a row, with an empty target to fill in.
+    var rows = core.mappingRows(this.state.mapNodes, this.state.mappings);
+    rows.forEach(function (m) {
       var row = el("div", "dss-map-row is-" + m.mapping_status.toLowerCase());
+      row.setAttribute("data-table", m.external_table);
+      if (self.state.pickedSource === "src:" + m.external_table) row.className += " is-picked";
       row.appendChild(el("span", "dss-map-src", m.external_table));
       row.appendChild(el("span", "dss-map-arrow", "→"));
 
@@ -2384,6 +2414,9 @@
         // Retargeting is an edit, not a confirmation — back to Suggested so the
         // status still means "a person agreed to THIS pair".
         m.mapping_status = "Suggested";
+        // A row derived from a bare canvas node is not in state.mappings yet;
+        // giving it a target is what makes it one.
+        if (self.state.mappings.indexOf(m) === -1) self.state.mappings.push(m);
         self.state.mapNodes = core.mergeNodes(self.state.mapNodes,
           [{ node_id: "tgt:" + next, node_type: "Target DocType", label: next, pos_x: 340 }]);
         self.refreshMapping();
@@ -2392,8 +2425,12 @@
 
       var status = el("button", "dss-map-status", m.mapping_status);
       status.type = "button";
-      status.title = "Cycle Suggested → Confirmed → Rejected";
+      status.disabled = !m.target_doctype;
+      status.title = m.target_doctype
+        ? "Cycle Suggested → Confirmed → Rejected"
+        : "Set a target DocType before confirming this table";
       status.addEventListener("click", function () {
+        if (!m.target_doctype) return;
         m.mapping_status = core.nextMappingStatus(m.mapping_status);
         self.refreshMapping();
       });
@@ -2432,30 +2469,6 @@
     var self = this;
     var wrap = el("div", "dss-sqlimport");
 
-    // Collapsed once a query has been analyzed successfully: the paste box has
-    // done its job and the canvas is the thing worth the screen. Stays open
-    // when nothing has been analyzed yet, or when the last one failed — those
-    // are the states where the box is still the task.
-    var done = this.state.lastAnalysis && this.state.lastAnalysis.supported;
-    if (done && !this.state.sqlOpen) {
-      var bar = el("div", "dss-sqlbar");
-      var summary = el("div", "dss-sqlbar-text");
-      summary.appendChild(el("strong", null, "Query analyzed"));
-      summary.appendChild(el("span", null,
-        (this.state.lastAnalysis.doctypes || []).join(", ") +
-        ((this.state.lastAnalysis.group_by || []).length
-          ? " · grouped by " + this.state.lastAnalysis.group_by.join(", ") : "")));
-      bar.appendChild(summary);
-      var edit = el("button", "dss-btn dss-btn-small", "Edit query");
-      edit.addEventListener("click", function () {
-        self.state.sqlOpen = true;
-        self.render();
-      });
-      bar.appendChild(edit);
-      wrap.appendChild(bar);
-      return wrap;
-    }
-
     var head = el("div", "dss-sqlimport-head");
     head.appendChild(el("div", "dss-kicker", "Import"));
     head.appendChild(el("h3", "dss-sqlimport-title", "Paste the Metabase SQL"));
@@ -2489,17 +2502,13 @@
         // The "Analyzing…" state had no success path — only .catch wrote to the
         // note — so a query that parsed perfectly looked exactly like a hang.
         // The full report is in the panel; this says which one to read.
+        // The box stays visible and editable at all times — do NOT reintroduce
+        // a collapse here. Standing instruction, 2026-07-25.
         var found = (analysis.doctypes || []).length;
-        self.state.sqlOpen = !analysis.supported;
-        if (analysis.supported) {
-          // The note is about to be replaced by the collapsed bar, so the
-          // outcome goes to a toast — the bar then carries it persistently.
-          toast("Analyzed: " + found + " table(s) found, " +
-            (data.suggested_mappings || []).length + " mapping(s) suggested — see the panel.");
-          self.render();   // collapses the box and gives the canvas the room
-          return;
-        }
-        note.textContent = "Analyzed, but not translated — see the reasons in the panel.";
+        note.textContent = analysis.supported
+          ? "Analyzed: " + found + " table(s) found, " +
+            (data.suggested_mappings || []).length + " mapping(s) suggested — see the panel."
+          : "Analyzed, but not translated — see the reasons in the panel.";
       }).catch(function (err) {
         note.textContent = refusalMessage(err, "Could not analyze that query.");
       });
