@@ -52,6 +52,32 @@
     return typeof root.frappe !== "undefined" && root.frappe && typeof root.frappe.call === "function";
   }
 
+  // EVERY server call goes through here. Frappe RESOLVES this promise when the
+  // server refused: the ajax .always path hands back the error payload instead
+  // of rejecting, so `.then(r => r.message)` sees undefined and cannot tell
+  // "worked, returned nothing" from "threw". That is how creating a migration
+  // project failed in total silence — request sent, refusal returned, .then ran,
+  // nothing said. Normalise it once, here, into a real rejection carrying the
+  // server's own text, which refusalMessage() already knows how to read.
+  //
+  // A missing `message` is NOT an error: get_migration_project returns null for
+  // an empty project. Only an explicit refusal marker counts.
+  function dsCall(opts) {
+    return root.frappe.call(opts).then(function (r) {
+      r = r || {};
+      if (r.exc_type || r.exc || r._server_messages) {
+        // Empty message on purpose: refusalMessage() prefers err.message, so a
+        // class name like "ValidationError" here would hide the server's actual
+        // sentence. Only fall back to the class when there is no sentence.
+        var e = new Error(r._server_messages ? "" : (r.exc_type || ""));
+        e._server_messages = r._server_messages;
+        e.exc = r.exc;
+        throw e;
+      }
+      return r;
+    });
+  }
+
   function toast(msg) {
     if (hasFrappe() && root.frappe.show_alert) root.frappe.show_alert({ message: msg, indicator: "blue" });
     else if (root.console) root.console.log("[Dashboard Studio] " + msg);
@@ -118,7 +144,7 @@
       this.openDashboard(this.options.dashboard);
       return;
     }
-    root.frappe.call({ method: "dashboard_studio.api.studio.list_dashboards" })
+    dsCall({ method: "dashboard_studio.api.studio.list_dashboards" })
       .then(function (r) {
         self.state.dashboards = r.message || [];
         if (self.state.dashboards.length) {
@@ -468,7 +494,7 @@
 
   App.prototype.openDashboard = function (name) {
     var self = this;
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.get_studio_dashboard",
       args: { dashboard: name },
     }).then(function (r) {
@@ -495,7 +521,7 @@
 
   App.prototype.listDashboards = function () {
     var self = this;
-    root.frappe.call({ method: "dashboard_studio.api.studio.list_dashboards" })
+    dsCall({ method: "dashboard_studio.api.studio.list_dashboards" })
       .then(function (r) {
         self.state.dashboards = r.message || [];
         self.render();
@@ -571,7 +597,7 @@
     var title = root.prompt("Dashboard title");
     if (title == null) return;
     if (!title.trim()) { toast("A dashboard needs a title."); return; }
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.create_dashboard",
       args: { dashboard_title: title.trim() },
     }).then(function (r) {
@@ -810,7 +836,7 @@
   App.prototype.refreshReadiness = function () {
     var self = this;
     if (!hasFrappe() || this.state.mock || !this.currentDashboard()) return;
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.governance.publish_readiness",
       args: { dashboard: this.currentDashboard() },
     }).then(function (r) {
@@ -903,7 +929,7 @@
     var self = this;
     if (this.state.subcriteria || this._subcriteriaWarming || !hasFrappe()) return;
     this._subcriteriaWarming = true;
-    root.frappe.call({ method: "dashboard_studio.api.studio.list_subcriteria" })
+    dsCall({ method: "dashboard_studio.api.studio.list_subcriteria" })
       .then(function (r) {
         self.state.subcriteria = r.message || [];
         if (self.state.view === "design") self.render();
@@ -913,7 +939,7 @@
 
   App.prototype.setScope = function (code) {
     var self = this;
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.set_dashboard_scope",
       args: { dashboard: this.state.dashboard.name, subcriterion: code || null },
     }).then(function (r) {
@@ -935,7 +961,7 @@
       toast("Adding a chart needs a live dashboard (not available in sample mode).");
       return;
     }
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.create_chart",
       args: { dashboard: dashboard, chart_type: chartType, copy_from: copyFrom || null },
     }).then(function (r) {
@@ -955,7 +981,7 @@
     }
     if (!root.confirm('Delete "' + (chart.chart_title || chart.name) +
         '"? Its metric is kept and stays available to other charts.')) return;
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.delete_chart",
       args: { chart: chart.name },
     }).then(function () {
@@ -1048,7 +1074,7 @@
     }
     this._rowsCache[chart.metric] = PENDING;
     body.innerHTML = '<div class="dss-nochart">Loading…</div>';
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.metrics.run_ds_metric",
       args: { metric_name: chart.metric },
     }).then(function (r) {
@@ -1134,7 +1160,7 @@
       toast(describe + " (mock — not persisted)");
       return;
     }
-    root.frappe.call({ method: "dashboard_studio.api.studio." + method, args: args })
+    dsCall({ method: "dashboard_studio.api.studio." + method, args: args })
       .then(function () { self.reloadDashboard(describe); })
       .catch(function () { toast("Could not " + describe.toLowerCase()); });
   };
@@ -1155,7 +1181,7 @@
 
   App.prototype.reloadDashboard = function (describe) {
     var self = this;
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.get_studio_dashboard",
       args: { dashboard: this.currentDashboard() },
     }).then(function (r) {
@@ -1585,8 +1611,8 @@
     }
     this.canvas.appendChild(el("div", "dss-hint", "Loading catalogue…"));
     Promise.all([
-      root.frappe.call({ method: "dashboard_studio.api.catalogue.get_catalogue" }),
-      root.frappe.call({ method: "dashboard_studio.api.catalogue.get_field_catalogue" }),
+      dsCall({ method: "dashboard_studio.api.catalogue.get_catalogue" }),
+      dsCall({ method: "dashboard_studio.api.catalogue.get_field_catalogue" }),
     ]).then(function (responses) {
       self.state.catalogue = responses[0].message || { doctypes: [], relationships: [] };
       self.state.fieldCatalogue = responses[1].message || [];
@@ -1724,7 +1750,7 @@
       return;
     }
     this.canvas.appendChild(el("div", "dss-hint", "Loading comparisons…"));
-    root.frappe.call({ method: "dashboard_studio.api.validation.list_comparisons" })
+    dsCall({ method: "dashboard_studio.api.validation.list_comparisons" })
       .then(function (r) {
         self.state.comparisons = r.message || [];
         if (self.state.view === "validation") self.paintValidation();
@@ -1797,7 +1823,7 @@
         return;
       }
       note.textContent = "Comparing…";
-      root.frappe.call({
+      dsCall({
         method: "dashboard_studio.api.validation.run_validation",
         args: { chart: picker.value, source_rows: JSON.stringify(parsed.rows) },
       }).then(function (r) {
@@ -1953,7 +1979,7 @@
       return;
     }
     this.paintValidation(); // show "Loading breakdown…" immediately
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.validation.get_comparison",
       args: { comparison: row.name },
     }).then(function (r) {
@@ -1982,7 +2008,7 @@
       toast("Accepted (mock — not persisted)");
       return;
     }
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.validation.accept_comparison",
       args: { comparison: row.name, accepted_reason: reason },
     }).then(function () {
@@ -2015,7 +2041,7 @@
       return;
     }
     this.canvas.appendChild(el("div", "dss-hint", "Loading governance…"));
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.governance.get_governance",
       args: { dashboard: this.currentDashboard() },
     }).then(function (r) {
@@ -2154,7 +2180,7 @@
       toast("Moved to " + move.to + " (mock — not persisted)");
       return;
     }
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.governance.advance_status",
       args: { dashboard: this.currentDashboard(), to_status: move.to },
     }).then(function (r) {
@@ -2187,7 +2213,7 @@
     }
     if (this.options.project && hasFrappe()) {
       this.canvas.innerHTML = '<div class="dss-nochart">Loading mapping project…</div>';
-      root.frappe.call({
+      dsCall({
         method: "dashboard_studio.api.studio.get_migration_project",
         args: { project: this.options.project },
       }).then(function (r) {
@@ -2600,7 +2626,7 @@
       self.state.pickedSource = null;
 
       note.textContent = "Analyzing…";
-      root.frappe.call({
+      dsCall({
         method: "dashboard_studio.api.migration.analyze_migration_sql",
         args: { sql: sql },
       }).then(function (r) {
@@ -2716,7 +2742,7 @@
     if (!hasFrappe()) { toast("Previewing a metric needs the server."); return; }
     this.state.metricPreview = { metric: metricName, loading: true };
     this.renderMappingPanel();
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.metrics.preview_ds_metric",
       args: { metric_name: metricName },
     }).then(function (r) {
@@ -2736,7 +2762,7 @@
   App.prototype.createChartFromMetric = function (metricName, dashboard) {
     var self = this;
     if (!hasFrappe() || !dashboard) { toast("Creating a chart needs a dashboard."); return; }
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.create_chart",
       args: { dashboard: dashboard, chart_type: "Bar Chart", metric: metricName },
     }).then(function (r) {
@@ -2755,12 +2781,21 @@
     var self = this;
     if (this.state.projectOptions || this._projectOptionsWarming || !hasFrappe()) return;
     this._projectOptionsWarming = true;
-    root.frappe.call({ method: "dashboard_studio.api.studio.list_migration_projects" })
+    dsCall({ method: "dashboard_studio.api.studio.list_migration_projects" })
       .then(function (r) {
         self.state.projectOptions = r.message || { projects: [], data_sources: [] };
         if (self.state.view === "mapping") self.renderMappingPanel();
       })
-      .catch(function () { self._projectOptionsWarming = false; });
+      .catch(function (err) {
+        // A failed READ must not block the WRITE. Listing projects and creating
+        // one are separate rights, and gating the create form behind the list
+        // left anyone whose list call failed with no way forward at all — the
+        // panel sat on "Loading projects…" with no form and no explanation.
+        self._projectOptionsWarming = false;
+        self.state.projectOptions = { projects: [], data_sources: [],
+          failed: refusalMessage(err, "Could not list existing migration projects.") };
+        if (self.state.view === "mapping") self.renderMappingPanel();
+      });
   };
 
   // Open a project without anyone typing a query string. The address bar is
@@ -2784,11 +2819,18 @@
 
   App.prototype.createProject = function (name, dataSource) {
     var self = this;
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.create_migration_project",
       args: { project_name: name, data_source: dataSource },
     }).then(function (r) {
       var made = r.message || {};
+      // A write that reports nothing is not a write that worked. Without this,
+      // useProject(undefined) returned at its own guard and the whole thing ended
+      // in silence — the exact shape of the fault this call had.
+      if (!made.name) {
+        toast("The server did not report a created project. Nothing was opened.");
+        return;
+      }
       self.state.projectOptions = null;   // refetched on the next empty state
       if (made.created_data_source) toast("Also created data source “" + made.data_source + "”");
       self.useProject(made.name);
@@ -2808,10 +2850,13 @@
       "Mappings are saved to a DS Migration Project — a different record from a " +
       "DS Dashboard. Pick one or make one; the address bar is updated for you."));
 
-    var options = this.state.projectOptions;
-    if (!options) {
-      box.appendChild(el("p", "dss-hint", "Loading projects…"));
-      return box;
+    // Only the DROPDOWN waits for the list. The create form below renders either
+    // way, so a failed or slow read never leaves the workspace with no way out.
+    var options = this.state.projectOptions || { projects: [], data_sources: [] };
+    if (!this.state.projectOptions) {
+      box.appendChild(el("p", "dss-hint", "Loading existing projects…"));
+    } else if (options.failed) {
+      box.appendChild(el("p", "dss-hint", options.failed + " You can still make a new one."));
     }
 
     if (options.projects.length) {
@@ -2919,7 +2964,7 @@
       return;
     }
 
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.save_migration_mapping_set",
       args: {
         project: this.options.project,
@@ -3003,7 +3048,7 @@
     }
     var self = this;
     if (this._metricList) { callback(this._metricList); return; }
-    root.frappe.call({ method: "dashboard_studio.api.studio.list_ds_metrics" })
+    dsCall({ method: "dashboard_studio.api.studio.list_ds_metrics" })
       .then(function (r) {
         // Kept whole: the properties panel reads calculation_type,
         // group_by_field and value_field off the same record.
@@ -3019,7 +3064,7 @@
       toast("Saved “" + chart.chart_title + "” (mock — not persisted)");
       return;
     }
-    root.frappe.call({
+    dsCall({
       method: "dashboard_studio.api.studio.save_chart",
       args: {
         chart: chart.name,
@@ -3053,7 +3098,7 @@
     }
     var self = this;
     Promise.all(this.state.charts.map(function (c) {
-      return root.frappe.call({
+      return dsCall({
         method: "dashboard_studio.api.studio.save_chart",
         args: { chart: c.name, patch: JSON.stringify(core.clampLayout(c)) },
       });
