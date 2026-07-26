@@ -165,7 +165,11 @@
   background: var(--dss-surface); box-shadow: var(--dss-shadow-sm); }
 .dss-palette-title { font-size: 13px; font-weight: 800; letter-spacing: -.2px; margin: 3px 0 10px; }
 .dss-palette-list { display: grid; gap: 6px; margin-bottom: 12px; }
+/* box-sizing: width:100% plus padding and border made every item 218px wide in a
+   190px rail, so labels were clipped by the overflow rather than by their own
+   width. Measured, not assumed. */
 .dss-palette-item { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 36px;
+  box-sizing: border-box;
   padding: 6px 9px; border: 1px solid var(--dss-line); border-radius: var(--dss-r-sm);
   background: var(--dss-surface); cursor: pointer; font: inherit; font-size: 12px;
   font-weight: 600; color: var(--dss-ink); text-align: left; }
