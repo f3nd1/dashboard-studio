@@ -685,7 +685,13 @@
       var tab = el("button", "dss-tab" + (active ? " is-active" : ""), pair[1]);
       tab.setAttribute("role", "tab");
       tab.setAttribute("aria-selected", active ? "true" : "false");
-      tab.addEventListener("click", function () { self.state.view = v; self.render(); });
+      tab.addEventListener("click", function () {
+        // Returning to Visualize is the signal that the person may have run the
+        // query in Insights meanwhile, so let the auto-apply have another go.
+        if (v === "visualize") self._autoApplyTried = null;
+        self.state.view = v;
+        self.render();
+      });
       tabs.appendChild(tab);
     });
     wrap.appendChild(tabs);
@@ -3050,9 +3056,26 @@
       });
     box.appendChild(links);
 
-    // Second action, after the person has run the query in Insights. Studio does
-    // not execute it: no result yet is a refusal that says to press Run, which
-    // is why this is a separate button rather than part of creation.
+    // Try it without being asked. The person's next move after creating is to go
+    // and run the query, so coming back is the moment to look — and the moment
+    // the columns first exist.
+    //
+    // Once per query per visit: the flag is set BEFORE the call, so a render
+    // triggered by the call's own result cannot start another one, and a refusal
+    // is not retried on every repaint. Entering the tab clears it.
+    //
+    // This notices that execution HAS happened. It never causes it — no result
+    // yet is a refusal telling the person to press Run, which is exactly the
+    // right message to show straight after creation.
+    this._autoApplyTried = this._autoApplyTried || {};
+    if (!made.applied && !this._autoApplyTried[made.name] && hasFrappe()) {
+      this._autoApplyTried[made.name] = true;
+      this.applyInsightsChart({ auto: true });
+    }
+
+    // Kept as the fallback: right after creation the automatic attempt will have
+    // refused (nothing has been run yet), and this is how someone retries
+    // deliberately without leaving and returning.
     if (!made.applied) {
       var apply = el("button", "dss-btn", "Set the axes in Insights");
       apply.title = "Reads the columns the query actually returned and sets them " +
@@ -3062,17 +3085,28 @@
     }
     if (this.state.insightsApplyError) {
       box.appendChild(el("div", "dss-vizerror", this.state.insightsApplyError));
+    } else if (this.state.insightsApplyHint) {
+      // Same sentence the server gives, in a quieter voice, because nobody asked
+      // for this attempt. "Open it in Insights, press Run, then come back" is
+      // instruction rather than failure when it appears seconds after creating.
+      box.appendChild(el("p", "dss-hint", this.state.insightsApplyHint));
     }
     return box;
   };
 
-  App.prototype.applyInsightsChart = function () {
+  App.prototype.applyInsightsChart = function (options) {
     var self = this;
+    var auto = !!(options && options.auto);
     var made = this.state.insightsResult || {};
     var fields = this.state.vizFields || {};
     if (!made.name || !hasFrappe()) return;
-    this.state.insightsApplyError = "Reading the query's columns…";
-    this.render();
+    this.state.insightsApplyHint = "";
+    // No "Reading…" flicker on an attempt nobody asked for, and no render here
+    // either — this one is called FROM a render.
+    if (!auto) {
+      this.state.insightsApplyError = "Reading the query's columns…";
+      this.render();
+    }
     dsCall({
       method: "dashboard_studio.api.insights.apply_insights_chart",
       args: {
@@ -3097,10 +3131,12 @@
         x_axis: set.x_axis, y_axis: set.y_axis,
       });
       self.state.insightsApplyError = "";
+      self.state.insightsApplyHint = "";
       self.render();
     }).catch(function (err) {
-      self.state.insightsApplyError =
-        refusalMessage(err, "Could not set the axes on that chart.");
+      var message = refusalMessage(err, "Could not set the axes on that chart.");
+      self.state.insightsApplyError = auto ? "" : message;
+      self.state.insightsApplyHint = auto ? message : "";
       self.render();
     });
   };
