@@ -2391,6 +2391,31 @@
   App.prototype.buildSqlImport = function () {
     var self = this;
     var wrap = el("div", "dss-sqlimport");
+
+    // Collapsed once a query has been analyzed successfully: the paste box has
+    // done its job and the canvas is the thing worth the screen. Stays open
+    // when nothing has been analyzed yet, or when the last one failed — those
+    // are the states where the box is still the task.
+    var done = this.state.lastAnalysis && this.state.lastAnalysis.supported;
+    if (done && !this.state.sqlOpen) {
+      var bar = el("div", "dss-sqlbar");
+      var summary = el("div", "dss-sqlbar-text");
+      summary.appendChild(el("strong", null, "Query analyzed"));
+      summary.appendChild(el("span", null,
+        (this.state.lastAnalysis.doctypes || []).join(", ") +
+        ((this.state.lastAnalysis.group_by || []).length
+          ? " · grouped by " + this.state.lastAnalysis.group_by.join(", ") : "")));
+      bar.appendChild(summary);
+      var edit = el("button", "dss-btn dss-btn-small", "Edit query");
+      edit.addEventListener("click", function () {
+        self.state.sqlOpen = true;
+        self.render();
+      });
+      bar.appendChild(edit);
+      wrap.appendChild(bar);
+      return wrap;
+    }
+
     var head = el("div", "dss-sqlimport-head");
     head.appendChild(el("div", "dss-kicker", "Import"));
     head.appendChild(el("h3", "dss-sqlimport-title", "Paste the Metabase SQL"));
@@ -2399,6 +2424,8 @@
     var box = el("textarea", "dss-input");
     box.placeholder = "SELECT COUNT(*) FROM `tabStudent Applicant` WHERE …";
     box.setAttribute("aria-label", "Metabase SQL");
+    box.value = this.state.sqlText || "";
+    box.addEventListener("input", function () { self.state.sqlText = box.value; });
     wrap.appendChild(box);
 
     var note = el("div", "dss-sqlnote");
@@ -2423,10 +2450,16 @@
         // note — so a query that parsed perfectly looked exactly like a hang.
         // The full report is in the panel; this says which one to read.
         var found = (analysis.doctypes || []).length;
-        note.textContent = analysis.supported
-          ? "Analyzed: " + found + " table(s) found, " +
-            (data.suggested_mappings || []).length + " mapping(s) suggested — see the panel."
-          : "Analyzed, but not translated — see the reasons in the panel.";
+        self.state.sqlOpen = !analysis.supported;
+        if (analysis.supported) {
+          // The note is about to be replaced by the collapsed bar, so the
+          // outcome goes to a toast — the bar then carries it persistently.
+          toast("Analyzed: " + found + " table(s) found, " +
+            (data.suggested_mappings || []).length + " mapping(s) suggested — see the panel.");
+          self.render();   // collapses the box and gives the canvas the room
+          return;
+        }
+        note.textContent = "Analyzed, but not translated — see the reasons in the panel.";
       }).catch(function (err) {
         note.textContent = refusalMessage(err, "Could not analyze that query.");
       });
