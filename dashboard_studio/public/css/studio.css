@@ -315,20 +315,20 @@
 .dss-band-controls .dss-btn { padding: 3px 8px; font-size: 11px; min-height: 0; }
 .dss-band-canvas { border: 0; border-radius: 0; }
 
-/* Source Mapping: a real 25/75 split. The stack is height-bounded, so the query
-   box cannot grow to its content and push the canvas off the page. */
-.dss-mapstack { display: flex; flex-direction: column; gap: 14px;
-  height: calc(100vh - 300px); min-height: 560px; }
-/* border-box or the 16px padding and 1px border land OUTSIDE the 25% basis and
-   the block measures 30%. */
+/* Source Mapping: two COLUMNS, not two rows. Query box left at 25% of the
+   width, canvas (with its mappings panel) right at 75%, both visible at once so
+   the page does not scroll vertically.
+   Nothing here sets overflow: the only scrollbar in the query column is the
+   textarea's own. */
+.dss-mapstack { display: flex; flex-direction: row; gap: 14px; align-items: stretch; }
+/* border-box or the 16px padding and 1px border land outside the 25% basis. */
 .dss-mapstack > .dss-sqlimport { flex: 0 0 25%; box-sizing: border-box;
-  min-height: 0; overflow: auto; margin-bottom: 0; }
-.dss-mapstack > .dss-main { flex: 1 1 75%; min-height: 0; align-items: stretch; }
-.dss-mapstack > .dss-main > .dss-canvas,
-.dss-mapstack > .dss-main > .dss-panel { height: 100%; min-height: 0; overflow: auto; }
-/* The textarea shrinks with the box rather than holding an 88px floor that would
-   blow the 25% budget on a short viewport. */
-.dss-mapstack .dss-sqlimport textarea.dss-input { min-height: 52px; }
+  min-width: 0; margin-bottom: 0; }
+.dss-mapstack > .dss-main { flex: 1; min-width: 0; align-items: stretch; }
+/* The mappings panel is narrower here than in the Builder — the query column has
+   taken a quarter of the row. */
+.dss-mapstack > .dss-main { grid-template-columns: 1fr 240px; }
+.dss-mapstack .dss-sqlimport textarea.dss-input { min-height: 220px; }
 
 /* ---- Side panel (diagram editor / mapping) ---- */
 .dss-panel { border: 1px solid var(--dss-line); border-radius: var(--dss-r-lg); padding: 16px;
@@ -365,6 +365,10 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
   font-size: 12px; margin: 11px 0 9px; }
 .dss-sqlimport select.dss-input { width: auto; min-width: 240px; margin-top: 11px; }
 .dss-sqlimport-actions { display: flex; align-items: center; gap: 12px; }
+/* In the 25% column the row is too narrow to sit the note beside the button —
+   the button wrapped onto two lines. Stack them instead. */
+.dss-mapstack .dss-sqlimport-actions { flex-direction: column; align-items: flex-start; gap: 8px; }
+.dss-mapstack .dss-sqlimport-actions .dss-btn { white-space: nowrap; }
 .dss-sqlnote { font-size: 11px; color: var(--dss-muted); }
 .dss-sqlimport .dss-note { margin-top: 12px; padding-top: 10px; }
 .dss-analysis { font-size: 10px; line-height: 1.5; border-radius: var(--dss-r-md); padding: 9px 11px;

@@ -73,6 +73,15 @@
     return raw.replace(/<[^>]*>/g, "").trim() || fallback;
   }
 
+  // How far the pointer may travel between mousedown and mouseup and still count
+  // as a click. The old rule was |dx|+|dy| > 3, which trips at 2px diagonal —
+  // essentially every trackpad click — so clicking a node did nothing on the
+  // real site while a Playwright click, which moves zero pixels, passed.
+  //
+  // ponytail: 12px flat. Deliberate drags travel far more; the cost is that a
+  // sub-12px reposition is ignored, which no one needs.
+  var DRAG_THRESHOLD_PX = 12;
+
   function App(mountPoint, options) {
     this.mount = mountPoint;
     this.options = options || {};
@@ -699,9 +708,7 @@
       main.appendChild(this.buildPalette());
     }
     this.canvas = el("div", "dss-canvas");
-    // Mapping sizes the canvas from the stack; every other view still needs a
-    // floor so an empty canvas is not a 0px sliver.
-    if (this.state.view !== "mapping") this.canvas.style.minHeight = "480px";
+    this.canvas.style.minHeight = "480px";
     main.appendChild(this.canvas);
     this.panel = el("div", "dss-panel");
     main.appendChild(this.panel);
@@ -2264,25 +2271,36 @@
     });
 
     // Pixel drag to reposition; positions persist in DS Canvas Node shape.
+    //
+    // The drag moves THIS element and rebuilds the canvas once, on mouseup.
+    // It used to call refreshMapping() on every mousemove, which replaced every
+    // node div mid-gesture — so mouseup landed on a different element than
+    // mousedown and the browser fired no click at all. A Playwright click moves
+    // zero pixels and never triggered it; a human trackpad moves several, so
+    // clicking a node did nothing on the real site while the test passed.
     div.addEventListener("mousedown", function (e) {
       var startX = e.clientX, startY = e.clientY;
       var baseX = node.pos_x, baseY = node.pos_y;
-      var moved = false;
       dragged = false;
       function onMove(ev) {
         var dx = ev.clientX - startX, dy = ev.clientY - startY;
-        if (Math.abs(dx) + Math.abs(dy) > 3) {
-          moved = true;
-          dragged = true; // consumed by the click handler above
-        }
-        if (!moved) return;
+        // Euclidean, and at a human threshold. The old rule was |dx|+|dy| > 3,
+        // which a trackpad click clears without anyone meaning to drag — so a
+        // normal click was classified as a drag and the node did nothing.
+        // Playwright's click() moves zero pixels, which is why the test passed.
+        if (!dragged && Math.sqrt(dx * dx + dy * dy) <= DRAG_THRESHOLD_PX) return;
+        dragged = true; // consumed by the click handler above
         node.pos_x = Math.max(0, baseX + dx);
         node.pos_y = Math.max(0, baseY + dy);
-        self.refreshMapping();
+        div.style.left = node.pos_x + "px";
+        div.style.top = node.pos_y + "px";
       }
       function onUp() {
         root.removeEventListener("mousemove", onMove);
         root.removeEventListener("mouseup", onUp);
+        // ponytail: connector lines redraw here rather than per frame. They lag
+        // the node during a drag; wire them per-move if that ever grates.
+        if (dragged) self.refreshMapping();
       }
       root.addEventListener("mousemove", onMove);
       root.addEventListener("mouseup", onUp);
