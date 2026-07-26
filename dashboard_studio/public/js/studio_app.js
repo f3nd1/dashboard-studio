@@ -2663,6 +2663,39 @@
   // found and suggests identity mappings, which the user then confirms or
   // rejects. Returned as an element so the caller can place it prominently
   // instead of tucking it under the mapping list.
+  // The outcome of the last Insights handoff. Persistent, like the save result:
+  // a toast that has already faded is not an answer to "did that work?".
+  //
+  // TWO links on purpose. The Desk one is derived from Frappe and is correct on
+  // any install; the Insights one depends on where that install mounts its SPA,
+  // which is the single thing about this handoff that could not be confirmed
+  // from source. If the first link 404s the second still opens the record.
+  App.prototype.buildInsightsResult = function () {
+    var made = this.state.insightsResult;
+    if (!made) return null;
+    var box = el("div", "dss-saveresult is-ok");
+    box.appendChild(el("div", "dss-saveresult-title",
+      made.reused
+        ? "Already in Insights — " + made.name
+        : "Created in Insights — " + made.name));
+    box.appendChild(el("div", "dss-saveresult-detail",
+      "“" + made.title + "”, a native query against " + made.data_source + ". " +
+      (made.reused
+        ? "The same SQL was already there, so nothing new was created."
+        : "Build the chart in Insights — Studio does not create one.")));
+    var links = el("div", "dss-insights-links");
+    [["Open in Insights", made.insights_url], ["Open the record", made.desk_url]]
+      .forEach(function (pair) {
+        var a = el("a", "dss-link", pair[0]);
+        a.href = pair[1];
+        a.target = "_blank";
+        a.rel = "noopener";
+        links.appendChild(a);
+      });
+    box.appendChild(links);
+    return box;
+  };
+
   App.prototype.buildSqlImport = function () {
     var self = this;
     var wrap = el("div", "dss-sqlimport");
@@ -2727,11 +2760,50 @@
     clear.disabled = !(this.state.mapNodes || []).length;
     clear.addEventListener("click", function () { self.clearCanvas(); });
 
+    // Hand the SQL to Insights as a real Query. Insights owns charting from
+    // there — Studio creates the Query and stops, deliberately. Chart creation
+    // is NOT attempted: a valid Insights chart config has to declare a data type
+    // per axis column, and for native SQL those only exist after execution.
+    var toInsights = el("button", "dss-btn", "Create in Insights");
+    toInsights.title = "Create a native Insights query holding this SQL, then " +
+      "build the chart in Insights itself";
+    toInsights.addEventListener("click", function () {
+      var sql = (box.value || "").trim();
+      if (!sql) { note.textContent = "Paste a query first."; return; }
+      if (!hasFrappe()) {
+        note.textContent = "Creating an Insights query needs the server (not available in mock mode).";
+        return;
+      }
+      note.textContent = "Creating in Insights…";
+      dsCall({
+        method: "dashboard_studio.api.insights.create_insights_query",
+        args: { sql: sql, analysis: JSON.stringify(self.state.lastAnalysis || null) },
+      }).then(function (r) {
+        var made = r.message;
+        if (!made || !made.name) {
+          note.textContent = "The server reported no Insights query. Nothing was created.";
+          return;
+        }
+        self.state.insightsResult = made;
+        note.textContent = "";
+        // render(), not refreshMapping(): the result card lives in the import
+        // block, which refreshMapping does not redraw — the same trap the Clear
+        // canvas button hit.
+        self.render();
+      }).catch(function (err) {
+        self.state.insightsResult = null;
+        note.textContent = refusalMessage(err, "Could not create that Insights query.");
+      });
+    });
+
     var actions = el("div", "dss-sqlimport-actions");
     actions.appendChild(analyze);
     actions.appendChild(clear);
+    actions.appendChild(toInsights);
     actions.appendChild(note);
     wrap.appendChild(actions);
+    var handoff = this.buildInsightsResult();
+    if (handoff) wrap.appendChild(handoff);
     // The other prototype import routes (dashboard URL / API, result CSV) are
     // not built — say so rather than showing dead controls.
     wrap.appendChild(el("p", "dss-hint dss-note",

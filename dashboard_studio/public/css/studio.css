@@ -423,6 +423,12 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 .dss-saveresult.is-ok { background: var(--dss-green-100); border: 1px solid #b9e0c4; }
 .dss-saveresult.is-warn { background: var(--dss-orange-100); border: 1px solid #f0d19a; }
 .dss-saveresult-title { font-size: 12px; font-weight: 800; color: var(--dss-ink); }
+/* Both handoff links, side by side. Two because only the Desk one is certain —
+   see INSIGHTS_QUERY_PATH in api/insights.py. */
+.dss-insights-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.dss-link { font-size: 11px; font-weight: 700; color: var(--dss-blue);
+  text-decoration: underline; }
+.dss-link:hover { color: var(--dss-navy); }
 .dss-saveresult-detail { font-size: 10.5px; line-height: 1.5; color: var(--dss-ink-700);
   margin-top: 3px; overflow-wrap: anywhere; }
 
