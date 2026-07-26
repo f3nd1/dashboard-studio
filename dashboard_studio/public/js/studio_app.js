@@ -2217,8 +2217,10 @@
       return;
     }
     // No ?project= is not a failure — the SQL box above still works, and
-    // analysis is read-only. Say what is missing instead of inventing a canvas.
+    // analysis is read-only. The panel offers a project to pick or create, so
+    // nobody has to leave for /app/ds-migration-project and hand-build a URL.
     this.state.mapNodes = [];
+    this.loadProjectOptions();
     this.refreshMapping();
   };
 
@@ -2485,6 +2487,11 @@
       self.panel.appendChild(row);
     });
 
+    if (!this.options.project && !this.state.mock && hasFrappe()) {
+      this.loadProjectOptions();
+      this.panel.appendChild(this.buildProjectPicker());
+    }
+
     var actions = el("div", "dss-map-actions");
     var save = el("button", "dss-btn dss-btn-primary", "Save mappings");
     save.addEventListener("click", function () { self.saveMappings(); });
@@ -2732,6 +2739,120 @@
     }).catch(function (err) {
       toast(refusalMessage(err, "Could not create that chart."));
     });
+  };
+
+  App.prototype.loadProjectOptions = function () {
+    var self = this;
+    if (this.state.projectOptions || this._projectOptionsWarming || !hasFrappe()) return;
+    this._projectOptionsWarming = true;
+    root.frappe.call({ method: "dashboard_studio.api.studio.list_migration_projects" })
+      .then(function (r) {
+        self.state.projectOptions = r.message || { projects: [], data_sources: [] };
+        if (self.state.view === "mapping") self.renderMappingPanel();
+      })
+      .catch(function () { self._projectOptionsWarming = false; });
+  };
+
+  // Open a project without anyone typing a query string. The address bar is
+  // corrected too, so a reload or a shared link keeps working.
+  App.prototype.useProject = function (project) {
+    if (!project) return;
+    this.options.project = project;
+    if (root.history && root.history.replaceState) {
+      var url = new URL(root.location.href);
+      url.searchParams.set("project", project);
+      // replaceState, not frappe.set_route: this must not reload the page and
+      // throw away the analysis already on the canvas.
+      root.history.replaceState({}, "", url.toString());
+    }
+    this.state.mapNodes = null;      // reload the project's own mappings
+    this.state.mappings = [];
+    this.state.saveResult = null;
+    this.renderMapping();
+    toast("Working in migration project “" + project + "”");
+  };
+
+  App.prototype.createProject = function (name, dataSource) {
+    var self = this;
+    root.frappe.call({
+      method: "dashboard_studio.api.studio.create_migration_project",
+      args: { project_name: name, data_source: dataSource },
+    }).then(function (r) {
+      var made = r.message || {};
+      self.state.projectOptions = null;   // refetched on the next empty state
+      if (made.created_data_source) toast("Also created data source “" + made.data_source + "”");
+      self.useProject(made.name);
+    }).catch(function (err) {
+      toast(refusalMessage(err, "Could not create that migration project."));
+    });
+  };
+
+  // The panel block shown when the workspace has no project. A DS Migration
+  // Project is not a DS Dashboard, and the copy says so — passing a dashboard
+  // name in ?project= is the mistake this replaces.
+  App.prototype.buildProjectPicker = function () {
+    var self = this;
+    var box = el("div", "dss-projectpick");
+    box.appendChild(el("div", "dss-projectpick-title", "No migration project open"));
+    box.appendChild(el("p", "dss-hint",
+      "Mappings are saved to a DS Migration Project — a different record from a " +
+      "DS Dashboard. Pick one or make one; the address bar is updated for you."));
+
+    var options = this.state.projectOptions;
+    if (!options) {
+      box.appendChild(el("p", "dss-hint", "Loading projects…"));
+      return box;
+    }
+
+    if (options.projects.length) {
+      var pick = el("select", "dss-input");
+      pick.setAttribute("aria-label", "Migration project to open");
+      var none = el("option", null, "Choose a project…");
+      none.value = "";
+      pick.appendChild(none);
+      options.projects.forEach(function (pr) {
+        var o = el("option", null, pr.project_name + " · " + (pr.status || "Not Started"));
+        o.value = pr.name;
+        pick.appendChild(o);
+      });
+      pick.addEventListener("change", function () { self.useProject(pick.value); });
+      box.appendChild(pick);
+      box.appendChild(el("div", "dss-projectpick-or", "or make a new one"));
+    }
+
+    var name = el("input", "dss-input");
+    name.placeholder = "New project name";
+    name.setAttribute("aria-label", "New migration project name");
+    box.appendChild(name);
+
+    // Required, not optional: DS Migration Project.data_source is reqd and
+    // save_migration_mapping_set refuses a project without one, so offering to
+    // skip it would create a project that cannot be saved to.
+    var source = el("input", "dss-input");
+    source.setAttribute("list", "dss-datasource-options");
+    source.placeholder = "Data source (required)";
+    source.setAttribute("aria-label", "Data source for the new project");
+    var dl = el("datalist");
+    dl.id = "dss-datasource-options";
+    (options.data_sources || []).forEach(function (ds) {
+      var o = el("option");
+      o.value = ds.name;
+      dl.appendChild(o);
+    });
+    box.appendChild(dl);
+    box.appendChild(source);
+    box.appendChild(el("p", "dss-hint",
+      "A data source names where the queries came from, e.g. Metabase. " +
+      "A name that does not exist yet is created."));
+
+    var make = el("button", "dss-btn dss-btn-primary", "Create and open");
+    make.addEventListener("click", function () {
+      if (!name.value.trim()) { toast("Give the project a name."); return; }
+      if (!source.value.trim()) { toast("A project needs a data source."); return; }
+      self.createProject(name.value.trim(), source.value.trim());
+    });
+    box.appendChild(make);
+    return box;
   };
 
   App.prototype.clearCanvas = function () {

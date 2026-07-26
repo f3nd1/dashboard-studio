@@ -66,7 +66,9 @@ class _FakeDoc:
             name = self._data.get(keyed) if keyed else None
         if not name:
             name = f"{self._doctype}-{len(table) + 1}"
-            self._data["name"] = name
+        # Frappe sets doc.name on insert. Setting only the store key left
+        # doc.name unreadable, which no caller had noticed until one read it.
+        self._data["name"] = name
         table[name] = dict(self._data)
 
     def save(self):
@@ -358,6 +360,51 @@ class TestMigrationMappingApi(unittest.TestCase):
         )
         self.assertEqual(result["saved_mappings"], 1)
         self.assertEqual(len(self.store["DS Migration Project"]["P1"]["canvas_nodes"]), 1)
+
+
+class TestProjectDiscovery(TestMigrationMappingApi):
+    """Finding or making a project without leaving the workspace."""
+
+    def setUp(self):
+        super().setUp()
+        self.store["DS Data Source"] = {
+            "Metabase (MOCK)": {"name": "Metabase (MOCK)", "source_name": "Metabase (MOCK)"},
+        }
+
+    def test_it_lists_projects_and_data_sources_in_one_call(self):
+        result = self.studio.list_migration_projects()
+        self.assertEqual(
+            sorted(p["name"] for p in result["projects"]), ["P-NOSOURCE", "P1"])
+        self.assertEqual([s["name"] for s in result["data_sources"]], ["Metabase (MOCK)"])
+
+    def test_creating_a_project_against_an_existing_source(self):
+        result = self.studio.create_migration_project("Intake 2026", "Metabase (MOCK)")
+        self.assertEqual(result["name"], "Intake 2026", "autoname is field:project_name")
+        self.assertFalse(result["created_data_source"])
+        self.assertEqual(self.store["DS Migration Project"]["Intake 2026"]["status"], "Not Started")
+
+    def test_an_unknown_data_source_is_created_and_reported(self):
+        """Implicit, but never silent — the response says it happened."""
+        result = self.studio.create_migration_project("Intake 2026", "Brand New Source")
+        self.assertTrue(result["created_data_source"])
+        self.assertIn("Brand New Source", self.store["DS Data Source"])
+
+    def test_a_project_without_a_data_source_is_refused(self):
+        """data_source is reqd, and save_migration_mapping_set refuses without it,
+        so creating one that cannot be saved to would be a trap."""
+        with self.assertRaises(_ValidationError) as caught:
+            self.studio.create_migration_project("Intake 2026", "")
+        self.assertIn("data source", str(caught.exception))
+
+    def test_a_project_without_a_name_is_refused(self):
+        with self.assertRaises(_ValidationError):
+            self.studio.create_migration_project("   ", "Metabase (MOCK)")
+
+    def test_creating_is_write_gated_listing_is_not(self):
+        self._as("Dashboard Studio Viewer")
+        self.studio.list_migration_projects()          # read is fine
+        with self.assertRaises(_PermissionError):
+            self.studio.create_migration_project("X", "Metabase (MOCK)")
 
 
 class TestMetricGeneration(TestMigrationMappingApi):

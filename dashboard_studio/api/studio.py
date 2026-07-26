@@ -267,6 +267,73 @@ def delete_section(section: str):
 
 
 @frappe.whitelist()
+def list_migration_projects():
+    """Migration projects and the data sources one can be created against.
+
+    Both in one call because they fill one form: the Source Mapping workspace
+    opened without ?project= has to offer "pick an existing one" and "make a new
+    one" together, and two round trips for one panel is silly.
+
+    A DS Migration Project is NOT a DS Dashboard — different record, different
+    purpose — which is exactly the confusion this endpoint exists to end.
+    """
+    frappe.only_for(DS_READ_ROLES)
+    return {
+        "projects": frappe.get_all(
+            "DS Migration Project",
+            fields=["name", "project_name", "data_source", "status", "modified"],
+            order_by="modified desc",
+        ),
+        "data_sources": frappe.get_all(
+            "DS Data Source", fields=["name", "source_name"], order_by="source_name asc"
+        ),
+    }
+
+
+@frappe.whitelist()
+def create_migration_project(project_name: str, data_source: str):
+    """Create a migration project from inside the workspace.
+
+    ``data_source`` is REQUIRED — DS Migration Project.data_source is reqd, and
+    save_migration_mapping_set refuses a project without one. It may name a
+    DS Data Source that does not exist yet, in which case it is created.
+
+    ponytail: creating the data source implicitly writes a second record. It is
+    defensible only because a project cannot exist without one and a site may
+    have none, so the alternative is sending someone to a different list view —
+    the exact problem this endpoint removes. The response says which records were
+    created, so nothing is silent. Split it into its own step if data sources
+    ever grow fields worth filling in properly.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    title = (project_name or "").strip()
+    source = (data_source or "").strip()
+    if not title:
+        frappe.throw("A migration project needs a name.")
+    if not source:
+        frappe.throw("A migration project needs a data source — it is where mappings are saved.")
+
+    created_source = False
+    if not frappe.db.exists("DS Data Source", source):
+        frappe.get_doc({"doctype": "DS Data Source", "source_name": source, "is_active": 1}).insert()
+        created_source = True
+
+    doc = frappe.get_doc({
+        "doctype": "DS Migration Project",
+        "project_name": title,
+        "data_source": source,
+        "status": "Not Started",
+    }).insert()
+    return {
+        "name": doc.name,
+        "project_name": title,
+        "data_source": source,
+        "status": doc.status,
+        "created_data_source": created_source,
+    }
+
+
+@frappe.whitelist()
 def get_migration_project(project: str):
     """Return a DS Migration Project with the mappings and canvas layout it needs.
 
