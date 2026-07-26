@@ -43,7 +43,8 @@
    "fieldname": "chart_type",
    "fieldtype": "Select",
    "label": "Chart Type",
-   "options": "KPI Card\nBar Chart\nLine Chart\nDonut Chart\nTable\nTrend Chart\nGauge\nFunnel\nLifecycle\nFlow\nMatrix\nRadar\nDecision Diagram\nNetwork Diagram\nReconciliation Diagram\nMaturity Ladder\nRisk Matrix"
+   "options": "KPI Card\nBar Chart\nLine Chart\nDonut Chart\nTable\nTrend Chart\nGauge\nFunnel\nLifecycle\nFlow\nMatrix\nRadar\nDecision Diagram\nNetwork Diagram\nReconciliation Diagram\nMaturity Ladder\nRisk Matrix",
+   "description": "Not every type has a Sophia plugin; three have none and an unknown type silently renders as a bar chart there. See docs/CHART_TYPE_MAPPING.md."
   },
   {
    "fieldname": "metric",

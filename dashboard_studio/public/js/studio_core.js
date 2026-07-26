@@ -7,6 +7,11 @@
   "use strict";
 
   // Mirrors the DS Chart `chart_type` Select options.
+  //
+  // Which of these Sophia can actually render is NOT one-to-one — three have
+  // no plugin at all, and an unknown type silently falls back to a bar chart
+  // there. The table is docs/CHART_TYPE_MAPPING.md; recheck it when a type is
+  // added here or a registerChartPlugin call changes on the Sophia side.
   var CHART_TYPES = [
     "KPI Card", "Bar Chart", "Line Chart", "Donut Chart", "Table", "Trend Chart",
     "Gauge", "Funnel", "Lifecycle", "Flow", "Matrix", "Radar", "Decision Diagram",
