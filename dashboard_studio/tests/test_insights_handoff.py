@@ -7,9 +7,10 @@ Three things carry weight here and each is asserted from both directions:
 2. Studio never files a statement that writes;
 3. the same SQL twice reuses the record instead of piling up duplicates.
 
-MOCK-BASED for Frappe — no live Bench. The fake models Insights' v2 shape as
-confirmed on the site: Insights Query with a plain `sql` field, `is_native_query`
-and a `data_source` Link to "Site DB".
+MOCK-BASED for Frappe — no live Bench. The fake models Insights **v3** as
+confirmed live on the site: a query belongs to a Workbook and carries its SQL
+inside an `operations` JSON array, and a chart's axes live in a `config` JSON.
+The fixtures below are copied from real records, not invented — see REAL_CONFIG.
 """
 
 import sys
@@ -31,6 +32,9 @@ class _PermissionError(Exception):
 
 class _ValidationError(Exception):
     pass
+
+
+_PREFIX = {"Insights Query v3": "s39rc7j64", "Insights Chart v3": "tt51l7mma"}
 
 
 class _FakeDoc:
@@ -55,11 +59,14 @@ class _FakeDoc:
         return self._data.get(key, default)
 
     def insert(self):
-        table = self._store.setdefault(self._data["doctype"], {})
-        # Insights Query is autoname: format:QRY-{####} — a generated name, NOT
-        # the title. A fake that named records by title would have hidden that
-        # the reuse key has to be the SQL.
-        self._data["name"] = f"QRY-{1300 + len(table) + 1}"
+        doctype = self._data["doctype"]
+        table = self._store.setdefault(doctype, {})
+        # Real v3 names, so nothing can quietly depend on the v2 "QRY-" prefix:
+        # a Workbook is autoincrement (so "1", "2"), a query and a chart get a
+        # random-looking hash ("s39rc7j648"). Named here, never by title, because
+        # that is what forces the reuse key to be the SQL.
+        self._data["name"] = (str(len(table) + 1) if doctype == "Insights Workbook"
+                              else f"{_PREFIX.get(doctype, 'x')}{len(table) + 1}k7a2d")
         table[self._data["name"]] = dict(self._data)
         return self
 
@@ -68,7 +75,7 @@ class _FakeDoc:
         return self
 
 
-def _make_fake_frappe(store, roles, doctypes=("Insights Query",), sources=("Site DB",)):
+def _make_fake_frappe(store, roles, doctypes=("Insights Query v3",), sources=("Site DB",)):
     frappe = types.ModuleType("frappe")
     frappe.PermissionError = _PermissionError
     frappe.ValidationError = _ValidationError
@@ -130,7 +137,7 @@ def _make_fake_frappe(store, roles, doctypes=("Insights Query",), sources=("Site
 
 class _Base(unittest.TestCase):
     roles = {"Dashboard Studio Editor", "Insights User"}
-    doctypes = ("Insights Query",)
+    doctypes = ("Insights Query v3",)
     sources = ("Site DB",)
 
     def setUp(self):
@@ -160,24 +167,52 @@ class _Base(unittest.TestCase):
         return str(caught.exception)
 
     def queries(self):
-        return list(self.store.get("Insights Query", {}).values())
+        return list(self.store.get("Insights Query v3", {}).values())
+
+    def stored_sql(self, index=0):
+        """The SQL as v3 really holds it: inside the operations array."""
+        return self.api.operation_sql(
+            __import__("json").loads(self.queries()[index]["operations"]))
+
+    def workbooks(self):
+        return list(self.store.get("Insights Workbook", {}).values())
 
 
 class TestCreate(_Base):
-    def test_creates_a_native_query_against_site_db(self):
+    def test_creates_a_native_query_with_a_real_v3_operations_array(self):
         result = self.api.create_insights_query(SQL, analysis=ANALYSIS)
         row = self.queries()[0]
         self.assertEqual(row["is_native_query"], 1)
-        self.assertEqual(row["data_source"], "Site DB")
-        self.assertEqual(row["sql"], SQL)
+        self.assertEqual(row["use_live_connection"], 1)
         self.assertEqual(row["title"], "Count of Student Applicant by agent")
-        self.assertTrue(result["name"].startswith("QRY-"))
+        self.assertEqual(
+            __import__("json").loads(row["operations"]),
+            [{"type": "sql", "raw_sql": SQL, "data_source": "Site DB"}],
+            "the SQL must be inside operations — v3 has no sql field",
+        )
         self.assertFalse(result["reused"])
 
-    def test_returns_both_links_because_only_one_is_certain(self):
+    def test_the_query_belongs_to_a_workbook_created_on_first_use(self):
+        """workbook is a REQD Link in v3 — there is no query without one."""
+        result = self.api.create_insights_query(SQL)
+        self.assertEqual(len(self.workbooks()), 1)
+        self.assertEqual(self.workbooks()[0]["title"], "Dashboard Studio")
+        self.assertEqual(self.queries()[0]["workbook"], result["workbook"])
+
+    def test_a_second_query_reuses_the_same_workbook(self):
+        self.api.create_insights_query(SQL)
+        self.api.create_insights_query(SQL.replace("agent", "nationality"))
+        self.assertEqual(len(self.workbooks()), 1, "a workbook per query litters the sidebar")
+        self.assertEqual(len({q["workbook"] for q in self.queries()}), 1)
+
+    def test_the_insights_url_carries_the_workbook_as_well_as_the_query(self):
+        """The v3 route needs both; the v2 path loads an empty shell."""
         result = self.api.create_insights_query(SQL, analysis=ANALYSIS)
-        self.assertIn(result["name"], result["insights_url"])
-        self.assertEqual(result["desk_url"], "/app/insights-query/" + result["name"])
+        self.assertEqual(
+            result["insights_url"],
+            f"/insights/workbook/{result['workbook']}/query/{result['name']}",
+        )
+        self.assertEqual(result["desk_url"], "/app/insights-query-v3/" + result["name"])
 
     def test_an_explicit_title_wins_over_the_derived_one(self):
         self.api.create_insights_query(SQL, title="  Agent intake  ", analysis=ANALYSIS)
@@ -192,7 +227,7 @@ class TestCreate(_Base):
 
     def test_a_trailing_semicolon_is_stripped_not_refused(self):
         self.api.create_insights_query(SQL + " ;")
-        self.assertEqual(self.queries()[0]["sql"], SQL)
+        self.assertEqual(self.stored_sql(), SQL)
 
     # ---------------------------------------------------------------- reuse
     def test_the_same_sql_twice_reuses_the_record(self):
@@ -251,7 +286,17 @@ class TestRefusals(_Base):
         self.frappe._doctypes = set()
         message = self.refusal(SQL)
         self.assertIn("not installed", message)
-        self.assertIn("Insights Query v3", message, "v3 must be named as the other case")
+        self.assertIn("Insights Query v3", message, "v3 must be named as what is missing")
+
+    def test_a_v2_only_site_is_refused_rather_than_written_to(self):
+        """The unsound guard: v3 ships the v2 DocTypes too, so presence proves
+        nothing. Testing for the v2 name passed on v3 and wrote an orphan."""
+        self.frappe._doctypes = {"Insights Query", "Insights Chart"}
+        message = self.refusal(SQL)
+        self.assertIn("older than v3", message)
+        self.assertEqual(self.queries(), [])
+        self.assertEqual(self.store.get("Insights Query", {}), {},
+                         "it fell back to writing a v2 record")
 
     def test_a_missing_site_db_source_is_named(self):
         self.frappe._sources = set()
@@ -295,42 +340,63 @@ if __name__ == "__main__":
     unittest.main()
 
 
-# The column row of a real executed result: metadata first, then data rows.
-COLUMNS = [
-    [{"label": "student_category", "type": "String", "options": {}},
-     {"label": "count", "type": "Integer", "options": {}}],
-    ["Local", 42], ["International", 17],
+# THE REAL v3 CHART CONFIG, read back from chart tt51l7mma3 on the live site
+# (chart_type "Line", query tt49ok7a2d). Every assertion below measures against
+# this rather than against a shape anybody reasoned their way to.
+REAL_CONFIG = {
+    "x_axis": {
+        "dimension": {"column_name": "academic_year", "data_type": "String",
+                      "dimension_name": "academic_year"}
+    },
+    "y_axis": {
+        "series": [{
+            "measure": {"aggregation": "count", "column_name": "count",
+                        "data_type": "Integer", "measure_name": "count"},
+            "type": "line",
+        }]
+    },
+}
+
+# A Metabase card's result_metadata, as describe_card returns it. This is the
+# only source of per-column types on v3: nothing persists a query's result, so
+# there is nothing to read back after the person presses Run.
+CARD_COLUMNS = [
+    {"name": "academic_year", "display_name": "Academic Year", "base_type": "type/Text"},
+    {"name": "count", "display_name": "Count", "base_type": "type/BigInteger"},
 ]
-# What a real chart looks like before Studio touches it — colours and label
-# rotation a person already set, which must survive.
-STYLED = {"rotateLabels": "45", "colors": ["#123456"], "title": "Hand-written title",
-          "query": "QRY-1321"}
+
+QUERY = "s39rc7j648"
 
 
-def _chart_store(results=COLUMNS, options=None, chart="CHART-1"):
-    return {
-        "Insights Query": {"QRY-1": {"name": "QRY-1", "chart": chart, "title": "Q"}},
-        "Insights Chart": {"CHART-1": {"name": "CHART-1", "query": "QRY-1",
-                                       "chart_type": "", "options": options or {}}},
-        "Insights Query Result": ({"RES-1": {"name": "RES-1", "query": "QRY-1",
-                                             "results": results}} if results is not None else {}),
+def _chart_store(chart_config=None):
+    store = {
+        "Insights Workbook": {"2": {"name": "2", "title": "Dashboard Studio"}},
+        "Insights Query v3": {QUERY: {"name": QUERY, "workbook": "2", "title": "Q"}},
     }
+    if chart_config is not None:
+        store["Insights Chart v3"] = {
+            "tt51l7mma3": {"name": "tt51l7mma3", "query": QUERY, "workbook": "2",
+                           "chart_type": "", "config": chart_config}
+        }
+    return store
 
 
 class _ChartBase(_Base):
-    results = COLUMNS
-    options = None
-    chart = "CHART-1"
+    existing_chart = None      # None -> the query has no chart yet, as in real v3
 
     def setUp(self):
         super().setUp()
-        self.store.update(_chart_store(self.results, self.options, self.chart))
+        self.store.update(_chart_store(self.existing_chart))
 
-    def chart_doc(self):
-        return self.store["Insights Chart"]["CHART-1"]
+    def charts(self):
+        return list(self.store.get("Insights Chart v3", {}).values())
+
+    def config(self, index=0):
+        return __import__("json").loads(self.charts()[index]["config"])
 
     def apply(self, **kwargs):
-        return self.api.apply_insights_chart("QRY-1", **kwargs)
+        kwargs.setdefault("columns", CARD_COLUMNS)
+        return self.api.apply_insights_chart(QUERY, **kwargs)
 
     def refused(self, **kwargs):
         with self.assertRaises(_ValidationError) as caught:
@@ -339,104 +405,140 @@ class _ChartBase(_Base):
 
 
 class TestApplyChart(_ChartBase):
-    def test_sets_the_axes_from_the_real_executed_columns(self):
+    def test_writes_exactly_the_real_config_shape(self):
+        result = self.apply(chart_type="line")
+        self.assertEqual((result["x_axis"], result["y_axis"]), ("academic_year", "count"))
+        expected = __import__("copy").deepcopy(REAL_CONFIG)
+        # The one key that differs from the real record on purpose: that chart
+        # was a GUI summary, where "count" is the aggregation. A native query has
+        # already aggregated, so summing an already-grouped column is identity
+        # while counting it would plot 1 per group.
+        expected["y_axis"]["series"][0]["measure"]["aggregation"] = "sum"
+        self.assertEqual(self.config(), expected)
+        self.assertEqual(self.charts()[0]["chart_type"], "Line")
+
+    def test_creates_the_chart_because_v3_does_not(self):
+        """v2 made one in after_insert; v3 makes none, so this has to."""
+        self.assertEqual(self.charts(), [])
         result = self.apply()
-        self.assertEqual((result["x_axis"], result["y_axis"]), ("student_category", "count"))
-        options = __import__("json").loads(self.chart_doc()["options"])
-        self.assertEqual(options["xAxis"], [{"column": "student_category"}],
-                         "xAxis must be an ARRAY — confirmed from a real record")
-        self.assertEqual(options["yAxis"],
-                         [{"column": "count", "series_options": {"type": "bar"}}])
-        self.assertEqual(self.chart_doc()["chart_type"], "Bar")
+        self.assertEqual(len(self.charts()), 1)
+        self.assertEqual(self.charts()[0]["query"], QUERY)
+        self.assertEqual(self.charts()[0]["workbook"], "2", "a chart needs its workbook")
+        self.assertEqual(result["chart"], self.charts()[0]["name"])
 
-    def test_it_updates_the_existing_chart_and_never_inserts(self):
+    def test_a_second_call_updates_that_chart_instead_of_adding_another(self):
         self.apply()
-        self.assertEqual(list(self.store["Insights Chart"]), ["CHART-1"],
-                         "a second chart was created — Insights already made one")
+        first = self.charts()[0]["name"]
+        self.apply(chart_type="line")
+        self.assertEqual(len(self.charts()), 1, "a second chart would compete with the first")
+        self.assertEqual(self.charts()[0]["name"], first)
+        self.assertEqual(self.charts()[0]["chart_type"], "Line")
 
-    def test_a_persons_styling_survives(self):
-        self.options = dict(STYLED)
+    def test_an_existing_chart_is_updated_not_duplicated(self):
+        self.existing_chart = "{}"
         self.setUp()
         self.apply()
-        options = __import__("json").loads(self.chart_doc()["options"])
-        self.assertEqual(options["rotateLabels"], "45")
-        self.assertEqual(options["colors"], ["#123456"])
-        self.assertEqual(options["title"], "Hand-written title")
+        self.assertEqual(len(self.charts()), 1)
+        self.assertEqual(self.charts()[0]["name"], "tt51l7mma3")
+
+    def test_bar_gets_its_own_series_type(self):
+        self.apply(chart_type="bar")
+        self.assertEqual(self.config()["y_axis"]["series"][0]["type"], "bar")
+        self.assertEqual(self.charts()[0]["chart_type"], "Bar")
 
     def test_an_explicit_pair_is_honoured(self):
-        result = self.apply(x_axis="count", y_axis="count")
-        self.assertEqual((result["x_axis"], result["y_axis"]), ("count", "count"))
+        result = self.apply(x_axis="academic_year", y_axis="count")
+        self.assertEqual((result["x_axis"], result["y_axis"]), ("academic_year", "count"))
 
-    def test_line_gets_its_own_series_type(self):
-        self.apply(chart_type="line")
-        options = __import__("json").loads(self.chart_doc()["options"])
-        self.assertEqual(options["yAxis"][0]["series_options"], {"type": "line"})
-        self.assertEqual(self.chart_doc()["chart_type"], "Line")
+    def test_columns_may_arrive_as_a_json_string(self):
+        import json
 
-    def test_unconfirmed_series_types_are_left_for_insights_to_default(self):
-        """Row and Scatter series names are not confirmed, so nothing is invented."""
-        self.apply(chart_type="row")
-        options = __import__("json").loads(self.chart_doc()["options"])
-        self.assertEqual(options["yAxis"][0]["series_options"], {})
-        self.assertEqual(self.chart_doc()["chart_type"], "Row")
+        self.apply(columns=json.dumps(CARD_COLUMNS))
+        self.assertEqual(self.config()["x_axis"]["dimension"]["column_name"], "academic_year")
+
+    def test_the_url_it_returns_is_the_v3_route(self):
+        result = self.apply()
+        self.assertEqual(result["insights_url"], f"/insights/workbook/2/query/{QUERY}")
 
 
 class TestApplyChartRefusals(_ChartBase):
+    def test_without_columns_it_refuses_rather_than_guessing_a_data_type(self):
+        """The v3 gap: no persisted result, so no types unless a card supplied
+        them. v3 accepts any config and then draws nothing, so a guess is worse
+        here than it was under v2."""
+        message = self.refused(columns=None)
+        self.assertIn("no column types", message)
+        self.assertIn("Set them in Insights", message)
+        self.assertEqual(self.charts(), [], "it wrote a chart despite refusing")
+
     def test_a_string_y_axis_is_refused_by_name(self):
-        message = self.refused(y_axis="student_category")
-        self.assertIn("student_category", message)
+        message = self.refused(y_axis="academic_year")
+        self.assertIn("academic_year", message)
         self.assertIn("String", message)
-        self.assertEqual(self.chart_doc()["chart_type"], "", "it wrote despite refusing")
+        self.assertEqual(self.charts(), [])
+
+    def test_a_numeric_x_axis_is_refused_because_a_dimension_cannot_be_one(self):
+        message = self.refused(x_axis="count")
+        self.assertIn("'count' is a Integer", message)
+        self.assertIn("text, dates or times", message)
 
     def test_no_numeric_column_at_all_is_refused_and_lists_the_types(self):
-        self.results = [[{"label": "a", "type": "String"}, {"label": "b", "type": "Datetime"}],
-                        ["x", "y"]]
-        self.setUp()
-        message = self.refused()
-        self.assertIn("nothing", message)
+        message = self.refused(columns=[
+            {"name": "a", "base_type": "type/Text"},
+            {"name": "b", "base_type": "type/DateTime"}])
+        self.assertIn("nothing to", message)
         self.assertIn("a (String)", message)
         self.assertIn("b (Datetime)", message)
 
-    def test_an_axis_the_query_never_returned_is_refused_with_the_real_labels(self):
+    def test_an_axis_the_query_never_returns_is_refused_with_the_real_names(self):
         message = self.refused(x_axis="agent")
         self.assertIn("'agent' is not a column", message)
-        self.assertIn("student_category", message)
-        self.assertIn("count", message)
-
-    def test_a_query_that_has_not_been_run_is_refused_not_executed(self):
-        self.results = None
-        self.setUp()
-        message = self.refused()
-        self.assertIn("has not been run", message)
-        self.assertIn("press Run", message)
-
-    def test_a_query_with_no_chart_link_is_refused(self):
-        self.chart = ""
-        self.setUp()
-        self.assertIn("no chart linked", self.refused())
+        self.assertIn("academic_year", message)
 
     def test_a_non_axis_chart_type_is_refused_by_name(self):
-        message = self.refused(chart_type="Pie")
-        self.assertIn("Pie", message)
-        self.assertIn("Bar, Line, Row, Scatter", message)
+        message = self.refused(chart_type="Donut")
+        self.assertIn("Donut", message)
+        self.assertIn("Bar, Line", message)
 
-    def test_one_column_only_leaves_nothing_for_the_x_axis(self):
-        self.results = [[{"label": "count", "type": "Integer"}], [5]]
-        self.setUp()
-        self.assertIn("only one column", self.refused())
+    def test_no_dimension_column_leaves_nothing_for_the_x_axis(self):
+        message = self.refused(columns=[{"name": "count", "base_type": "type/BigInteger"}])
+        self.assertIn("no column Insights can use as an X axis", message)
 
     def test_missing_insights_role_still_refuses_first(self):
         self.frappe._roles = {"Dashboard Studio Editor"}
         self.assertIn("Insights User", self.refused())
 
 
+class TestAxisColumns(_Base):
+    """Metabase base_type -> v3 data_type, Frappe-free."""
+
+    def types(self, *base_types):
+        return [c["data_type"] for c in self.api.axis_columns(
+            [{"name": f"c{i}", "base_type": b} for i, b in enumerate(base_types)])]
+
+    def test_the_families_that_matter(self):
+        self.assertEqual(
+            self.types("type/Text", "type/BigInteger", "type/Float", "type/DateTime",
+                       "type/Date", "type/Time"),
+            ["String", "Integer", "Decimal", "Datetime", "Date", "Time"])
+
+    def test_an_unknown_base_type_degrades_to_string(self):
+        """Safe direction: String is refused as a measure, allowed as a dimension."""
+        self.assertEqual(self.types("type/Boolean", "type/MongoBSONID", ""),
+                         ["String", "String", "String"])
+
+    def test_junk_is_skipped_rather_than_crashed_on(self):
+        self.assertEqual(self.api.axis_columns(None), [])
+        self.assertEqual(self.api.axis_columns(["not a column", {"name": ""}, {}]), [])
+
+
 class TestPickAxes(_Base):
     """The choice itself, Frappe-free."""
 
     def cols(self, *pairs):
-        return [{"label": label, "type": kind} for label, kind in pairs]
+        return [{"name": name, "data_type": kind} for name, kind in pairs]
 
-    def test_picks_the_first_numeric_as_y_and_another_as_x(self):
+    def test_picks_the_first_numeric_as_y_and_a_dimension_as_x(self):
         x, y, reason = self.api.pick_axes(
             self.cols(("year", "String"), ("total", "Decimal"), ("n", "Integer")))
         self.assertEqual((x, y, reason), ("year", "total", None))
@@ -447,41 +549,61 @@ class TestPickAxes(_Base):
         self.assertIsNone(reason)
 
     def test_a_duration_read_as_string_is_refused(self):
-        """The Process Duration case: a computed column comes back String."""
+        """The Process Duration case: a computed column has no numeric type."""
         _, _, reason = self.api.pick_axes(
             self.cols(("applicant", "String"), ("process_duration", "String")))
-        self.assertIn("nothing", reason)
+        self.assertIn("nothing to", reason)
         self.assertIn("process_duration (String)", reason)
 
-    def test_an_all_null_column_reads_as_string_and_is_refused_by_name(self):
+    def test_a_named_string_y_axis_is_refused_by_name(self):
         _, _, reason = self.api.pick_axes(
             self.cols(("term", "String"), ("fee", "String")), y_axis="fee")
-        self.assertIn("'fee' as String", reason)
-        self.assertIn("empty, mixed, or a computed value", reason)
+        self.assertIn("'fee' is a String", reason)
+        self.assertIn("wrong without saying so", reason)
 
-    def test_no_columns_at_all(self):
+    def test_a_date_x_axis_is_fine(self):
+        x, y, reason = self.api.pick_axes(self.cols(("day", "Date"), ("n", "Integer")))
+        self.assertEqual((x, y, reason), ("day", "n", None))
+
+    def test_no_columns_at_all_names_the_v3_reason(self):
         _, _, reason = self.api.pick_axes([])
-        self.assertIn("no result columns", reason)
+        self.assertIn("no column types", reason)
 
 
-class TestResultColumns(_Base):
-    def test_reads_the_metadata_row_only(self):
-        self.assertEqual(
-            self.api.result_columns(COLUMNS),
-            [{"label": "student_category", "type": "String"},
-             {"label": "count", "type": "Integer"}],
-        )
+class TestChartConfig(_Base):
+    """The config builder against the real record, with nothing else in the way."""
 
-    def test_a_column_with_no_type_defaults_to_string(self):
-        """ResultColumn.from_dict does the same — an unknown type IS String."""
-        self.assertEqual(self.api.result_columns([[{"label": "x"}], ["v"]]),
-                         [{"label": "x", "type": "String"}])
+    def test_matches_the_real_record_key_for_key(self):
+        built = self.api.chart_config("academic_year", "count", "String", "Integer", "line")
+        self.assertEqual(sorted(built), ["x_axis", "y_axis"])
+        self.assertEqual(sorted(built["x_axis"]["dimension"]),
+                         sorted(REAL_CONFIG["x_axis"]["dimension"]))
+        self.assertEqual(sorted(built["y_axis"]["series"][0]["measure"]),
+                         sorted(REAL_CONFIG["y_axis"]["series"][0]["measure"]))
 
-    def test_junk_is_survived_rather_than_crashed_on(self):
-        self.assertEqual(self.api.result_columns(None), [])
-        self.assertEqual(self.api.result_columns([]), [])
-        self.assertEqual(self.api.result_columns(["not a row"]), [])
-        self.assertEqual(self.api.result_columns([[{"label": ""}, "junk"]]), [])
+    def test_the_names_repeat_the_column_as_the_real_record_does(self):
+        built = self.api.chart_config("year", "total", "String", "Decimal", "bar")
+        self.assertEqual(built["x_axis"]["dimension"]["dimension_name"], "year")
+        self.assertEqual(built["y_axis"]["series"][0]["measure"]["measure_name"], "total")
+
+    def test_a_native_measure_is_summed_not_counted(self):
+        built = self.api.chart_config("year", "total", "String", "Decimal", "bar")
+        self.assertEqual(built["y_axis"]["series"][0]["measure"]["aggregation"], "sum")
+
+
+class TestSqlOperations(_Base):
+    def test_round_trips(self):
+        operations = self.api.sql_operations(SQL)
+        self.assertEqual(operations,
+                         [{"type": "sql", "raw_sql": SQL, "data_source": "Site DB"}])
+        self.assertEqual(self.api.operation_sql(operations), SQL)
+
+    def test_a_gui_composed_pipeline_has_no_sql_to_read(self):
+        """The real v3 queries on the site are source+summarize, not sql."""
+        self.assertIsNone(self.api.operation_sql(
+            [{"type": "source", "table": {}}, {"type": "summarize"}]))
+        self.assertIsNone(self.api.operation_sql([]))
+        self.assertIsNone(self.api.operation_sql(None))
 
 
 # The shape that was wrongly refused live: a block comment, a blank line, then
@@ -502,7 +624,7 @@ class TestLeadingComments(_Base):
 
     def created(self, sql):
         self.api.create_insights_query(sql)
-        return self.queries()[0]["sql"]
+        return self.stored_sql()
 
     # ------------------------------------------------------- must be ACCEPTED
     def test_the_exact_query_shape_that_was_refused_live(self):

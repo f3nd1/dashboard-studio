@@ -1,33 +1,43 @@
 """Hand a pasted SQL query to Frappe Insights as a real, queryable Query.
 
-**Scope is deliberately one thing: create the Query.** No chart, no dashboard, no
-workbook. Insights already has a chart editor — title, axes, reference line,
-palette, curve toggles — and Dashboard Studio is not rebuilding any of it. Once
-the Query exists, the person opens Insights and builds the chart there.
+**Scope is deliberately narrow: create the Query, and optionally set two axes
+on a chart for it.** Insights already has a chart editor — palette, reference
+lines, curve toggles, labels — and Dashboard Studio is not rebuilding any of it.
 
-Chart *creation* is still not done here, and never will be: Insights creates the
-chart itself in ``InsightsQuery.after_insert`` and links it as ``query.chart``.
-``apply_insights_chart`` below UPDATES that record. Inserting a second one would
-leave an orphan competing with the real one.
+**Insights v3 only.** v2 support was removed rather than branched on: the site is
+permanently on v3, and two code paths where one is dead is how a wrong-version
+payload gets written by the branch nobody exercises. The v2 DocTypes still ship
+alongside v3, which is exactly why the old version guard was unsound —
+``exists("DocType", "Insights Query")`` is True on a v3 site, so it passed and
+then wrote an orphan record invisible to the v3 UI.
 
-An earlier version of this note said chart config needs a ``data_type`` per axis
-column. **That was read from Insights v3 and is wrong for v2**, which stores only
-plain column labels — confirmed against a real record on this site. The v2
-options shape is in ``_merge_chart_options``.
+**The v3 shapes below are from a real record on the site, not from the docs.**
 
-Verified against the site on 2026-07-26 (Insights **v2.2.3**): ``Insights Query``
-carries the SQL in a plain ``sql`` field with ``is_native_query`` and a
-``data_source`` Link. End-to-end confirmed live, not just in fixtures — a query
-created by this endpoint (QRY-1310) opened in the Insights editor and executed
-successfully. That also settles the one doubt the schema raised: ``sql`` is
-marked read-only in the DocType JSON, but a plain insert populates it and
-Insights runs it.
+A query holds its SQL inside an ``operations`` JSON array, not in a field::
 
-Insights v3 models the same thing completely differently — ``Insights Query v3``
-requires a workbook and buries the SQL in an ``operations`` JSON array as
-``{"type": "sql", "raw_sql": …}`` — so this module is v2-only and says so out
-loud rather than half-supporting both. ``_require_insights`` names the version
-problem if the DocType is absent.
+    [{"type": "sql", "raw_sql": "SELECT …", "data_source": "Site DB"}]
+
+and belongs to a Workbook (a required Link), which is why this creates one.
+
+A chart's ``config`` — read back from chart tt51l7mma3, chart_type "Line"::
+
+    {"x_axis": {"dimension": {"column_name": "academic_year",
+                              "data_type": "String",
+                              "dimension_name": "academic_year"}},
+     "y_axis": {"series": [{"measure": {"aggregation": "count",
+                                        "column_name": "count",
+                                        "data_type": "Integer",
+                                        "measure_name": "count"},
+                            "type": "line"}]}}
+
+Note the ``data_type`` on both axes. v3 needs it and cannot be told to work it
+out, and v3 **never persists a query's result** — confirmed live: zero
+``Insights Query Result`` rows reference any v3 query. So the v2 trick of running
+the query in Insights and reading the executed columns back has no v3
+counterpart, and automatic axis application is gone with it. The types now come
+from the only honest source available: a Metabase card's ``result_metadata``,
+carried in by ``integrations.metabase.card.describe_card``. Without those, this
+refuses and tells the person to set the axes in Insights.
 
 **Security boundary, stated because it is a real one.** This writes SQL that
 another app will execute. Dashboard Studio never runs it: the record is stored,
@@ -43,13 +53,14 @@ import frappe
 
 from dashboard_studio.api.studio import DS_WRITE_ROLES
 
-# The v2 DocType. Named once so the version assumption has a single home.
-QUERY_DOCTYPE = "Insights Query"
+# The v3 DocTypes. Named once so the version assumption has a single home.
+QUERY_DOCTYPE = "Insights Query v3"
+CHART_DOCTYPE = "Insights Chart v3"
+WORKBOOK_DOCTYPE = "Insights Workbook"
 
 # Insights manages this data source itself and points it at the site's own
-# database, so a query written here reaches the same tables ERPNext uses. Its
-# name is literally "Site DB" — enforced on the Insights side by "Only one site
-# database can be configured".
+# database, so a query written here reaches the same tables ERPNext uses. The
+# name is unchanged from v2 — confirmed live, v3 lists exactly "Site DB".
 SITE_DB = "Site DB"
 
 # Creating an Insights Query needs an Insights role, which a Dashboard Studio
@@ -57,39 +68,62 @@ SITE_DB = "Site DB"
 # missing role instead of surfacing as a bare permission error.
 INSIGHTS_ROLES = ("Insights User", "Insights Admin")
 
-# CONFIRMED on this site (Insights v2.2.3, 2026-07-26): opening QRY-1308 at this
-# path loaded the real chart editor. It is still a per-install value rather than
-# a fact about Insights — a standalone v2 mounts its SPA at /insights, while a v3
-# install running the legacy UI mounts it at /insights_v2 — so if this ever 404s
-# after an upgrade, this constant is the only thing to change. The Desk URL below
-# is derived from Frappe itself and is correct on any install, which is why both
-# are still returned.
-INSIGHTS_QUERY_PATH = "/insights/query/build/{name}"
-DESK_QUERY_PATH = "/app/insights-query/{name}"
+# Every query this app creates lands in one workbook, created on first use.
+# Queries are not loose objects in v3 — `workbook` is a required Link — and a
+# workbook per query would litter the Insights sidebar with singletons.
+WORKBOOK_TITLE = "Dashboard Studio"
 
-# Insights creates this itself, one per query, and links it as query.chart.
-CHART_DOCTYPE = "Insights Chart"
-RESULT_DOCTYPE = "Insights Query Result"
+# CONFIRMED live in a browser on the v3 site: this is the route that loads the
+# query. The v2 path (/insights/query/build/<name>) resolves to an empty shell —
+# no error, just nothing — which is why the workbook id has to be carried
+# through and returned rather than only the query name.
+INSIGHTS_QUERY_PATH = "/insights/workbook/{workbook}/query/{name}"
+DESK_QUERY_PATH = "/app/insights-query-v3/{name}"
 
-# Our internal shape -> the exact string v2 stores in Insights Chart.chart_type.
-# Only the AxisChart family: these four share AxisChartOptions.vue, whose
-# xAxis/yAxis shape is confirmed. Number, Pie, Table, Progress, Trend and Pivot
-# Table each have their own options component with different keys, and guessing
-# those is the mistake this scope exists to avoid.
-AXIS_CHART_TYPES = {"bar": "Bar", "line": "Line", "row": "Row", "scatter": "Scatter"}
-
-# The series type inside yAxis[].series_options. "bar" is confirmed from a real
-# record; the rest are not.
-#
-# ponytail: only the two confirmed values are written. Row and Scatter get an
-# empty series_options and let Insights fill its own default, because writing an
-# unverified value into another app's config is the thing this whole handoff has
-# refused from the start. Fill them in once a real record shows what they are.
+# Our internal shape -> the exact string v3 stores in chart_type, and the series
+# type inside y_axis.series[]. Only the axis-chart family: Bar and Line share the
+# x_axis/y_axis config above, confirmed against a real record. Donut, Number and
+# Table each have a different config shape, and guessing those is the mistake
+# this scope exists to avoid.
+AXIS_CHART_TYPES = {"bar": "Bar", "line": "Line"}
 _SERIES_TYPE = {"Bar": "bar", "Line": "line"}
 
-# What get_columns_with_inferred_types can produce. Everything else — and
-# anything it could not parse at all — comes back "String".
-NUMERIC_COLUMN_TYPES = ("Integer", "Decimal")
+# v3's own vocabularies (query.types.ts). A dimension cannot be a number and a
+# measure cannot be a date — these are not our rules, they are the ones the
+# chart renderer applies.
+DIMENSION_DATA_TYPES = ("String", "Date", "Datetime", "Time")
+MEASURE_DATA_TYPES = ("Integer", "Decimal")
+
+# A native query has already aggregated: `COUNT(*) AS count` produces one row per
+# group. The chart still asks for an aggregation to apply over those rows.
+#
+# ponytail: "sum" of an already-grouped column is the identity, which is the only
+# choice that cannot change the number. "count" would plot 1 for every group — a
+# wrong chart with no error, which is the exact failure this handoff exists to
+# avoid. The real v3 record that settled the config shape was a GUI-summarised
+# query, where "count" is right; no native-query chart existed to read. Confirm
+# against one and change this constant if it disagrees.
+NATIVE_MEASURE_AGGREGATION = "sum"
+
+# Metabase's base_type -> v3's data_type. Anything unlisted becomes String, which
+# degrades safely: a String X axis is normal, and a String Y axis is refused by
+# name below rather than charted.
+BASE_TYPE_TO_DATA_TYPE = {
+    "type/Integer": "Integer",
+    "type/BigInteger": "Integer",
+    "type/SmallInteger": "Integer",
+    "type/Quantity": "Integer",
+    "type/Float": "Decimal",
+    "type/Decimal": "Decimal",
+    "type/Number": "Decimal",
+    "type/Date": "Date",
+    "type/DateTime": "Datetime",
+    "type/DateTimeWithTZ": "Datetime",
+    "type/DateTimeWithLocalTZ": "Datetime",
+    "type/Instant": "Datetime",
+    "type/Time": "Time",
+    "type/TimeWithTZ": "Time",
+}
 
 _READ_ONLY_STARTS = ("select", "with")
 
@@ -116,51 +150,63 @@ def query_title(analysis, sql=None):
     return "Imported SQL query"
 
 
-def result_columns(results):
-    """The column row of an executed query, as [{label, type}].
+def sql_operations(sql):
+    """The ``operations`` array v3 stores a native query in."""
+    return [{"type": "sql", "raw_sql": sql, "data_source": SITE_DB}]
 
-    Insights stores results as a JSON array whose FIRST ROW is the column
-    metadata (``ResultColumn``: label, type, options) and whose remaining rows
-    are data. Returns [] when there is nothing usable.
+
+def operation_sql(operations):
+    """The raw SQL out of an operations array, or None if it holds no SQL stage."""
+    for operation in operations or []:
+        if isinstance(operation, dict) and operation.get("type") == "sql":
+            return operation.get("raw_sql")
+    return None
+
+
+def axis_columns(columns):
+    """Metabase ``result_metadata`` -> [{name, data_type}] in v3's vocabulary.
+
+    Frappe-free so the mapping is unit-testable. Anything with no known base_type
+    becomes String, which is refused as a measure and allowed as a dimension.
     """
-    rows = results if isinstance(results, list) else []
-    if not rows or not isinstance(rows[0], list):
-        return []
     out = []
-    for column in rows[0]:
+    for column in columns or []:
         if not isinstance(column, dict):
             continue
-        label = str(column.get("label") or "").strip()
-        if label:
-            out.append({"label": label, "type": str(column.get("type") or "String")})
+        name = str(column.get("name") or "").strip()
+        if not name:
+            continue
+        base = str(column.get("base_type") or "")
+        out.append({"name": name, "data_type": BASE_TYPE_TO_DATA_TYPE.get(base, "String")})
     return out
 
 
 def pick_axes(columns, x_axis=None, y_axis=None):
-    """Choose the two axes from the REAL executed columns, or refuse.
+    """Choose the two axes from the query's real columns, or refuse.
 
     Returns ``(x, y, reason)`` — reason is set only when it refuses.
 
-    Frappe-free so the choice is unit-testable. The rule is deliberately narrow:
+    Frappe-free so the choice is unit-testable. The rules are v3's own:
 
-    - a requested axis must be one of the labels the query actually returned.
+    - a requested axis must be one of the columns the card actually returns.
       Studio's Step 2 guesses come from parsed SQL text, and an unaliased
       ``COUNT(*)`` is labelled differently in the result than in the SQL;
-    - the Y axis must be Integer or Decimal. Everything else is refused BY NAME.
+    - the Y axis must be Integer or Decimal — a measure cannot be anything else;
+    - the X axis must be String, Date, Datetime or Time — a dimension cannot be
+      a number.
 
-    That second rule is the whole safety story. Insights infers these types from
-    the returned VALUES (pandas, priority String > Datetime > Decimal > Integer),
-    not from the database, and String wins — so one unparseable value, an
-    all-NULL column, or a duration rendered as "3 days 04:00:00" makes the whole
-    column String. Charting such a column as a Y axis produces a wrong picture
-    with no error, so this refuses instead and says which column and why.
+    Refusing by name matters more here than it did under v2, because v3 will
+    accept whatever config is written and simply draw nothing.
     """
-    labels = [c["label"] for c in columns]
+    labels = [c["name"] for c in columns]
     if not labels:
-        return None, None, ("This query has no result columns to read. Run it in "
-                            "Insights first, then try again.")
-    types = {c["label"]: c["type"] for c in columns}
-    numeric = [c["label"] for c in columns if c["type"] in NUMERIC_COLUMN_TYPES]
+        return None, None, (
+            "Studio has no column types for this query, so it cannot set the axes "
+            "safely. Set them in Insights — it knows the columns once you have run "
+            "the query there."
+        )
+    types = {c["name"]: c["data_type"] for c in columns}
+    numeric = [c["name"] for c in columns if c["data_type"] in MEASURE_DATA_TYPES]
 
     def known(value, axis):
         value = (value or "").strip()
@@ -168,8 +214,8 @@ def pick_axes(columns, x_axis=None, y_axis=None):
             return None, None
         if value not in types:
             return None, (
-                f"'{value}' is not a column this query returned, so it cannot be the "
-                f"{axis} axis. It returned: " + ", ".join(labels) + "."
+                f"'{value}' is not a column this query returns, so it cannot be the "
+                f"{axis} axis. It returns: " + ", ".join(labels) + "."
             )
         return value, None
 
@@ -183,52 +229,65 @@ def pick_axes(columns, x_axis=None, y_axis=None):
     if not y:
         if not numeric:
             return None, None, (
-                "None of this query's columns came back numeric, so there is nothing "
-                "to plot on the Y axis. Insights read them as: "
-                + ", ".join(f"{c['label']} ({c['type']})" for c in columns)
-                + ". Set the axes in Insights if one of these is a number it could "
+                "None of this query's columns is a number, so there is nothing to "
+                "plot on the Y axis. They are: "
+                + ", ".join(f"{c['name']} ({c['data_type']})" for c in columns)
+                + ". Set this axis in Insights if one of them is a number it could "
                 "not recognise."
             )
         y = numeric[0]
-    elif types[y] not in NUMERIC_COLUMN_TYPES:
+    elif types[y] not in MEASURE_DATA_TYPES:
         return None, None, (
-            f"Insights read '{y}' as {types[y]}, not a number, so plotting it on the "
-            "Y axis would draw a chart that is wrong without saying so. A column reads "
-            "as String when it is empty, mixed, or a computed value like a duration. "
-            "Set this axis in Insights if you know better."
+            f"'{y}' is a {types[y]}, not a number, so plotting it on the Y axis "
+            "would draw a chart that is wrong without saying so. Set this axis in "
+            "Insights if you know better."
         )
 
     if not x:
-        # The first column that is not the measure. Whatever it is, it is a
-        # label; a String X axis is normal and not refused.
-        remaining = [label for label in labels if label != y]
+        # The first column that is not the measure and can be a dimension.
+        remaining = [label for label in labels
+                     if label != y and types[label] in DIMENSION_DATA_TYPES]
         if not remaining:
             return None, None, (
-                "This query returned only one column, so there is nothing to put on "
-                "the X axis."
+                "This query has no column Insights can use as an X axis — a "
+                "dimension has to be text, a date or a time. It returns: "
+                + ", ".join(f"{c['name']} ({c['data_type']})" for c in columns) + "."
             )
         x = remaining[0]
+    elif types[x] not in DIMENSION_DATA_TYPES:
+        return None, None, (
+            f"'{x}' is a {types[x]}, and Insights only puts text, dates or times on "
+            "the X axis. Set this axis in Insights if you need a number there."
+        )
     return x, y, None
 
 
-def _merge_chart_options(existing, x, y, series_type):
-    """The v2 options shape, preserving everything we do not own.
+def chart_config(x, y, x_type, y_type, series_type):
+    """The v3 axis-chart config, in the shape read back from a real record.
 
-    Confirmed against a real record on this site:
-
-        {"xAxis": [{"column": "student_category"}],
-         "yAxis": [{"column": "count", "series_options": {"type": "bar"}}],
-         "rotateLabels": "0", "title": …, "colors": [...], "query": "QRY-1321"}
-
-    xAxis is an ARRAY, not an object. Only xAxis and yAxis are replaced —
-    colors, rotateLabels, title and anything else a person set in Insights are
-    carried through untouched, because this runs on a chart they may already
-    have styled.
+    ``dimension_name`` and ``measure_name`` repeat the column name: that is what
+    the real record does, and they are the labels the chart shows.
     """
-    merged = dict(existing or {})
-    merged["xAxis"] = [{"column": x}]
-    merged["yAxis"] = [{"column": y, "series_options": {"type": series_type} if series_type else {}}]
-    return merged
+    return {
+        "x_axis": {
+            "dimension": {
+                "column_name": x,
+                "data_type": x_type,
+                "dimension_name": x,
+            }
+        },
+        "y_axis": {
+            "series": [{
+                "measure": {
+                    "aggregation": NATIVE_MEASURE_AGGREGATION,
+                    "column_name": y,
+                    "data_type": y_type,
+                    "measure_name": y,
+                },
+                "type": series_type,
+            }]
+        },
+    }
 
 
 def _mask_sql(text):
@@ -369,12 +428,18 @@ def _normalised_sql(sql):
 
 
 def _require_insights():
-    """Refuse with the reason, before anything is written."""
+    """Refuse with the reason, before anything is written.
+
+    Tests the **v3** DocType specifically. The old guard tested for the v2
+    "Insights Query", which a v3 site still ships — so it passed on v3 and let a
+    v2-shaped record be written where nothing would ever read it.
+    """
     if not frappe.db.exists("DocType", QUERY_DOCTYPE):
         frappe.throw(
-            f"Frappe Insights is not installed on this site, or is a version without "
-            f"the '{QUERY_DOCTYPE}' DocType. This handoff supports Insights v2; v3 "
-            "stores queries as 'Insights Query v3' and needs a different payload."
+            f"Frappe Insights is not installed on this site, or is older than v3: "
+            f"there is no '{QUERY_DOCTYPE}' DocType. Dashboard Studio supports "
+            "Insights v3 only — v2 stored queries as 'Insights Query', with a "
+            "different payload that this no longer writes."
         )
     roles = set(frappe.get_roles())
     if not roles & set(INSIGHTS_ROLES):
@@ -392,13 +457,30 @@ def _require_insights():
         )
 
 
+def _studio_workbook():
+    """The workbook every Studio query lands in, made on first use.
+
+    v3 requires one — `workbook` is a reqd Link — so there is no version of this
+    that skips it.
+    """
+    existing = frappe.get_all(
+        WORKBOOK_DOCTYPE, filters={"title": WORKBOOK_TITLE}, fields=["name"],
+        order_by="creation asc", limit=1,
+    )
+    if existing:
+        return existing[0]["name"]
+    return frappe.get_doc({
+        "doctype": WORKBOOK_DOCTYPE,
+        "title": WORKBOOK_TITLE,
+    }).insert().name
+
+
 @frappe.whitelist()
 def create_insights_query(sql: str, title: str = None, analysis=None):
     """Create (or reuse) a native Insights Query holding this SQL.
 
-    Returns the record and two links: the Insights UI and the Desk form. Two,
-    because only the second is provably correct on every install — see
-    INSIGHTS_QUERY_PATH.
+    Returns the record, its workbook, and two links: the Insights UI and the Desk
+    form. Two, because only the second is provably correct on every install.
     """
     frappe.only_for(DS_WRITE_ROLES)
     _require_insights()
@@ -410,58 +492,69 @@ def create_insights_query(sql: str, title: str = None, analysis=None):
     if isinstance(analysis, str):
         analysis = frappe.parse_json(analysis)
     name = (title or "").strip() or query_title(analysis, text)
+    workbook = _studio_workbook()
 
     # Reuse rather than pile up duplicates: clicking twice is the normal way to
     # find out whether the first click worked. Keyed on the SQL, because that is
     # what makes two queries the same query — the title is editable in Insights.
     #
-    # ponytail: exact-text match, so whitespace differences make a new record.
-    # Normalising SQL properly needs a parser and this is a convenience, not a
-    # correctness rule.
-    existing = frappe.get_all(
-        QUERY_DOCTYPE,
-        filters={"is_native_query": 1, "sql": text},
-        fields=["name", "title"],
-        limit=1,
-    )
-    if existing:
-        return _result(existing[0]["name"], existing[0].get("title") or name, reused=True)
+    # ponytail: the SQL lives inside a JSON array, so this reads the workbook's
+    # queries and compares in Python rather than filtering in SQL. One workbook's
+    # worth of rows; if that ever gets large, store a hash in a field.
+    for row in frappe.get_all(
+        QUERY_DOCTYPE, filters={"workbook": workbook},
+        fields=["name", "title", "operations"], limit=500,
+    ):
+        operations = row.get("operations")
+        if isinstance(operations, str):
+            operations = frappe.parse_json(operations)
+        if operation_sql(operations) == text:
+            return _result(row["name"], row.get("title") or name, workbook, reused=True)
 
     doc = frappe.get_doc({
         "doctype": QUERY_DOCTYPE,
+        "workbook": workbook,
         "title": name,
         "is_native_query": 1,
-        "data_source": SITE_DB,
-        "sql": text,
+        # What the Insights UI sets on every query it creates. For Site DB it
+        # means the query runs against the site's own database rather than a
+        # copy; getting it wrong fails visibly at Run rather than quietly.
+        "use_live_connection": 1,
+        "operations": frappe.as_json(sql_operations(text)),
     }).insert()
-    return _result(doc.name, name, reused=False)
+    return _result(doc.name, name, workbook, reused=False)
 
 
-def _result(name, title, reused):
+def _result(name, title, workbook, reused):
     return {
         "name": name,
         "title": title,
+        "workbook": workbook,
         "reused": bool(reused),
         "data_source": SITE_DB,
-        "insights_url": INSIGHTS_QUERY_PATH.format(name=name),
+        "insights_url": INSIGHTS_QUERY_PATH.format(workbook=workbook, name=name),
         "desk_url": DESK_QUERY_PATH.format(name=name),
     }
 
 
 @frappe.whitelist()
 def apply_insights_chart(query: str, chart_type: str = None, x_axis: str = None,
-                         y_axis: str = None):
-    """Set the axes and type on the chart Insights already made for this query.
+                         y_axis: str = None, columns=None):
+    """Set the axes and type on this query's chart, creating the chart if needed.
 
-    Runs AFTER the person has executed the query in Insights, and reads the real
-    column labels and inferred types from the stored result. Studio still never
-    executes the SQL — ``InsightsQuery.run`` is whitelisted and deliberately not
-    called here, because "Studio files it, Insights runs it" is the boundary this
-    whole handoff is built on. No result yet means a refusal, not an execution.
+    ``columns`` is a Metabase card's ``result_metadata`` as
+    ``integrations.metabase.card.describe_card`` returns it — ``[{name,
+    base_type}]``. It is the only source of per-column types this side has:
+    **v3 never persists a query's result**, so unlike v2 there is nothing to read
+    back after the person presses Run. Without columns this refuses; it does not
+    guess a data_type, because v3 accepts whatever config is written and then
+    draws nothing.
 
-    Updates ``query.chart``; never inserts. Insights creates that chart itself in
-    after_insert and deletes it on trash, so a second one would be an orphan
-    competing with the real record.
+    Studio still never executes the SQL. Insights runs it; this only writes
+    config.
+
+    Unlike v2, v3 does NOT create a chart with the query, so this creates one if
+    the query has none and updates it on every later call.
     """
     frappe.only_for(DS_WRITE_ROLES)
     _require_insights()
@@ -470,53 +563,53 @@ def apply_insights_chart(query: str, chart_type: str = None, x_axis: str = None,
     if kind not in AXIS_CHART_TYPES:
         frappe.throw(
             f"Studio can only set the axes for {', '.join(sorted(AXIS_CHART_TYPES.values()))} "
-            f"charts, and this one is '{chart_type}'. Those four share one options "
-            "shape that has been checked against a real record; the others do not. "
-            "Set this chart up in Insights instead."
+            f"charts, and this one is '{chart_type}'. Those two share one config "
+            "shape that has been checked against a real record; Donut, Number and "
+            "Table each use a different one. Set this chart up in Insights instead."
         )
     resolved_type = AXIS_CHART_TYPES[kind]
 
-    doc = frappe.get_doc(QUERY_DOCTYPE, query)
-    chart = doc.get("chart")
-    if not chart:
-        frappe.throw(
-            f"'{query}' has no chart linked. Insights normally creates one with the "
-            "query; open the query in Insights once and try again."
-        )
-
-    stored = frappe.get_all(
-        RESULT_DOCTYPE, filters={"query": query}, fields=["name"], limit=1
-    )
-    if not stored:
-        frappe.throw(
-            "This query has not been run yet, so Insights does not know what columns "
-            "it returns. Open it in Insights, press Run, then come back."
-        )
-    results = frappe.get_doc(RESULT_DOCTYPE, stored[0]["name"]).get("results")
-    if isinstance(results, str):
-        results = frappe.parse_json(results)
-
-    columns = result_columns(results)
-    x, y, reason = pick_axes(columns, x_axis, y_axis)
+    if isinstance(columns, str):
+        columns = frappe.parse_json(columns)
+    mapped = axis_columns(columns)
+    x, y, reason = pick_axes(mapped, x_axis, y_axis)
     if reason:
         frappe.throw(reason)
+    types = {c["name"]: c["data_type"] for c in mapped}
 
-    chart_doc = frappe.get_doc(CHART_DOCTYPE, chart)
-    options = chart_doc.get("options")
-    if isinstance(options, str):
-        options = frappe.parse_json(options) or {}
-    chart_doc.chart_type = resolved_type
-    chart_doc.options = frappe.as_json(
-        _merge_chart_options(options, x, y, _SERIES_TYPE.get(resolved_type))
+    doc = frappe.get_doc(QUERY_DOCTYPE, query)
+    workbook = doc.get("workbook")
+    config = frappe.as_json(
+        chart_config(x, y, types[x], types[y], _SERIES_TYPE[resolved_type])
     )
-    chart_doc.save()
+
+    existing = frappe.get_all(
+        CHART_DOCTYPE, filters={"query": query}, fields=["name"],
+        order_by="creation asc", limit=1,
+    )
+    if existing:
+        chart_doc = frappe.get_doc(CHART_DOCTYPE, existing[0]["name"])
+        chart_doc.chart_type = resolved_type
+        chart_doc.config = config
+        chart_doc.save()
+        chart = chart_doc.name
+    else:
+        chart = frappe.get_doc({
+            "doctype": CHART_DOCTYPE,
+            "workbook": workbook,
+            "query": query,
+            "title": doc.get("title") or query,
+            "chart_type": resolved_type,
+            "config": config,
+        }).insert().name
 
     return {
         "query": query,
+        "workbook": workbook,
         "chart": chart,
         "chart_type": resolved_type,
         "x_axis": x,
         "y_axis": y,
-        "columns": columns,
-        "insights_url": INSIGHTS_QUERY_PATH.format(name=query),
+        "columns": mapped,
+        "insights_url": INSIGHTS_QUERY_PATH.format(workbook=workbook, name=query),
     }
