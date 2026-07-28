@@ -1,6 +1,8 @@
 import frappe
 
 from dashboard_studio.api.studio import DS_READ_ROLES
+from dashboard_studio.integrations.metabase.card import describe_card
+from dashboard_studio.integrations.metabase.client import fetch_card
 from dashboard_studio.integrations.metabase.parser import analyze_sql
 
 
@@ -60,3 +62,23 @@ def _suggest_mappings(analysis):
         }
         for doctype in analysis.get("doctypes") or []
     ]
+
+
+@frappe.whitelist()
+def import_metabase_card(card_id):
+    """Read one Metabase card and return what the Visualize tab can use.
+
+    Read-only end to end: one GET at Metabase, nothing written there, nothing
+    executed anywhere. This does not touch DS Metric, the field allowlist or the
+    approval gate — it fills in a form, and everything downstream of that is
+    unchanged, including the SELECT-only guard that ``create_insights_query``
+    applies before any SQL reaches Insights.
+
+    Returns ``describe_card``'s shape. An unsupported card comes back with
+    ``supported: False`` and reasons rather than a refusal, because the caller
+    wants to SHOW those reasons — a 417 here would put a wall of text in an
+    error dialog when the useful thing is a list next to the field it concerns.
+    Whether the card was worth importing is a judgement, not an error.
+    """
+    frappe.only_for(DS_READ_ROLES)
+    return describe_card(fetch_card(card_id))
