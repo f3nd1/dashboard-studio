@@ -37,9 +37,10 @@
       "Compare a reference result against this app's result for the same chart " +
       "before publishing. Differences are only ever accepted by a person."],
     visualize: ["Visualize", "Turn a query into an Insights chart",
-      "Two steps: paste the query, then fill in the few things raw SQL cannot " +
-      "say — title, axes, shape. Studio creates the Insights query; once you have " +
-      "run it there, it can set the axes on the chart Insights made for it."],
+      "Two steps: bring in the query — from a Metabase card, or pasted — then " +
+      "fill in the few things raw SQL cannot say: title, axes, shape. Studio " +
+      "creates the Insights query; once you have run it there, it can set the " +
+      "axes on the chart Insights made for it."],
     governance: ["Governance", "Review and publish",
       "A dashboard moves Draft → Technical Review → QA Approval → Published. " +
       "Whoever builds it cannot be the one who publishes it."],
@@ -2708,9 +2709,11 @@
     var card = el("section", "dss-vizstep");
     var head = el("div", "dss-vizstep-head");
     head.appendChild(el("div", "dss-vizstep-eyebrow", "Step 1"));
-    head.appendChild(el("h3", "dss-vizstep-title", "Paste the source query"));
+    head.appendChild(el("h3", "dss-vizstep-title", "Bring in the source query"));
     card.appendChild(head);
     var body = el("div", "dss-vizstep-body");
+
+    body.appendChild(this.buildMetabaseImport());
 
     var box = el("textarea", "dss-input dss-sqlbox");
     box.placeholder = "SELECT `agent`, COUNT(*) FROM `tabStudent Applicant` GROUP BY `agent`";
@@ -2731,19 +2734,7 @@
         return;
       }
       note.textContent = "Analyzing…";
-      dsCall({
-        method: "dashboard_studio.api.migration.analyze_migration_sql",
-        args: { sql: sql },
-      }).then(function (r) {
-        var analysis = (r.message || {}).analysis || {};
-        self.state.vizAnalysis = analysis;
-        // Re-guess from the new query. Anything the person had confirmed for a
-        // DIFFERENT query is not a confirmation of this one.
-        self.state.vizFields = core.insightsPrefill(analysis);
-        self.state.vizConfirmed = {};
-        self.state.insightsResult = null;
-        self.render();
-      }).catch(function (err) {
+      self.analyzeVizSql(sql, null).catch(function (err) {
         note.textContent = refusalMessage(err, "Could not analyze that query.");
       });
     });
@@ -2754,6 +2745,101 @@
     body.appendChild(row);
     card.appendChild(body);
     return card;
+  };
+
+  // Analyze, then settle Step 2's fields. Shared by the Analyze button and the
+  // Metabase import so the two cannot end in different states — `imported` is
+  // the card's own settings when there are any, and null when the SQL was
+  // pasted by hand.
+  App.prototype.analyzeVizSql = function (sql, imported) {
+    var self = this;
+    this.state.vizSql = sql;
+    // Analyzing by hand ends any claim that this came from a card. Leaving the
+    // marker set would have the panel crediting Metabase for a query someone
+    // pasted over the top of it.
+    if (!imported) this.state.vizImportedFrom = null;
+    return dsCall({
+      method: "dashboard_studio.api.migration.analyze_migration_sql",
+      args: { sql: sql },
+    }).then(function (r) {
+      var analysis = (r.message || {}).analysis || {};
+      self.state.vizAnalysis = analysis;
+      // Re-guess from the new query. Anything the person had confirmed for a
+      // DIFFERENT query is not a confirmation of this one.
+      var merged = core.mergeImportedFields(core.insightsPrefill(analysis), imported);
+      self.state.vizFields = merged.fields;
+      self.state.vizConfirmed = merged.confirmed;
+      self.state.insightsResult = null;
+      self.render();
+    });
+  };
+
+  // Read a Metabase card instead of copying its SQL out by hand.
+  //
+  // The card already knows its title, its chart type and its axes; guessing
+  // those back out of pasted SQL text is where every bug in this flow has come
+  // from. Read-only — one GET, and Metabase is never written to.
+  App.prototype.buildMetabaseImport = function () {
+    var self = this;
+    var wrap = el("div", "dss-vizimport");
+    var row = el("div", "dss-vizimport-row");
+    var input = el("input", "dss-input dss-vizcardid");
+    input.type = "number";
+    input.min = "1";
+    input.placeholder = "Metabase card id, e.g. 2774";
+    input.setAttribute("aria-label", "Metabase card id");
+    input.value = this.state.vizCardId || "";
+    input.addEventListener("input", function () { self.state.vizCardId = input.value; });
+    var pull = el("button", "dss-btn", "Import from Metabase");
+    row.appendChild(input);
+    row.appendChild(pull);
+    wrap.appendChild(row);
+
+    var note = el("div", "dss-vizimport-note", this.state.vizImportedFrom
+      ? "Imported card " + this.state.vizImportedFrom +
+        " — its title, chart type and axes are marked Confirmed below."
+      : "Or paste the SQL yourself, below. Nothing is ever written to Metabase.");
+    wrap.appendChild(note);
+
+    pull.addEventListener("click", function () {
+      var id = (input.value || "").trim();
+      if (!id) {
+        note.textContent = "Enter the card's id — the number in its Metabase URL.";
+        return;
+      }
+      if (!hasFrappe()) {
+        note.textContent = "Importing needs the server (not available in sample mode).";
+        return;
+      }
+      note.textContent = "Reading card " + id + "…";
+      pull.disabled = true;
+      var done = function () { pull.disabled = false; };
+      self.importMetabaseCard(id, note).then(done, done);
+    });
+    return wrap;
+  };
+
+  App.prototype.importMetabaseCard = function (cardId, note) {
+    var self = this;
+    return dsCall({
+      method: "dashboard_studio.api.migration.import_metabase_card",
+      args: { card_id: cardId },
+    }).then(function (r) {
+      var card = r.message || {};
+      if (!card.supported) {
+        // Shown here rather than thrown. The reasons are the useful part — a
+        // card is refused for readable reasons like "this is a GUI question",
+        // not because anything went wrong — and an error dialog is the wrong
+        // place for a list the person is meant to read and act on.
+        note.textContent = "Not imported — " + (card.reasons || []).join("; ") + ".";
+        return null;
+      }
+      self.state.vizCardId = cardId;
+      self.state.vizImportedFrom = cardId;
+      return self.analyzeVizSql(card.sql, card);
+    }).catch(function (err) {
+      note.textContent = refusalMessage(err, "Could not read that card from Metabase.");
+    });
   };
 
   App.prototype.vizAnalysisNote = function () {

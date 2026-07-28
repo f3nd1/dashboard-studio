@@ -86,6 +86,29 @@
     };
   }
 
+  // A Metabase card's own settings win over anything guessed from its SQL.
+  //
+  // The guesses exist because pasted SQL is all there was. When the card itself
+  // says what its title, axes and chart type are, that is not a better guess —
+  // it is the answer, so those fields come back Confirmed rather than Guessed.
+  // A blank falls back to the guess: describe_card drops an axis that names a
+  // column the card no longer returns, and a guess beats an empty box.
+  function mergeImportedFields(prefill, imported) {
+    prefill = prefill || {};
+    imported = imported || {};
+    var out = { fields: {}, confirmed: {} };
+    ["title", "x_axis", "y_axis", "chart_type"].forEach(function (key) {
+      var value = imported[key];
+      if (value) {
+        out.fields[key] = value;
+        out.confirmed[key] = true;
+      } else {
+        out.fields[key] = prefill[key] || "";
+      }
+    });
+    return out;
+  }
+
   function suggestedChartType(analysis) {
     analysis = analysis || {};
     var groupBy = (analysis.group_by || []).filter(Boolean);
@@ -834,6 +857,7 @@
     chartBlockReason: chartBlockReason,
     INSIGHTS_CHART_TYPES: INSIGHTS_CHART_TYPES,
     insightsPrefill: insightsPrefill,
+    mergeImportedFields: mergeImportedFields,
     axisState: axisState,
     suggestedChartType: suggestedChartType,
     OPERATORS: OPERATORS,

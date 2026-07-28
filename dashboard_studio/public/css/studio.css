@@ -452,6 +452,19 @@ textarea.dss-input { min-height: 62px; resize: vertical; }
 textarea.dss-sqlbox { min-height: 190px; font-family: ui-monospace, SFMono-Regular,
   Menlo, monospace; font-size: 12px; line-height: 1.55; }
 
+/* Pull a card straight out of Metabase, above the box you would otherwise
+   paste into. Set apart by a rule rather than a panel: it is the same step,
+   just the way that does not involve copying anything by hand. */
+.dss-vizimport { margin-bottom: 14px; padding-bottom: 13px;
+  border-bottom: 1px dashed var(--dss-line); }
+.dss-vizimport-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+/* Auto width, or the number field takes the whole row and pushes the button
+   under it — .dss-input is width:100% for the stacked fields in Step 2. */
+input.dss-vizcardid { width: auto; flex: 1 1 190px; min-width: 150px; }
+.dss-vizimport-row .dss-btn { white-space: nowrap; }
+.dss-vizimport-note { margin-top: 8px; font-size: 11px; line-height: 1.5;
+  color: var(--dss-muted); }
+
 .dss-field { margin-bottom: 15px; }
 .dss-field-label { font-size: 12px; font-weight: 700; color: var(--dss-ink-700); }
 .dss-guessrow { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }

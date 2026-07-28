@@ -605,4 +605,19 @@ assert.strictEqual(core.axisState(joined.x_axis, false), "missing");
 assert.strictEqual(core.axisState(joined.y_axis, false), "missing");
 assert.strictEqual(joined.chart_type, "table", "the chart-type fallback changed");
 
+// mergeImportedFields: the card's own settings beat anything guessed from SQL.
+var guessed = { title: "Guessed title", x_axis: "gx", y_axis: "gy", chart_type: "table" };
+var merged = core.mergeImportedFields(guessed,
+  { title: "Applicants per Country", x_axis: "country", y_axis: "count", chart_type: "bar" });
+assert.strictEqual(merged.fields.title, "Applicants per Country");
+assert.strictEqual(merged.fields.chart_type, "bar", "the card's own display lost to a guess");
+assert.strictEqual(merged.confirmed.x_axis, true, "an imported axis still reads as Guessed");
+// A dropped axis (a stale setting naming a column the card no longer returns)
+// falls back to the guess and stays Guessed — not blank, not Confirmed.
+var partial = core.mergeImportedFields(guessed, { title: "Real title", y_axis: "count" });
+assert.strictEqual(partial.fields.x_axis, "gx", "a blank import wiped the guess");
+assert.strictEqual(partial.confirmed.x_axis, undefined, "a fallback was marked Confirmed");
+assert.strictEqual(partial.confirmed.y_axis, true);
+assert.strictEqual(core.mergeImportedFields(null, null).fields.title, "");
+
 console.log("studio_core.test.js — all assertions passed");
