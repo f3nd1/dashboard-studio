@@ -39,8 +39,8 @@
     visualize: ["Visualize", "Turn a query into an Insights chart",
       "Two steps: bring in the query — from a Metabase card, or pasted — then " +
       "fill in the few things raw SQL cannot say: title, axes, shape. Studio " +
-      "creates the Insights query; once you have run it there, it can set the " +
-      "axes on the chart Insights made for it."],
+      "creates the Insights query; you run it and build the chart there. For a " +
+      "query imported from a card, Studio can set the axes for you."],
     governance: ["Governance", "Review and publish",
       "A dashboard moves Draft → Technical Review → QA Approval → Published. " +
       "Whoever builds it cannot be the one who publishes it."],
@@ -687,9 +687,6 @@
       tab.setAttribute("role", "tab");
       tab.setAttribute("aria-selected", active ? "true" : "false");
       tab.addEventListener("click", function () {
-        // Returning to Visualize is the signal that the person may have run the
-        // query in Insights meanwhile, so let the auto-apply have another go.
-        if (v === "visualize") self._autoApplyTried = null;
         self.state.view = v;
         self.render();
       });
@@ -2769,6 +2766,11 @@
       var merged = core.mergeImportedFields(core.insightsPrefill(analysis), imported);
       self.state.vizFields = merged.fields;
       self.state.vizConfirmed = merged.confirmed;
+      // The card's own column types, kept because they are the ONLY source of
+      // per-column types this side has: Insights v3 saves no query result, so
+      // there is nothing to read back after the person presses Run. Pasted SQL
+      // leaves this empty and the axis-setting action says so.
+      self.state.vizColumns = (imported && imported.columns) || null;
       self.state.insightsResult = null;
       self.render();
     });
@@ -2914,7 +2916,8 @@
     });
     typeWrap.appendChild(typeGrid);
     typeWrap.appendChild(el("p", "dss-hint",
-      "Applied by “Set the axes in Insights” after the query has been run there."));
+      "Set in Insights' own chart editor. Studio can set it for you when the "
+      + "query came from a Metabase card."));
     body.appendChild(typeWrap);
 
     this._vizPreview = this.vizPreview(fields);
@@ -2924,8 +2927,9 @@
     var dest = el("div", "dss-destination");
     dest.appendChild(el("span", "dss-destination-dot"));
     dest.appendChild(el("span", null,
-      "Creates an Insights query holding this SQL. Insights makes the chart " +
-      "itself; Studio can set its axes once you have run the query there."));
+      "Creates an Insights query holding this SQL, in a Dashboard Studio " +
+      "workbook. Insights does not make a chart with it — build one there, or " +
+      "let Studio set the axes if this came from a Metabase card."));
     body.appendChild(dest);
 
     var go = el("button", "dss-btn dss-btn-primary", "Create in Insights →");
@@ -3109,13 +3113,14 @@
     box.appendChild(el("div", "dss-saveresult-detail",
       "“" + made.title + "”, a native query against " + made.data_source + ". " +
       (made.applied
-        ? "The axes below were read from the columns the query actually returned."
+        ? "Studio set the axes on its chart. Open it in Insights to run and style it."
         : made.reused
           ? "The same SQL was already there, so nothing new was created."
-          : "Run it in Insights, then set the axes from here.")));
-    // What Studio guessed. Still shown, because until the query has been RUN in
-    // Insights there is nothing to apply automatically — the real column labels
-    // and their types only exist after execution.
+          : "Open it in Insights and press Run.")));
+    // The manual checklist. This is the whole handoff on v3: Insights does not
+    // save a query's result, so there is nothing for Studio to read back after
+    // Run, and nothing it can apply on its own. These are the two fields and the
+    // shape to set in the Insights chart editor.
     if (made.x_axis || made.y_axis || made.chart_type) {
       var todo = el("div", "dss-handoff-todo");
       todo.appendChild(el("div", "dss-handoff-todo-head",
@@ -3142,32 +3147,30 @@
       });
     box.appendChild(links);
 
-    // Try it without being asked. The person's next move after creating is to go
-    // and run the query, so coming back is the moment to look — and the moment
-    // the columns first exist.
+    // No automatic attempt. Under v2 this fired on returning to the tab and read
+    // the columns from the stored result; v3 stores no result — confirmed live,
+    // zero Insights Query Result rows reference a v3 query — so there is nothing
+    // to notice and nothing to read. The checklist above is the handoff.
     //
-    // Once per query per visit: the flag is set BEFORE the call, so a render
-    // triggered by the call's own result cannot start another one, and a refusal
-    // is not retried on every repaint. Entering the tab clears it.
-    //
-    // This notices that execution HAS happened. It never causes it — no result
-    // yet is a refusal telling the person to press Run, which is exactly the
-    // right message to show straight after creation.
-    this._autoApplyTried = this._autoApplyTried || {};
-    if (!made.applied && !this._autoApplyTried[made.name] && hasFrappe()) {
-      this._autoApplyTried[made.name] = true;
-      this.applyInsightsChart({ auto: true });
-    }
-
-    // Kept as the fallback: right after creation the automatic attempt will have
-    // refused (nothing has been run yet), and this is how someone retries
-    // deliberately without leaving and returning.
+    // The button below is the one case Studio can still do it: a query imported
+    // from a Metabase card carries that card's own column types, which is a
+    // fact rather than a guess. Without them, say why rather than offering a
+    // button that can only refuse.
     if (!made.applied) {
-      var apply = el("button", "dss-btn", "Set the axes in Insights");
-      apply.title = "Reads the columns the query actually returned and sets them " +
-        "on the chart Insights made. Run the query in Insights first.";
-      apply.addEventListener("click", function () { self.applyInsightsChart(); });
-      box.appendChild(apply);
+      if ((this.state.vizColumns || []).length) {
+        var apply = el("button", "dss-btn", "Set the axes in Insights");
+        apply.title = "Uses the column types from the Metabase card this query " +
+          "came from, and sets them on a chart for it in Insights.";
+        apply.addEventListener("click", function () { self.applyInsightsChart(); });
+        box.appendChild(apply);
+      } else {
+        box.appendChild(el("p", "dss-hint",
+          "Set the axes in Insights' chart editor. Studio can only do it for a " +
+          "query imported from a Metabase card — Insights does not save a " +
+          "query's result, so for pasted SQL there is nothing to read the " +
+          "column types from, and a guessed type draws a chart that is wrong " +
+          "without saying so."));
+      }
     }
     if (this.state.insightsApplyError) {
       box.appendChild(el("div", "dss-vizerror", this.state.insightsApplyError));
@@ -3180,28 +3183,27 @@
     return box;
   };
 
-  App.prototype.applyInsightsChart = function (options) {
+  App.prototype.applyInsightsChart = function () {
     var self = this;
-    var auto = !!(options && options.auto);
     var made = this.state.insightsResult || {};
     var fields = this.state.vizFields || {};
     if (!made.name || !hasFrappe()) return;
     this.state.insightsApplyHint = "";
-    // No "Reading…" flicker on an attempt nobody asked for, and no render here
-    // either — this one is called FROM a render.
-    if (!auto) {
-      this.state.insightsApplyError = "Reading the query's columns…";
-      this.render();
-    }
+    this.state.insightsApplyError = "Setting the axes…";
+    this.render();
     dsCall({
       method: "dashboard_studio.api.insights.apply_insights_chart",
       args: {
         query: made.name,
         chart_type: fields.chart_type || "bar",
         // Sent only when the person confirmed them. An unconfirmed guess came
-        // from parsed SQL, and the server picks better from the real columns.
+        // from parsed SQL, and the server picks better from the card's columns.
         x_axis: (this.state.vizConfirmed || {}).x_axis ? fields.x_axis : null,
         y_axis: (this.state.vizConfirmed || {}).y_axis ? fields.y_axis : null,
+        // The Metabase card's result_metadata. The server has no other source
+        // of per-column types on v3, and refuses rather than guessing without
+        // them — so this is the argument the whole action depends on.
+        columns: this.state.vizColumns || null,
       },
     }).then(function (r) {
       var set = r.message;
@@ -3210,8 +3212,8 @@
         self.render();
         return;
       }
-      // Report what the SERVER set, not what was asked for — it reads the real
-      // columns and may well have picked something else.
+      // Report what the SERVER set, not what was asked for — it checks the
+      // card's columns and may well have picked something else.
       self.state.insightsResult = Object.assign({}, made, {
         applied: true, chart: set.chart, chart_type: set.chart_type,
         x_axis: set.x_axis, y_axis: set.y_axis,
@@ -3220,9 +3222,8 @@
       self.state.insightsApplyHint = "";
       self.render();
     }).catch(function (err) {
-      var message = refusalMessage(err, "Could not set the axes on that chart.");
-      self.state.insightsApplyError = auto ? "" : message;
-      self.state.insightsApplyHint = auto ? message : "";
+      self.state.insightsApplyError =
+        refusalMessage(err, "Could not set the axes on that chart.");
       self.render();
     });
   };
