@@ -60,8 +60,11 @@ WORKBOOK_DOCTYPE = "Insights Workbook"
 
 # Insights manages this data source itself and points it at the site's own
 # database, so a query written here reaches the same tables ERPNext uses. The
-# name is unchanged from v2 — confirmed live, v3 lists exactly "Site DB".
+# NAME is unchanged from v2 — confirmed live, v3 lists exactly "Site DB" — but
+# the DocType holding it is not: v3 resolves a query's data_source against
+# "Insights Data Source v3", and both tables exist side by side on this site.
 SITE_DB = "Site DB"
+SOURCE_DOCTYPE = "Insights Data Source v3"
 
 # Creating an Insights Query needs an Insights role, which a Dashboard Studio
 # Editor does not automatically hold. Checked explicitly so the refusal names the
@@ -449,7 +452,13 @@ def _require_insights():
             + " role, which this account does not have. A Dashboard Studio Editor "
             "does not get it automatically — ask an administrator to add it."
         )
-    if not frappe.db.exists("Insights Data Source", SITE_DB):
+    # Against the v3 table, which is the one v3 resolves the query's data_source
+    # against. This read the v2 "Insights Data Source" and passed only because
+    # both tables happen to hold a row called "Site DB" — the same fault as the
+    # version guard above, checking one generation to decide about the other. It
+    # would have started refusing every create the moment the v2 records were
+    # deleted, with a message blaming a source that was fine.
+    if not frappe.db.exists(SOURCE_DOCTYPE, SITE_DB):
         frappe.throw(
             f"Insights has no '{SITE_DB}' data source on this site, so there is "
             "nothing to run the query against. It is the built-in source pointing "

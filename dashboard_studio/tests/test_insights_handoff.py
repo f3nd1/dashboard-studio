@@ -81,7 +81,8 @@ def _make_fake_frappe(store, roles, doctypes=("Insights Query v3",), sources=("S
     frappe.ValidationError = _ValidationError
     frappe._roles = set(roles)
     frappe._doctypes = set(doctypes)
-    frappe._sources = set(sources)
+    frappe._sources = set(sources)           # Insights Data Source v3
+    frappe._v2_sources = {"Site DB", "Query Store"}   # the v2 table, still there
 
     def only_for(needed, message=None):
         if isinstance(needed, str):
@@ -104,8 +105,13 @@ def _make_fake_frappe(store, roles, doctypes=("Insights Query v3",), sources=("S
     def exists(doctype, name):
         if doctype == "DocType":
             return name in frappe._doctypes
-        if doctype == "Insights Data Source":
+        # Both generations of the data-source table exist on a v3 site and both
+        # hold a row called "Site DB". Modelled as two separate sets so a guard
+        # reading the wrong one is a test failure rather than a coincidence.
+        if doctype == "Insights Data Source v3":
             return name in frappe._sources
+        if doctype == "Insights Data Source":
+            return name in frappe._v2_sources
         return name in store.get(doctype, {})
 
     frappe.only_for = only_for
@@ -302,6 +308,23 @@ class TestRefusals(_Base):
         self.frappe._sources = set()
         self.assertIn("Site DB", self.refusal(SQL))
         self.assertEqual(self.queries(), [])
+
+    def test_the_site_db_check_reads_the_v3_table_not_the_v2_one(self):
+        """Both tables hold a row called "Site DB", so reading the v2 one passed
+        by coincidence. Here only v3's is missing — and v3 is the table a query's
+        data_source is resolved against, so this has to refuse."""
+        self.frappe._sources = set()
+        self.frappe._v2_sources = {"Site DB", "Query Store"}
+        self.assertIn("Site DB", self.refusal(SQL))
+        self.assertEqual(self.queries(), [])
+
+    def test_deleting_the_v2_records_does_not_break_creating_a_query(self):
+        """What happens after the v2 cleanup: the v2 tables are empty, v3 is
+        untouched. Reading the v2 table here would refuse every create and blame
+        a data source that was fine."""
+        self.frappe._v2_sources = set()
+        self.api.create_insights_query(SQL, analysis=ANALYSIS)
+        self.assertEqual(len(self.queries()), 1)
 
     def test_a_non_editor_is_refused_before_anything_else(self):
         """DS write role first, and still a 403 rather than a message."""
