@@ -53,6 +53,10 @@
     return node;
   }
 
+  // The five values every shape preview is drawn from. Shared so a bar and a
+  // line are visibly the same query in two shapes, not two invented pictures.
+  var PREVIEW_SHAPE = [58, 84, 40, 70, 30];
+
   function hasFrappe() {
     return typeof root.frappe !== "undefined" && root.frappe && typeof root.frappe.call === "function";
   }
@@ -3019,8 +3023,10 @@
       area.appendChild(el("div", "dss-vizpreview-donut"));
     } else if (fields.chart_type === "table") {
       [0, 1, 2, 3].forEach(function () { area.appendChild(el("div", "dss-vizpreview-row")); });
+    } else if (fields.chart_type === "line") {
+      area.appendChild(this.vizPreviewLine());
     } else {
-      [58, 84, 40, 70, 30].forEach(function (h) {
+      PREVIEW_SHAPE.forEach(function (h) {
         var bar = el("div", "dss-vizpreview-bar");
         bar.style.height = h + "%";
         area.appendChild(bar);
@@ -3041,6 +3047,31 @@
     }
     card.appendChild(axes);
     return card;
+  };
+
+  // A line drawn through the SAME five values the bars use, so switching type
+  // reads as one query drawn two ways rather than two unrelated pictures.
+  //
+  // Inline SVG rather than the CSS-div trick the bars use, because a polyline
+  // is what makes it a line chart and CSS has no honest way to draw one. Built
+  // as markup, not createElementNS, matching studio_charts.js — and it is a
+  // fixed shape with no data in it, so there is nothing to escape.
+  App.prototype.vizPreviewLine = function () {
+    var wrap = el("div", "dss-vizpreview-line");
+    // The line passes through exactly where the tops of the bars are: the bar
+    // of height h% starts (100-h)% down the box, so in a 60-unit viewBox that
+    // is y = 60 - 0.6h. Same five values, same heights on screen — switching
+    // type redraws one query rather than rescaling it.
+    var points = PREVIEW_SHAPE.map(function (h, i) {
+      return (2 + i * 24) + "," + (60 - h * 0.6).toFixed(1);
+    });
+    // ponytail: polyline only, no point markers. The box is stretched to fill
+    // the panel, so preserveAspectRatio="none" would flatten a circle into an
+    // ellipse — visible as a defect. A line on its own already reads as a line
+    // chart; add markers only if the stroke ever needs the emphasis.
+    wrap.innerHTML = '<svg viewBox="0 0 100 60" preserveAspectRatio="none" ' +
+      'aria-hidden="true"><polyline points="' + points.join(" ") + '"/></svg>';
+    return wrap;
   };
 
   App.prototype.repaintVizPreview = function () {
