@@ -98,14 +98,29 @@ DIMENSION_DATA_TYPES = ("String", "Date", "Datetime", "Time")
 MEASURE_DATA_TYPES = ("Integer", "Decimal")
 
 # A native query has already aggregated: `COUNT(*) AS count` produces one row per
-# group. The chart still asks for an aggregation to apply over those rows.
+# group. The chart still asks for an aggregation to apply over those rows, and
+# "sum" of an already-grouped column is the identity — the only choice that
+# cannot change the number. "count" would plot 1 for every group.
 #
-# ponytail: "sum" of an already-grouped column is the identity, which is the only
-# choice that cannot change the number. "count" would plot 1 for every group — a
-# wrong chart with no error, which is the exact failure this handoff exists to
-# avoid. The real v3 record that settled the config shape was a GUI-summarised
-# query, where "count" is right; no native-query chart existed to read. Confirm
-# against one and change this constant if it disagrees.
+# CONFIRMED against Insights v3.12.2's own source, three ways, after the UI
+# proved untestable through automation:
+#
+#   frontend/src2/types/query.types.ts
+#     export const aggregations = ['sum', 'count', 'avg', 'min', 'max',
+#                                  'count_distinct']
+#   frontend/src2/query/helpers.ts — what Insights itself picks by default when
+#   it turns a result column into a measure:
+#     export function makeMeasure(column) {
+#         return { aggregation: 'sum', … }
+#   insights/insights/doctype/insights_data_source_v3/ibis_utils.py
+#     if aggregate_function == "sum": return column.sum()
+#     …
+#     frappe.throw(f"Aggregate function {aggregate_function} is not supported")
+#
+# So this is not merely allowed, it is Insights' own default for exactly this
+# step. The last line is worth knowing too: an unsupported value throws rather
+# than drawing something wrong quietly, which is the one part of this config
+# that fails loudly.
 NATIVE_MEASURE_AGGREGATION = "sum"
 
 # Metabase's base_type -> v3's data_type. Anything unlisted becomes String, which

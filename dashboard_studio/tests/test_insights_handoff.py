@@ -613,6 +613,15 @@ class TestChartConfig(_Base):
         built = self.api.chart_config("year", "total", "String", "Decimal", "bar")
         self.assertEqual(built["y_axis"]["series"][0]["measure"]["aggregation"], "sum")
 
+    def test_the_aggregation_is_one_insights_actually_accepts(self):
+        """ibis_utils.apply_aggregate throws on anything outside this set, and
+        the frontend offers exactly these six (v3.12.2). Pinned so a typo is a
+        test failure here rather than a refusal from another app."""
+        self.assertIn(
+            self.api.NATIVE_MEASURE_AGGREGATION,
+            ("sum", "count", "avg", "min", "max", "count_distinct"),
+        )
+
 
 class TestSqlOperations(_Base):
     def test_round_trips(self):
