@@ -8,7 +8,7 @@ reader should not notice at all.
 
 import unittest
 
-from dashboard_studio.integrations.metabase.card import describe_card
+from dashboard_studio.integrations.metabase.card import describe_card, referenced_tables
 
 NATIVE_CARD = {
     "id": 2774,
@@ -136,6 +136,81 @@ class TestRefusals(unittest.TestCase):
     def test_non_dict_input_is_a_programming_error_not_a_refusal(self):
         with self.assertRaises(TypeError):
             describe_card("2774")
+
+
+class TestReferencedTables(unittest.TestCase):
+    """Which tables a read-only DB login must be granted SELECT on.
+
+    Error direction matters more than precision here: a surplus table costs one
+    extra GRANT, a missing one silently breaks a dashboard. Every assertion
+    below is written with that asymmetry in mind.
+    """
+
+    TABLE_NAMES = {2201: "tabStudent Applicant", 2359: "tabPurchase Order"}
+
+    def test_a_native_card_names_its_tables_from_the_sql(self):
+        tables, unresolved = referenced_tables(NATIVE_CARD)
+        self.assertEqual(tables, {"tabStudent Applicant"})
+        self.assertEqual(unresolved, [])
+
+    def test_a_native_card_with_a_join_names_both(self):
+        subject = stage(native="SELECT * FROM `tabStudent Applicant` a "
+                               "JOIN `tabPurchase Order` b ON b.name = a.po")
+        tables, _ = referenced_tables(subject)
+        self.assertEqual(tables, {"tabStudent Applicant", "tabPurchase Order"})
+
+    def test_a_gui_card_resolves_ids_through_the_table_list(self):
+        gui = card(dataset_query={"lib/type": "mbql/query", "database": 3, "stages": [
+            {"lib/type": "mbql.stage/mbql", "source-table": 2201}]})
+        tables, unresolved = referenced_tables(gui, self.TABLE_NAMES)
+        self.assertEqual(tables, {"tabStudent Applicant"})
+        self.assertEqual(unresolved, [])
+
+    def test_a_join_nested_inside_its_own_stages_is_still_found(self):
+        """MBQL 5 puts a join's source inside the join's own stages. A walk of
+        the documented nesting would miss it; the scan cannot."""
+        gui = card(dataset_query={"lib/type": "mbql/query", "database": 3, "stages": [
+            {"lib/type": "mbql.stage/mbql", "source-table": 2201,
+             "joins": [{"lib/type": "mbql/join", "alias": "PO",
+                        "stages": [{"source-table": 2359}]}]}]})
+        tables, unresolved = referenced_tables(gui, self.TABLE_NAMES)
+        self.assertEqual(tables, {"tabStudent Applicant", "tabPurchase Order"})
+        self.assertEqual(unresolved, [])
+
+    def test_an_unknown_table_id_is_reported_never_dropped(self):
+        gui = card(dataset_query={"lib/type": "mbql/query", "database": 3, "stages": [
+            {"lib/type": "mbql.stage/mbql", "source-table": 9999}]})
+        tables, unresolved = referenced_tables(gui, self.TABLE_NAMES)
+        self.assertEqual(tables, set())
+        self.assertIn("table id 9999", unresolved[0])
+
+    def test_a_card_built_on_another_card_says_so(self):
+        gui = card(dataset_query={"lib/type": "mbql/query", "database": 3, "stages": [
+            {"lib/type": "mbql.stage/mbql", "source-card": 1474}]})
+        tables, unresolved = referenced_tables(gui, self.TABLE_NAMES)
+        self.assertEqual(tables, set())
+        self.assertIn("built on card 1474", unresolved[0])
+
+    def test_native_sql_naming_no_frappe_table_is_reported(self):
+        tables, unresolved = referenced_tables(stage(native="SELECT 1"))
+        self.assertEqual(tables, set())
+        self.assertIn("no `tab", unresolved[0])
+
+    def test_a_query_with_no_source_at_all_is_reported(self):
+        gui = card(dataset_query={"lib/type": "mbql/query", "database": 3, "stages": [{}]})
+        _, unresolved = referenced_tables(gui, self.TABLE_NAMES)
+        self.assertIn("no source-table", unresolved[0])
+
+    def test_without_a_table_list_gui_cards_resolve_to_nothing_loudly(self):
+        gui = card(dataset_query={"lib/type": "mbql/query", "database": 3, "stages": [
+            {"lib/type": "mbql.stage/mbql", "source-table": 2201}]})
+        tables, unresolved = referenced_tables(gui)
+        self.assertEqual(tables, set())
+        self.assertEqual(len(unresolved), 1)
+
+    def test_non_dict_input_is_a_programming_error(self):
+        with self.assertRaises(TypeError):
+            referenced_tables("2774")
 
 
 if __name__ == "__main__":

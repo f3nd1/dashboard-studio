@@ -37,6 +37,11 @@ that they no longer have to check.
 
 from __future__ import annotations
 
+# Reused, not re-written: one definition of "what a Frappe table looks like in
+# SQL". A second regex here could drift from the parser's and quietly disagree
+# about which tables a query reads.
+from dashboard_studio.integrations.metabase.parser import TABLE_PATTERN
+
 # Metabase `display` -> the chart type Studio's Visualize step offers.
 #
 # Studio's list is bar/line/donut/number/table (studio_core.INSIGHTS_CHART_TYPES)
@@ -155,6 +160,78 @@ def _sql_and_reasons(card):
             "in before it runs, so the stored text is not runnable SQL"
         )
     return sql, reasons
+
+
+def referenced_tables(card, table_names=None):
+    """Every physical table a card reads -> ``(tables, unresolved)``.
+
+    Built for one job: deciding which tables a read-only database login has to
+    be granted SELECT on. That job sets the error direction — **over-inclusion
+    is safe, under-inclusion silently breaks a dashboard** — so this errs toward
+    naming more tables, not fewer, and reports anything it could not resolve
+    rather than dropping it.
+
+    ``table_names`` maps Metabase's numeric table id to the physical table name,
+    as ``GET /api/table`` returns it. Without it, MBQL cards resolve to nothing
+    and every one of them lands in ``unresolved``.
+
+    ponytail: the MBQL side is a recursive scan for ``source-table`` /
+    ``source-card`` keys rather than a walk of the documented stage/join
+    nesting. MBQL 5 puts a join's source inside the join's own ``stages``, and
+    that shape has moved between versions — a scan cannot miss a table by
+    looking in the wrong place, and finding one somewhere unexpected costs a
+    surplus GRANT, which is the harmless direction here.
+    """
+    if not isinstance(card, dict):
+        raise TypeError("card must be the decoded JSON of one Metabase card")
+    table_names = table_names or {}
+    tables, unresolved = set(), []
+    label = f"card {card.get('id')}"
+
+    sql, _ = _sql_and_reasons(card)
+    if sql:
+        found = TABLE_PATTERN.findall(sql)
+        if found:
+            tables.update("tab" + name.strip() for name in found if name.strip())
+        else:
+            # Native SQL naming its tables some other way — a different quoting
+            # style, or a database that is not this Frappe site.
+            unresolved.append(f"{label}: native SQL with no `tab…` table reference")
+        return tables, unresolved
+
+    ids, cards = _scan_sources(card.get("dataset_query"))
+    for table_id in sorted(ids):
+        name = table_names.get(table_id) or table_names.get(str(table_id))
+        if name:
+            tables.add(name)
+        else:
+            unresolved.append(f"{label}: table id {table_id} not in the table list")
+    for other in sorted(cards):
+        # A question built on another question. Its tables belong to that card,
+        # which this inventory reaches on its own pass — named so a reader can
+        # see the dependency rather than wonder why the card contributed none.
+        unresolved.append(f"{label}: built on card {other}, counted there")
+    if not ids and not cards:
+        unresolved.append(f"{label}: no source-table anywhere in dataset_query")
+    return tables, unresolved
+
+
+def _scan_sources(node, ids=None, cards=None):
+    """Every source-table / source-card id anywhere in the structure."""
+    ids = set() if ids is None else ids
+    cards = set() if cards is None else cards
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "source-table" and isinstance(value, int):
+                ids.add(value)
+            elif key == "source-card" and isinstance(value, int):
+                cards.add(value)
+            else:
+                _scan_sources(value, ids, cards)
+    elif isinstance(node, list):
+        for item in node:
+            _scan_sources(item, ids, cards)
+    return ids, cards
 
 
 def describe_card(card):
