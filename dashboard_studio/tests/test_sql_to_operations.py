@@ -151,6 +151,66 @@ class TestJoins(unittest.TestCase):
              "data_type": "Decimal", "aggregation": "sum"}])
 
 
+class TestMetabaseCompiledSql(unittest.TestCase):
+    """The shape Metabase actually emits, end to end.
+
+    Metabase wraps every joined table in derived tables and appends its own row
+    cap. That combination refused every real report until the wrappers could be
+    flattened, so this is the test that says the tool works on the SQL people
+    have rather than on the SQL a test would write.
+    """
+
+    SQL = """SELECT `Student Applicant Model - Name`.`gender` AS `gender`,
+                    COUNT(*) AS `count`
+             FROM `tabStudent Admission UCC`
+             LEFT JOIN (
+               SELECT `__mb_source`.`name` AS `name`,
+                      `__mb_source`.`gender` AS `gender`
+               FROM ( select * from `tabStudent Applicant` ) AS `__mb_source`
+             ) AS `Student Applicant Model - Name`
+               ON `tabStudent Admission UCC`.`student_applicant` =
+                  `Student Applicant Model - Name`.`name`
+             WHERE `tabStudent Admission UCC`.`docstatus` = 1
+             GROUP BY `Student Applicant Model - Name`.`gender`
+             LIMIT 1048575"""
+
+    COLUMNS = {
+        "Student Admission UCC": {"name": "String", "student_applicant": "String",
+                                  "docstatus": "Integer"},
+        "Student Applicant": {"name": "String", "gender": "String"},
+    }
+
+    def test_it_converts_in_full(self):
+        result = run(self.SQL, columns=self.COLUMNS)
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["operations"], [
+            {"type": "source", "table": {"type": "table", "data_source": "Site DB",
+                                         "table_name": "tabStudent Admission UCC"}},
+            {"type": "join", "join_type": "left",
+             "table": {"type": "table", "data_source": "Site DB",
+                       "table_name": "tabStudent Applicant"},
+             "select_columns": [{"type": "column", "column_name": "gender"},
+                                {"type": "column", "column_name": "name"}],
+             "join_condition": {
+                 "left_column": {"type": "column", "column_name": "student_applicant"},
+                 "right_column": {"type": "column", "column_name": "name"}}},
+            {"type": "filter", "column": {"type": "column", "column_name": "docstatus"},
+             "operator": "=", "value": 1},
+            {"type": "summarize",
+             "measures": [{"measure_name": "count", "column_name": "count",
+                           "data_type": "Integer", "aggregation": "count"}],
+             "dimensions": [{"dimension_name": "gender", "column_name": "gender",
+                             "data_type": "String"}]},
+        ])
+
+    def test_the_grouping_column_is_typed_from_the_JOINED_table(self):
+        """`gender` lives on Student Applicant, reached through a wrapper alias.
+        Typing it against the source table would be typing it against a table
+        that has no such column."""
+        result = run(self.SQL, columns=self.COLUMNS)
+        self.assertEqual(result["operations"][-1]["dimensions"][0]["data_type"], "String")
+
+
 class TestJoinRefusals(unittest.TestCase):
     def assert_refused(self, result, fragment):
         self.assertFalse(result["supported"], "expected a refusal")
