@@ -109,12 +109,10 @@
     this.mount.innerHTML = "";
     var wrap = el("div", "dss-wrap");
 
-    var head = el("div", "dss-toolbar");
-    var titlebox = el("div", "dss-titlebox");
-    titlebox.appendChild(el("h1", "dss-title", "Metabase → Insights"));
-    head.appendChild(titlebox);
-    wrap.appendChild(head);
-
+    // No title here. frappe.ui.make_app_page already renders the page header
+    // from the Desk page's own `title`, and adding an <h1> put "Metabase →
+    // Insights" on screen twice, stacked. The Desk page owns the title; this
+    // app owns everything below it.
     var hero = el("div", "dss-hero");
     hero.appendChild(el("div", "dss-kicker", "Converter"));
     hero.appendChild(el("h3", "dss-hero-title", "Rebuild a Metabase question in Insights"));

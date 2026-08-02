@@ -150,6 +150,7 @@ def _studio_workbook():
     }).insert().name
 
 
+@frappe.whitelist()
 def list_insights_workbooks():
     """The workbooks a query can be created in, newest activity first.
 
