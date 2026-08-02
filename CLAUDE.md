@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 One job: **convert a GUI-built Metabase question into a Frappe Insights v3 query built from clickable operations** — Select Source, Filter Rows, Join Table, Group & Summarize. A migrated report is then maintainable in Insights' own editor rather than being a block of pasted SQL nobody can click.
 
-Native SQL cards are **not** converted. Their SQL is copied across by hand; that path needs no translation and gains nothing from one.
+Two ways in, one destination. A **Metabase card id** is read and translated from its MBQL structure. **Pasted SQL** is parsed and translated too — same operations, same verification gate — for a single table with a flat WHERE and a GROUP BY. Joins and subqueries are refused on the SQL path *by name*, because `analyze_sql` hands a join condition back as unparsed text with table aliases still in it; splitting that string is how a join gets built that runs, returns rows, and answers a different question. The card path can do joins because Metabase hands the two sides over already separated.
+
+The types Insights needs on every dimension and measure come from Metabase's field metadata on the card path, and from **Frappe's own DocType metadata** on the SQL path (`tab<DocType>` → `frappe.get_meta`). Neither path ever guesses a type.
 
 This was once a much larger product (dashboard builder, source mapping, DocType catalogue, validation centre, governance/publishing). All of it is in `archive/` — see `archive/README.md`. **Nothing in `archive/` is imported, tested, linted or shipped.** Don't fix things in there; if something is needed again, move it back and give it tests.
 
@@ -52,6 +54,7 @@ Metabase card id
   → client.fetch_card + fetch_table_metadata   # GETs, read-only
   → convert.build_metadata                     # ids → names + data types
   → mbql.translate_card                        # MBQL 5 → Insights operations
+       (or) analyze_sql → sql_ops.operations_from_sql   # pasted SQL → the same
   → convert.convert_metabase_card              # writes an [UNVERIFIED] query
   → convert.verify_converted_query             # a person clears the marker
 ```

@@ -117,11 +117,11 @@
     hero.appendChild(el("div", "dss-kicker", "Converter"));
     hero.appendChild(el("h3", "dss-hero-title", "Rebuild a Metabase question in Insights"));
     hero.appendChild(el("p", "dss-hero-blurb",
-      "Give it the id of a drag-and-drop Metabase card and it writes the same " +
-      "question into Insights as clickable operations — Select Source, Filter " +
-      "Rows, Join Table, Group & Summarize. Nothing is trusted until you have " +
-      "compared its number against the card. Native SQL cards are not converted; " +
-      "copy their SQL across by hand."));
+      "Give it a Metabase card id, or paste SQL, and it writes the same question " +
+      "into Insights as clickable operations rather than a block of text. " +
+      "Nothing is trusted until you have compared its number against the " +
+      "original. Pasted SQL covers a single table with WHERE and GROUP BY; " +
+      "joins and subqueries are refused rather than guessed at."));
     wrap.appendChild(hero);
 
     var card = el("section", "dss-vizstep");
@@ -240,6 +240,35 @@
       "Read-only: the card is read, nothing is ever written to Metabase.");
     wrap.appendChild(note);
 
+    // The other way in: SQL somebody already has, with no card behind it. Same
+    // destination and the same gate — it produces operations, not a raw SQL
+    // query, so the result stays clickable in Insights either way.
+    wrap.appendChild(el("div", "dss-vizimport-or", "or paste the SQL"));
+    var box = el("textarea", "dss-input dss-sqlbox");
+    box.placeholder =
+      "SELECT `academic_year`, COUNT(*) FROM `tabStudent Applicant` GROUP BY `academic_year`";
+    box.setAttribute("aria-label", "SQL to convert");
+    box.value = this.state.vizSql || "";
+    box.addEventListener("input", function () { self.state.vizSql = box.value; });
+    wrap.appendChild(box);
+
+    var sqlRow = el("div", "dss-vizimport-row");
+    var sqlGo = el("button", "dss-btn", "Convert SQL →");
+    sqlGo.title = "Parses the query into the same Insights operations a card " +
+      "converts to. Single table with WHERE and GROUP BY; joins are refused.";
+    sqlRow.appendChild(sqlGo);
+    wrap.appendChild(sqlRow);
+
+    sqlGo.addEventListener("click", function () {
+      var sql = (box.value || "").trim();
+      if (!sql) { note.textContent = "Paste a query first."; return; }
+      if (!hasFrappe()) { note.textContent = "Converting needs the server."; return; }
+      note.textContent = "Translating that query…";
+      sqlGo.disabled = true;
+      var done = function () { sqlGo.disabled = false; };
+      self.convertSql(sql, note).then(done, done);
+    });
+
     convert.addEventListener("click", function () {
       var id = (input.value || "").trim();
       if (!id) { note.textContent = "Enter the card's id first."; return; }
@@ -280,6 +309,29 @@
   // Deliberately not styled as a success. A conversion that LOOKS done is the
   // failure this whole gate exists to prevent: the translation may be right,
   // and nothing here can tell — only a person comparing the two numbers can.
+  // Same flow as convertMetabaseCard, different source. Kept as its own method
+  // rather than a flag on that one: they take different arguments and refuse for
+  // different reasons, and a shared function with a mode is how those messages
+  // end up generic.
+  App.prototype.convertSql = function (sql, note) {
+    var self = this;
+    return dsCall({
+      method: "dashboard_studio.api.convert.convert_sql",
+      args: { sql: sql, workbook: this.state.vizWorkbook || null },
+    }).then(function (r) {
+      var made = r.message;
+      if (!made || !made.name) {
+        note.textContent = "The server reported no query. Nothing was created.";
+        return null;
+      }
+      self.state.conversion = made;
+      self.render();
+      return made;
+    }).catch(function (err) {
+      note.textContent = refusalMessage(err, "Could not convert that query.");
+    });
+  };
+
   App.prototype.buildConversionResult = function () {
     var self = this;
     var made = this.state.conversion;

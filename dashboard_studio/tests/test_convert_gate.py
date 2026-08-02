@@ -134,6 +134,72 @@ class TestConversion(_Base):
             self.api.convert_metabase_card(1474, workbook="2")
 
 
+class TestSqlConversion(_Base):
+    """Pasted SQL reaches the same structured output, behind the same gate."""
+
+    SQL = ("SELECT `academic_year`, COUNT(*) FROM `tabStudent Applicant` "
+           "WHERE `status` = 'Enrolled' GROUP BY `academic_year`")
+
+    def setUp(self):
+        super().setUp()
+        # Frappe's own DocType metadata is where the SQL path gets its types.
+        self.frappe._doctypes = {"Insights Query v3", "Student Applicant"}
+        self.frappe.get_meta = lambda dt: types.SimpleNamespace(fields=[
+            types.SimpleNamespace(fieldname="status", fieldtype="Select"),
+            types.SimpleNamespace(fieldname="academic_year", fieldtype="Data"),
+            types.SimpleNamespace(fieldname="fee", fieldtype="Currency"),
+        ])
+
+    def test_it_writes_operations_not_raw_sql(self):
+        self.api.convert_sql(self.SQL, workbook="2")
+        stored = __import__("json").loads(self.queries()[0]["operations"])
+        self.assertEqual([op["type"] for op in stored], ["source", "filter", "summarize"])
+        self.assertNotIn("sql", [op["type"] for op in stored],
+                         "it fell back to a raw SQL operation")
+        self.assertEqual(stored[0]["table"]["table_name"], "tabStudent Applicant")
+
+    def test_types_come_from_frappes_doctype_metadata(self):
+        self.api.convert_sql(self.SQL, workbook="2")
+        stored = __import__("json").loads(self.queries()[0]["operations"])
+        self.assertEqual(stored[2]["dimensions"][0]["data_type"], "String")
+
+    def test_the_same_gate_applies(self):
+        result = self.api.convert_sql(self.SQL, workbook="2")
+        self.assertFalse(result["verified"])
+        self.assertTrue(result["title"].startswith("[UNVERIFIED] "))
+        self.assertTrue(self.queries()[0]["title"].startswith("[UNVERIFIED] "))
+
+    def test_verifying_a_sql_conversion_uses_the_same_endpoint(self):
+        made = self.api.convert_sql(self.SQL, workbook="2")
+        self.assertIn("Metabase says 1234, Insights says 1200", self.refusal(
+            self.api.verify_converted_query, made["name"], "1234", "1200"))
+        self.api.verify_converted_query(made["name"], "1234", "1234")
+        self.assertFalse(self.queries()[0]["title"].startswith("[UNVERIFIED] "))
+
+    def test_a_join_is_refused_and_nothing_is_written(self):
+        message = self.refusal(self.api.convert_sql,
+                               "SELECT a.`name` FROM `tabStudent Applicant` a "
+                               "JOIN `tabPurchase Order` b ON b.`ref` = a.`po`",
+                               workbook="2")
+        self.assertIn("joins tables", message)
+        self.assertIn("build it in Insights by hand", message)
+        self.assertEqual(self.queries(), [])
+
+    def test_an_unknown_table_is_refused_before_anything_is_written(self):
+        message = self.refusal(self.api.convert_sql,
+                               "SELECT COUNT(*) FROM `tabNonsense`", workbook="2")
+        self.assertIn("no DocType called 'Nonsense'", message)
+        self.assertEqual(self.queries(), [])
+
+    def test_empty_sql_is_refused(self):
+        self.assertIn("Paste a SQL query", self.refusal(self.api.convert_sql, "   "))
+
+    def test_a_non_editor_cannot_convert_sql(self):
+        self.frappe._roles = {"Dashboard Studio Viewer", "Insights User"}
+        with self.assertRaises(_PermissionError):
+            self.api.convert_sql(self.SQL, workbook="2")
+
+
 class TestTheGate(_Base):
     """The condition ADR-006 was reopened on."""
 

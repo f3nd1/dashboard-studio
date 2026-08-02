@@ -35,6 +35,11 @@ from dashboard_studio.api.insights import (
 from dashboard_studio.integrations.metabase.card import _scan_sources
 from dashboard_studio.integrations.metabase.client import fetch_card, fetch_table_metadata
 from dashboard_studio.integrations.metabase.mbql import translate_card
+from dashboard_studio.integrations.metabase.parser import analyze_sql
+from dashboard_studio.integrations.metabase.sql_ops import (
+    columns_from_meta,
+    operations_from_sql,
+)
 from dashboard_studio.roles import DS_WRITE_ROLES
 
 # Carried in the title so it travels with the record. A person who opens this
@@ -139,6 +144,76 @@ def convert_metabase_card(card_id, workbook: str = None):
         "data_source": SITE_DB,
         "verified": False,
         "card_id": card.get("id"),
+        "operations": result["operations"],
+        "insights_url": f"/insights/workbook/{workbook}/query/{doc.name}",
+    }
+
+
+def _table_columns(doctype):
+    """``{column_name: data_type}`` for a DocType, from Frappe's own metadata.
+
+    The types SQL text cannot supply. Insights needs a data_type on every
+    grouping and measure, and this site already knows what every column is —
+    which is why the SQL path can reach the same structured output as the card
+    path without anybody guessing.
+    """
+    if not frappe.db.exists("DocType", doctype):
+        frappe.throw(
+            f"There is no DocType called '{doctype}' on this site, so the columns "
+            "of that table cannot be typed. Check the table name in the query."
+        )
+    meta = frappe.get_meta(doctype)
+    return columns_from_meta([(f.fieldname, f.fieldtype) for f in meta.fields])
+
+
+@frappe.whitelist()
+def convert_sql(sql: str, title: str = None, workbook: str = None):
+    """Translate pasted SQL into Insights operations and file it, UNVERIFIED.
+
+    The same destination as the card path and the same gate — a query is a query
+    however it arrived, and one built from parsed SQL text is if anything more in
+    need of checking than one built from a card's own structure.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    _require_insights()
+
+    if not isinstance(sql, str) or not sql.strip():
+        frappe.throw("Paste a SQL query first.")
+
+    analysis = analyze_sql(sql)
+    doctypes = [d for d in (analysis.get("doctypes") or []) if d]
+    # Columns are only fetched once the query is down to a single table; asking
+    # for the metadata of a join this cannot translate anyway would refuse for
+    # the wrong reason.
+    columns = _table_columns(doctypes[0]) if len(doctypes) == 1 else {}
+    result = operations_from_sql(analysis, columns)
+    if not result["supported"]:
+        frappe.throw(
+            "This query cannot be converted to operations: "
+            + "; ".join(result["reasons"])
+            + ". You can still build it in Insights by hand."
+        )
+
+    workbook = _resolve_workbook(workbook)
+    name = (title or "").strip() or f"{doctypes[0]} query"
+    name = UNVERIFIED_PREFIX + clamp_title(name)[: MAX_TITLE_LENGTH - len(UNVERIFIED_PREFIX)]
+
+    doc = frappe.get_doc({
+        "doctype": QUERY_DOCTYPE,
+        "workbook": workbook,
+        "title": name,
+        "is_builder_query": 1,
+        "use_live_connection": 1,
+        "operations": frappe.as_json(result["operations"]),
+    }).insert()
+
+    return {
+        "name": doc.name,
+        "title": name,
+        "workbook": workbook,
+        "data_source": SITE_DB,
+        "verified": False,
+        "card_id": None,
         "operations": result["operations"],
         "insights_url": f"/insights/workbook/{workbook}/query/{doc.name}",
     }
