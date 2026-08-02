@@ -21,10 +21,21 @@ never logged, and never echoed back in a refusal — including the 401 path, whe
 including the request for context would put the key straight into a user's
 browser via ``_server_messages``.
 
-Metabase scopes an API key to the group it was created in; there is no read-only
-key flag. So the key UCC issues must belong to a view-only group. That is the
-layer that actually stops a write — the GET-only shape here is the second line,
-not the first.
+**The key's group is a REQUIREMENT, not a description of what is deployed.**
+Metabase scopes an API key to the group it was created in and has no read-only
+key flag, so the only thing that can stop a write on the Metabase side is the
+group. This module cannot check that and does not try.
+
+Read that literally: if the configured key belongs to Administrators, or to any
+group with `create-queries: query-builder-and-native`, then **nothing on the
+Metabase side restricts it** and the GET-only shape below is the *only*
+protection — not the second line, the sole one. It would also mean that key can
+already run arbitrary SQL against the connected database through
+``POST /api/dataset``, whether or not this app ever calls it.
+
+Verify the group before trusting the sentence above. An earlier version of this
+docstring asserted the view-only group as though it were a fact about the
+deployment; it was always a requirement someone had to meet.
 
 ponytail: config keys rather than a Settings DocType. A DocType with a Password
 field would let an admin rotate the key without bench access; add it when
