@@ -2927,13 +2927,15 @@
     this._vizPreview = this.vizPreview(fields);
     body.appendChild(this._vizPreview);
 
+    body.appendChild(this.buildWorkbookPicker());
+
     // Where this goes, before the button rather than after it.
     var dest = el("div", "dss-destination");
     dest.appendChild(el("span", "dss-destination-dot"));
     dest.appendChild(el("span", null,
-      "Creates an Insights query holding this SQL, in a Dashboard Studio " +
-      "workbook. Insights does not make a chart with it — build one there, or " +
-      "let Studio set the axes if this came from a Metabase card."));
+      "Creates an Insights query holding this SQL. Insights does not make a " +
+      "chart with it — build one there, or let Studio set the axes if this " +
+      "came from a Metabase card."));
     body.appendChild(dest);
 
     var go = el("button", "dss-btn dss-btn-primary", "Create in Insights →");
@@ -2952,6 +2954,75 @@
 
     card.appendChild(body);
     return card;
+  };
+
+  // Which Insights workbook the query lands in.
+  //
+  // Fetched once per visit and cached in state: the list rarely changes and this
+  // is rebuilt on every keystroke elsewhere in the panel. A failed fetch is not
+  // an error — it leaves the default, which is what happened before there was a
+  // picker at all.
+  App.prototype.buildWorkbookPicker = function () {
+    var self = this;
+    var wrap = el("div", "dss-field dss-workbookpick");
+    wrap.appendChild(el("label", "dss-field-label", "Insights workbook"));
+
+    var books = this.state.vizWorkbooks;
+    if (!books) {
+      wrap.appendChild(el("p", "dss-hint", "Loading workbooks…"));
+      this.loadWorkbooks();
+      return wrap;
+    }
+
+    var select = el("select", "dss-input");
+    select.setAttribute("aria-label", "Insights workbook");
+    // The empty value is the default workbook, created on first use. Named as
+    // such rather than left blank, so "no choice" reads as a choice.
+    var fallback = el("option", null, "Dashboard Studio (default)");
+    fallback.value = "";
+    select.appendChild(fallback);
+    books.forEach(function (book) {
+      // Skip a workbook whose title IS the default — it is the same record the
+      // empty option already points at, and two rows meaning one place is the
+      // kind of thing someone debugs at 3am.
+      if (book.title === "Dashboard Studio") return;
+      var option = el("option", null, book.title + " (" + book.name + ")");
+      option.value = book.name;
+      select.appendChild(option);
+    });
+    select.value = this.state.vizWorkbook || "";
+    select.addEventListener("change", function () {
+      self.state.vizWorkbook = select.value;
+    });
+    wrap.appendChild(select);
+    wrap.appendChild(el("p", "dss-hint", books.length
+      ? "The query is created here. A workbook groups related queries in Insights."
+      : "No workbooks found — one named Dashboard Studio will be created."));
+    return wrap;
+  };
+
+  App.prototype.loadWorkbooks = function () {
+    var self = this;
+    if (this._workbooksLoading || !hasFrappe()) {
+      // No backend: settle on the empty list so the picker stops saying
+      // "Loading…" forever and the default still works.
+      if (!hasFrappe()) this.state.vizWorkbooks = [];
+      return;
+    }
+    this._workbooksLoading = true;
+    dsCall({
+      method: "dashboard_studio.api.insights.list_insights_workbooks",
+    }).then(function (r) {
+      self.state.vizWorkbooks = (r.message || {}).workbooks || [];
+      self._workbooksLoading = false;
+      self.render();
+    }).catch(function () {
+      // A refusal here (no Insights role, Insights not installed) is already
+      // reported by Create; it must not also block the panel from rendering.
+      self.state.vizWorkbooks = [];
+      self._workbooksLoading = false;
+      self.render();
+    });
   };
 
   // One editable field with its Guessed/Confirmed marker.
@@ -3100,6 +3171,9 @@
         sql: sql,
         title: fields.title || null,
         analysis: JSON.stringify(this.state.vizAnalysis || null),
+        // Empty means "the default workbook" — the server resolves it, and
+        // checks whatever name it is given rather than trusting the browser.
+        workbook: this.state.vizWorkbook || null,
       },
     }).then(function (r) {
       var made = r.message;

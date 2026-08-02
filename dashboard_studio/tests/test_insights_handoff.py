@@ -81,8 +81,17 @@ class _FakeDoc:
         # a Workbook is autoincrement (so "1", "2"), a query and a chart get a
         # random-looking hash ("s39rc7j648"). Named here, never by title, because
         # that is what forces the reuse key to be the SQL.
-        self._data["name"] = (str(len(table) + 1) if doctype == "Insights Workbook"
-                              else f"{_PREFIX.get(doctype, 'x')}{len(table) + 1}k7a2d")
+        # Skip past names already in the store. Counting rows collided with a
+        # pre-seeded workbook and silently OVERWROTE it, which would have made a
+        # broken create look like a working one.
+        index = len(table) + 1
+        while True:
+            candidate = (str(index) if doctype == "Insights Workbook"
+                         else f"{_PREFIX.get(doctype, 'x')}{index}k7a2d")
+            if candidate not in table:
+                break
+            index += 1
+        self._data["name"] = candidate
         table[self._data["name"]] = dict(self._data)
         return self
 
@@ -265,6 +274,71 @@ class TestCreate(_Base):
         self.api.create_insights_query(SQL, analysis=ANALYSIS)
         self.api.create_insights_query(SQL.replace("agent", "nationality"))
         self.assertEqual(len(self.queries()), 2)
+
+
+class TestWorkbookChoice(_Base):
+    """Which workbook the query lands in, now that it is the person's call."""
+
+    def setUp(self):
+        super().setUp()
+        self.store["Insights Workbook"] = {
+            "2": {"name": "2", "title": "EduTrust 2026"},
+            "3": {"name": "3", "title": "Finance"},
+        }
+
+    def test_a_named_workbook_is_used(self):
+        result = self.api.create_insights_query(SQL, workbook="3")
+        self.assertEqual(result["workbook"], "3")
+        self.assertEqual(self.queries()[0]["workbook"], "3")
+
+    def test_no_workbook_falls_back_to_the_studio_one_and_creates_it(self):
+        result = self.api.create_insights_query(SQL)
+        made = [w for w in self.workbooks() if w["title"] == "Dashboard Studio"]
+        self.assertEqual(len(made), 1)
+        self.assertEqual(result["workbook"], made[0]["name"])
+
+    def test_a_workbook_that_does_not_exist_is_refused_not_written(self):
+        """It arrives from the browser. Frappe would accept a dangling Link on
+        insert and leave the query in a workbook nobody can open."""
+        with self.assertRaises(_ValidationError) as caught:
+            self.api.create_insights_query(SQL, workbook="999")
+        self.assertIn("no Insights workbook '999'", str(caught.exception))
+        self.assertEqual(self.queries(), [])
+
+    def test_blank_and_whitespace_mean_the_default_not_a_missing_record(self):
+        for value in ("", "   ", None):
+            self.setUp()
+            self.api.create_insights_query(SQL, workbook=value)
+            default = [w for w in self.workbooks() if w["title"] == "Dashboard Studio"]
+            self.assertEqual(len(default), 1, f"{value!r} did not fall back to the default")
+            self.assertEqual(self.queries()[0]["workbook"], default[0]["name"])
+            self.assertIn("EduTrust 2026", [w["title"] for w in self.workbooks()],
+                          "creating the default overwrote an existing workbook")
+
+    def test_the_url_uses_the_chosen_workbook(self):
+        result = self.api.create_insights_query(SQL, workbook="2")
+        self.assertEqual(result["insights_url"],
+                         f"/insights/workbook/2/query/{result['name']}")
+
+    def test_reuse_is_scoped_to_the_workbook(self):
+        """The same SQL filed deliberately into two workbooks is two queries."""
+        first = self.api.create_insights_query(SQL, workbook="2")
+        second = self.api.create_insights_query(SQL, workbook="3")
+        self.assertFalse(second["reused"], "it reused a query from another workbook")
+        self.assertNotEqual(first["name"], second["name"])
+        again = self.api.create_insights_query(SQL, workbook="2")
+        self.assertTrue(again["reused"], "reuse stopped working within a workbook")
+
+    def test_listing_workbooks_names_the_default(self):
+        listed = self.api.list_insights_workbooks()
+        self.assertEqual(listed["default_title"], "Dashboard Studio")
+        self.assertEqual({w["title"] for w in listed["workbooks"]},
+                         {"EduTrust 2026", "Finance"})
+
+    def test_listing_needs_a_read_role(self):
+        self.frappe._roles = {"Insights User"}
+        with self.assertRaises(_PermissionError):
+            self.api.list_insights_workbooks()
 
 
 class TestRefusals(_Base):

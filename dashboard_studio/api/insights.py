@@ -51,7 +51,7 @@ as EduTrust evidence should come from it.
 
 import frappe
 
-from dashboard_studio.api.studio import DS_WRITE_ROLES
+from dashboard_studio.api.studio import DS_READ_ROLES, DS_WRITE_ROLES
 
 # The v3 DocTypes. Named once so the version assumption has a single home.
 QUERY_DOCTYPE = "Insights Query v3"
@@ -509,10 +509,10 @@ def _require_insights():
 
 
 def _studio_workbook():
-    """The workbook every Studio query lands in, made on first use.
+    """The default workbook, made on first use.
 
     v3 requires one — `workbook` is a reqd Link — so there is no version of this
-    that skips it.
+    that skips it. Used when the caller names none.
     """
     existing = frappe.get_all(
         WORKBOOK_DOCTYPE, filters={"title": WORKBOOK_TITLE}, fields=["name"],
@@ -527,8 +527,51 @@ def _studio_workbook():
 
 
 @frappe.whitelist()
-def create_insights_query(sql: str, title: str = None, analysis=None):
+def list_insights_workbooks():
+    """The workbooks a query can be created in, newest activity first.
+
+    Read-only. Returns the default's name separately so the picker can preselect
+    it without having to know the title convention.
+    """
+    frappe.only_for(DS_READ_ROLES)
+    _require_insights()
+    rows = frappe.get_all(
+        WORKBOOK_DOCTYPE, fields=["name", "title"], order_by="modified desc", limit=100,
+    )
+    return {
+        "workbooks": [
+            {"name": r["name"], "title": r.get("title") or r["name"]} for r in rows
+        ],
+        "default_title": WORKBOOK_TITLE,
+    }
+
+
+def _resolve_workbook(workbook):
+    """The workbook to create in — the named one, or the default.
+
+    The name is CHECKED, never trusted: it arrives from the browser, and
+    `workbook` is a Link that Frappe would happily accept as a dangling
+    reference on insert, leaving a query in a workbook that does not exist.
+    """
+    workbook = str(workbook or "").strip()
+    if not workbook:
+        return _studio_workbook()
+    if not frappe.db.exists(WORKBOOK_DOCTYPE, workbook):
+        frappe.throw(
+            f"There is no Insights workbook '{workbook}'. Pick one from the list, "
+            "or leave it unset to use the Dashboard Studio workbook."
+        )
+    return workbook
+
+
+@frappe.whitelist()
+def create_insights_query(sql: str, title: str = None, analysis=None, workbook: str = None):
     """Create (or reuse) a native Insights Query holding this SQL.
+
+    ``workbook`` is the Insights workbook to create it in; without one it lands
+    in the Dashboard Studio workbook, created on first use. Reuse is scoped to
+    the chosen workbook — the same SQL filed deliberately into two workbooks is
+    two queries, not a mistake to deduplicate away.
 
     Returns the record, its workbook, and two links: the Insights UI and the Desk
     form. Two, because only the second is provably correct on every install.
@@ -546,7 +589,7 @@ def create_insights_query(sql: str, title: str = None, analysis=None):
     # typed or edited in Studio reaches Insights by this same line and would hit
     # the same varchar(140) refusal. One clamp, where every title routes through.
     name = clamp_title((title or "").strip() or query_title(analysis, text))
-    workbook = _studio_workbook()
+    workbook = _resolve_workbook(workbook)
 
     # Reuse rather than pile up duplicates: clicking twice is the normal way to
     # find out whether the first click worked. Keyed on the SQL, because that is
