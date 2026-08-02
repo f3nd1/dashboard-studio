@@ -76,6 +76,11 @@ INSIGHTS_ROLES = ("Insights User", "Insights Admin")
 # workbook per query would litter the Insights sidebar with singletons.
 WORKBOOK_TITLE = "Dashboard Studio"
 
+# Insights Query v3.title is a Frappe Data field: varchar(140). Frappe refuses
+# an over-long value with "Value too big" and aborts the insert, so the title is
+# trimmed to fit rather than allowed to cost somebody their query.
+MAX_TITLE_LENGTH = 140
+
 # CONFIRMED live in a browser on the v3 site: this is the route that loads the
 # query. The v2 path (/insights/query/build/<name>) resolves to an empty shell —
 # no error, just nothing — which is why the workbook id has to be carried
@@ -146,6 +151,24 @@ BASE_TYPE_TO_DATA_TYPE = {
 _READ_ONLY_STARTS = ("select", "with")
 
 
+def clamp_title(name):
+    """A title Insights will accept, or as much of one as fits.
+
+    ``title`` is a Frappe Data field — varchar(140) — and Frappe refuses an
+    over-long value with "Value too big", which aborts the whole insert. A title
+    is cosmetic and a query is not, so this trims rather than letting a long name
+    cost somebody their query.
+
+    Real Metabase-compiled SQL is what surfaced this: its generated join aliases
+    (``Quality Performance Actual Value Parameter Child_a3e4a16b``) are long
+    enough that two or three of them blow the limit on their own.
+    """
+    name = " ".join(str(name or "").split())
+    if len(name) <= MAX_TITLE_LENGTH:
+        return name
+    return name[: MAX_TITLE_LENGTH - 1].rstrip() + "…"
+
+
 def query_title(analysis, sql=None):
     """A title for the Insights Query, from whatever the analysis managed.
 
@@ -160,11 +183,15 @@ def query_title(analysis, sql=None):
     function = str((aggregations[0] or {}).get("function") or "").title() if aggregations else ""
 
     if doctypes and len(doctypes) == 1 and group_by and function:
-        return f"{function} of {doctypes[0]} by {group_by[0]}"
+        return clamp_title(f"{function} of {doctypes[0]} by {group_by[0]}")
     if doctypes and len(doctypes) == 1:
-        return f"{doctypes[0]} query"
+        return clamp_title(f"{doctypes[0]} query")
     if len(doctypes) > 1:
-        return " + ".join(sorted(doctypes)[:3]) + " query"
+        # Name the base table and COUNT the rest. Concatenating three table
+        # names was fine for hand-written SQL and useless for compiled MBQL,
+        # where a dozen generated aliases produce a title that is both
+        # over-length and unreadable.
+        return clamp_title(f"{sorted(doctypes)[0]} + {len(doctypes) - 1} more")
     return "Imported SQL query"
 
 
@@ -515,7 +542,10 @@ def create_insights_query(sql: str, title: str = None, analysis=None):
 
     if isinstance(analysis, str):
         analysis = frappe.parse_json(analysis)
-    name = (title or "").strip() or query_title(analysis, text)
+    # Clamped HERE, on the resolved name, not inside query_title alone: a title
+    # typed or edited in Studio reaches Insights by this same line and would hit
+    # the same varchar(140) refusal. One clamp, where every title routes through.
+    name = clamp_title((title or "").strip() or query_title(analysis, text))
     workbook = _studio_workbook()
 
     # Reuse rather than pile up duplicates: clicking twice is the normal way to

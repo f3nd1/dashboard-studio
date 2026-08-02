@@ -56,6 +56,17 @@
   // one for callers that send none. They are kept in step by hand. The ceiling
   // is a cosmetic mismatch in a default title — no number can differ — so a
   // drift guard would cost more than the fault it prevents.
+  // Insights' title is a Frappe Data field, varchar(140). Trimmed here so the
+  // field shows what will actually be stored — the server clamps again, and
+  // that one is the guard; this one is honesty about it.
+  var MAX_TITLE_LENGTH = 140;
+
+  function clampTitle(name) {
+    name = String(name == null ? "" : name).split(/\s+/).filter(Boolean).join(" ");
+    if (name.length <= MAX_TITLE_LENGTH) return name;
+    return name.slice(0, MAX_TITLE_LENGTH - 1).replace(/\s+$/, "") + "…";
+  }
+
   function insightsPrefill(analysis) {
     analysis = analysis || {};
     var doctypes = (analysis.doctypes || []).filter(Boolean);
@@ -71,10 +82,15 @@
     } else if (doctypes.length === 1) {
       title = doctypes[0] + " query";
     } else if (doctypes.length > 1) {
-      title = doctypes.slice().sort().slice(0, 3).join(" + ") + " query";
+      // The base table plus a count of the rest. Concatenating three names was
+      // fine for hand-written SQL and useless for Metabase-compiled MBQL, where
+      // a dozen generated join aliases make a title that is both unreadable and
+      // over Insights' 140-character limit.
+      title = doctypes.slice().sort()[0] + " + " + (doctypes.length - 1) + " more";
     } else {
       title = "Imported SQL query";
     }
+    title = clampTitle(title);
 
     return {
       title: title,
@@ -857,6 +873,7 @@
     chartBlockReason: chartBlockReason,
     INSIGHTS_CHART_TYPES: INSIGHTS_CHART_TYPES,
     insightsPrefill: insightsPrefill,
+    clampTitle: clampTitle,
     mergeImportedFields: mergeImportedFields,
     axisState: axisState,
     suggestedChartType: suggestedChartType,

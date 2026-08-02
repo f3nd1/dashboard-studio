@@ -572,7 +572,7 @@ assert.strictEqual(core.insightsPrefill({ doctypes: ["Fee"], group_by: ["term"],
 // The title degrades the same way the endpoint's does — the queries most worth
 // sending to Insights are the ones the parser could NOT translate.
 assert.strictEqual(core.insightsPrefill({ doctypes: ["Employee"] }).title, "Employee query");
-assert.strictEqual(core.insightsPrefill({ doctypes: ["B", "A"] }).title, "A + B query",
+assert.strictEqual(core.insightsPrefill({ doctypes: ["B", "A"] }).title, "A + 1 more",
   "two tables are not named in a stable order");
 assert.strictEqual(core.insightsPrefill(null).title, "Imported SQL query");
 assert.strictEqual(core.insightsPrefill({}).x_axis, "", "an axis was invented from nothing");
@@ -600,10 +600,29 @@ assert.strictEqual(core.axisState(undefined, true), "missing");
 // The join case that produced the blank boxes: both axes missing, title fine.
 var joined = core.insightsPrefill({ supported: false,
   doctypes: ["Student Admission UCC", "Student Applicant"], group_by: [], aggregations: [] });
-assert.strictEqual(joined.title, "Student Admission UCC + Student Applicant query");
+assert.strictEqual(joined.title, "Student Admission UCC + 1 more");
 assert.strictEqual(core.axisState(joined.x_axis, false), "missing");
 assert.strictEqual(core.axisState(joined.y_axis, false), "missing");
 assert.strictEqual(joined.chart_type, "table", "the chart-type fallback changed");
+
+// clampTitle: Insights' title is varchar(140) and Frappe aborts the whole
+// insert with "Value too big" rather than trimming. A title is cosmetic; the
+// query is not.
+assert.strictEqual(core.clampTitle("short"), "short");
+var edge = "x".repeat(140);
+assert.strictEqual(core.clampTitle(edge), edge, "exactly 140 must not be trimmed");
+var over = core.clampTitle("y".repeat(400));
+assert.strictEqual(over.length, 140, "clamped title still exceeds the column");
+assert.ok(over.endsWith("…"), "no marker that the title was cut");
+assert.strictEqual(core.clampTitle("  lots   of   space  "), "lots of space");
+assert.strictEqual(core.clampTitle(null), "");
+// The real shape that crashed: Metabase-compiled SQL whose generated join
+// aliases are long enough that a handful of them blow the limit.
+var alias = "Quality Performance Actual Value Parameter Child_a3e4a16b";
+var wide = core.insightsPrefill({ doctypes: [alias, alias + "2", alias + "3", alias + "4"] });
+assert.ok(wide.title.length <= 140, "compiled-SQL title would still be refused");
+assert.strictEqual(wide.title, alias + " + 3 more",
+  "the many-table title should name the base and count the rest");
 
 // mergeImportedFields: the card's own settings beat anything guessed from SQL.
 var guessed = { title: "Guessed title", x_axis: "gx", y_axis: "gy", chart_type: "table" };

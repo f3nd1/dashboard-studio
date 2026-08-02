@@ -58,7 +58,23 @@ class _FakeDoc:
     def get(self, key, default=None):
         return self._data.get(key, default)
 
+    # Frappe refuses an over-long Data value and aborts the insert; it does not
+    # trim. Modelled here so a code path that sends one fails in this suite
+    # rather than on the live site, which is how the title crash reached a user.
+    DATA_FIELD_LIMIT = 140
+    DATA_FIELDS = ("title",)
+
+    def _check_lengths(self):
+        for fieldname in self.DATA_FIELDS:
+            value = self._data.get(fieldname)
+            if isinstance(value, str) and len(value) > self.DATA_FIELD_LIMIT:
+                raise _ValidationError(
+                    f"Value too big: {fieldname} is {len(value)} characters, "
+                    f"max {self.DATA_FIELD_LIMIT}"
+                )
+
     def insert(self):
+        self._check_lengths()
         doctype = self._data["doctype"]
         table = self._store.setdefault(doctype, {})
         # Real v3 names, so nothing can quietly depend on the v2 "QRY-" prefix:
@@ -71,6 +87,7 @@ class _FakeDoc:
         return self
 
     def save(self):
+        self._check_lengths()
         self._store.setdefault(self._doctype, {})[self._data["name"]] = dict(self._data)
         return self
 
@@ -348,15 +365,57 @@ class TestTitle(_Base):
             self.api.query_title({"doctypes": ["Student Applicant"]}), "Student Applicant query"
         )
 
-    def test_a_join_names_both_tables(self):
+    def test_a_join_names_the_base_table_and_counts_the_rest(self):
         self.assertEqual(
             self.api.query_title({"doctypes": ["Employee", "Student Applicant"]}),
-            "Employee + Student Applicant query",
+            "Employee + 1 more",
         )
 
     def test_nothing_parsed_still_gives_a_title(self):
         self.assertEqual(self.api.query_title(None), "Imported SQL query")
         self.assertEqual(self.api.query_title({"supported": False}), "Imported SQL query")
+
+
+# A real Metabase-compiled join alias. Long enough that a handful of them push
+# a concatenated title past Insights' varchar(140), which is what made
+# "Create in Insights" hard-fail with "Value too big" on two separate queries.
+ALIAS = "Quality Performance Actual Value Parameter Child_a3e4a16b"
+
+
+class TestTitleLength(_Base):
+    """A title is cosmetic. A query is not. Frappe disagrees: it refuses an
+    over-long Data value and aborts the whole insert, so the title is trimmed
+    to fit rather than allowed to cost somebody their query."""
+
+    def test_a_title_at_the_limit_is_left_alone(self):
+        exact = "x" * 140
+        self.assertEqual(self.api.clamp_title(exact), exact)
+
+    def test_an_over_long_title_is_trimmed_and_marked(self):
+        clamped = self.api.clamp_title("y" * 400)
+        self.assertEqual(len(clamped), 140)
+        self.assertTrue(clamped.endswith("…"), "no marker that the title was cut")
+
+    def test_whitespace_is_collapsed_not_counted(self):
+        self.assertEqual(self.api.clamp_title("  lots   of\n space  "), "lots of space")
+        self.assertEqual(self.api.clamp_title(None), "")
+
+    def test_the_compiled_sql_shape_that_crashed_now_creates(self):
+        analysis = dict(ANALYSIS, doctypes=[ALIAS, ALIAS + "2", ALIAS + "3", ALIAS + "4"])
+        self.api.create_insights_query(SQL, analysis=analysis)
+        stored = self.queries()[0]["title"]
+        self.assertLessEqual(len(stored), 140, "Insights would refuse this with 'Value too big'")
+        self.assertEqual(stored, ALIAS + " + 3 more")
+
+    def test_an_over_long_title_the_CALLER_supplied_is_clamped_too(self):
+        """The clamp is on the resolved name, not only on the generated one — a
+        title typed in Studio reaches Insights by the same line."""
+        self.api.create_insights_query(SQL, title="z" * 400, analysis=ANALYSIS)
+        self.assertEqual(len(self.queries()[0]["title"]), 140)
+
+    def test_a_single_long_doctype_is_still_clamped(self):
+        long_one = "A" * 200
+        self.assertEqual(len(self.api.query_title({"doctypes": [long_one]})), 140)
 
 
 if __name__ == "__main__":
