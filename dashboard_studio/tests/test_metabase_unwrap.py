@@ -129,14 +129,15 @@ class TestTheRealMetabaseQuery(unittest.TestCase):
 
     def test_the_source_and_the_join_are_read_correctly(self):
         self.assertEqual(self.result["source_doctype"], "Student Admission UCC")
-        self.assertEqual(self.result["join"], {
+        self.assertEqual(self.result["joins"], [{
             "doctype": "Student Applicant",
             "join_type": "left",
             "on": ("`tabStudent Admission UCC`.`student_applicant` = "
                    "`Student Applicant Model - Name`.`name`"),
+            "source_table": "Student Admission UCC",
             "source_column": "student_applicant",
             "join_column": "name",
-        })
+        }])
 
     def test_the_where_clause_survives_the_unwrapping(self):
         self.assertEqual(self.result["filters"], [
@@ -176,14 +177,15 @@ class TestMetabaseDisplayNameAliases(unittest.TestCase):
     def test_the_join_is_read_rather_than_refused(self):
         result = analyze_sql(self.SQL)
         self.assertTrue(result["supported"], result["reasons"])
-        self.assertEqual(result["join"], {
+        self.assertEqual(result["joins"], [{
             "doctype": "Assessment Result Detail",
             "join_type": "left",
             "on": ("`tabAssessment Result`.`name` = "
                    "`TabAssessment Result Detail - Name`.`parent`"),
+            "source_table": "Assessment Result",
             "source_column": "name",
             "join_column": "parent",
-        })
+        }])
 
     def test_the_alias_is_not_mistaken_for_a_third_table(self):
         """`_table_columns` is called for every DocType found, so an invented
@@ -236,10 +238,12 @@ class TestRefusalNoise(unittest.TestCase):
         self.assertFalse([r for r in reasons if "__mb_source" in r],
                          f"Metabase's internal alias reached the user: {reasons}")
 
-    def test_the_real_reasons_survive(self):
-        joined = " | ".join(analyze_sql(self.SQL)["reasons"])
-        self.assertIn("subquery", joined)
-        self.assertIn("multiple joins (2)", joined)
+    def test_the_real_reason_survives(self):
+        """One reason now: the wrapper contains a join, so it is not a
+        passthrough. The join COUNT stopped being a reason when N joins became
+        N operations — the nesting is what is left."""
+        self.assertEqual([r for r in analyze_sql(self.SQL)["reasons"]
+                          if "subquery" in r], analyze_sql(self.SQL)["reasons"])
 
     def test_the_subquery_message_says_why_it_could_not_be_removed(self):
         self.assertIn("plain projection of one table",
@@ -253,6 +257,44 @@ class TestRefusalNoise(unittest.TestCase):
             "WHERE `z`.`b` = 1 GROUP BY `z`.`c`")["reasons"]
         self.assertEqual(len(reasons), len(set(reasons)), reasons)
         self.assertEqual(len([r for r in reasons if "'z'" in r]), 1, reasons)
+
+
+class TestClauseBoundaries(unittest.TestCase):
+    """A WHERE or GROUP BY is found by scanning forward to the next keyword,
+    which runs straight past the ')' ending the subquery it lives in.
+
+    The danger is not that it refuses — it is that it does NOT. The condition
+    still matches `field <op> value`, with the wrapper's own tail swallowed into
+    the value, so the filter compares against a string nothing equals.
+    """
+
+    NESTED = ("SELECT `w`.`c` FROM ( SELECT `tabQPO`.`name` AS `n` FROM `tabQPO` "
+              "JOIN `tabQPO Detail` d ON d.`parent` = `tabQPO`.`name` "
+              "WHERE `tabQPO`.`name` = 'Aggregated Performance Index' ) AS `w` "
+              "GROUP BY `w`.`c`")
+
+    def test_the_filter_value_is_the_literal_and_nothing_after_it(self):
+        self.assertEqual(analyze_sql(self.NESTED)["filters"], [
+            {"field": "name", "operator": "=",
+             "value": "Aggregated Performance Index", "table": "QPO"}])
+
+    def test_a_group_by_inside_a_wrapper_reads_only_its_own_columns(self):
+        result = analyze_sql(
+            "SELECT `w`.`n` FROM ( SELECT `tabQPO`.`name` AS `n` FROM `tabQPO` "
+            "GROUP BY `tabQPO`.`name` ) AS `w`")
+        self.assertEqual(result["group_by"],
+                         [{"field": "name", "table": "QPO"}])
+
+    def test_a_condition_wrapped_across_two_lines_still_parses(self):
+        """Metabase pretty-prints its SQL, so the operator and its value often
+        land on different lines. `\\s*` spans that; the clause is deliberately
+        NOT joined into one line first, which would rewrite a string literal
+        that legitimately contains a newline."""
+        result = analyze_sql("SELECT COUNT(*) FROM `tabQPO`\n"
+                             "WHERE `tabQPO`.`name` =\n"
+                             "      'Aggregated Performance Index'")
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["filters"][0]["value"], "Aggregated Performance Index")
 
 
 class TestRowLimits(unittest.TestCase):

@@ -74,9 +74,12 @@ Scope is a rule table, not a compiler. Compound aggregations, custom columns, li
 
 **Quality Performance Outcomes** (real UCC report, live-tested 2026-08-02) refuses and stays refused. Three reasons, all genuine limits rather than bugs:
 
-- a **subquery containing a join** — not a pure projection, so flattening it would change which rows are counted (see the unwrapping rule in `sql_ops.py`);
-- **two joins** — `analyze_sql` reads one, and Insights' operation list would take several, but a second join doubles the orientation problem the first one solves;
-- an **unparsed WHERE condition** — a shape outside `field <op> value`.
+Two of the three reasons turned out to be fixable and were fixed:
 
-Recorded here because it is the concrete report the tool cannot do, and because "multi-join support" should be decided against a real query rather than in the abstract. Nothing is scheduled.
+- ~~**two joins**~~ — this was a conservative cap, not a constraint. N joins are now N Insights operations; each attaches its table to the scope built so far, which is what `join_condition.left_column` already means.
+- ~~an **unparsed WHERE condition**~~ — a bug. The WHERE region ran past the `)` closing the wrapper it lived in, so `` `tabX`.`name` = 'literal' `` arrived as `` … 'literal' ) AS `__mb_source` ``.
+
+**What remains is the outer wrapper, and it is genuinely not flattenable.** Three independent reasons, each fatal alone: it *renames* every column (`` `Child A - Name`.`criteria` AS `Child A - Name__criteria` ``), it carries the WHERE, and its FROM is a join rather than a single table. The outer query then reads `` `__mb_source`.`Child A - Name__criteria` `` — a name no base table has. Flattening it is not removing a passthrough; it is rewriting a query and its column references, which is a different and much easier thing to get silently wrong.
+
+**The tractable next step, if it is ever wanted**, is narrower than "support subqueries": recognise a *single outermost wrapper* whose SELECT list is pure renames and whose contents already analyse, then lift the outer aggregate and GROUP BY onto it, mapping the renamed references back through the wrapper's own `X AS Y` map. That is provable in the same way the passthrough rule is. It is not built, and should not be built against a reconstruction — it needs the real SQL of a report in this shape.
 

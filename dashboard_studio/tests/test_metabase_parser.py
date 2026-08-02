@@ -51,21 +51,22 @@ class TestJoin(unittest.TestCase):
     def test_a_simple_join_is_read_into_named_columns(self):
         result = analyze_sql(JOIN_SQL)
         self.assertTrue(result["supported"], result["reasons"])
-        self.assertEqual(result["join"], {
+        self.assertEqual(result["joins"], [{
             "doctype": "Purchase Order",
             "join_type": "left",
             "on": "b.`ref` = a.`po`",
+            "source_table": "Student Applicant",
             "source_column": "po",
             "join_column": "ref",
-        })
+        }])
 
     def test_the_sides_are_oriented_by_table_not_by_where_they_were_typed(self):
         """`b.ref = a.po` and `a.po = b.ref` are the same join. If the writing
         order decided which column went where, one of them would be wrong."""
         flipped = analyze_sql("SELECT a.`name` FROM `tabStudent Applicant` a "
                               "LEFT JOIN `tabPurchase Order` b ON a.`po` = b.`ref`")
-        self.assertEqual(flipped["join"]["source_column"], "po")
-        self.assertEqual(flipped["join"]["join_column"], "ref")
+        self.assertEqual(flipped["joins"][0]["source_column"], "po")
+        self.assertEqual(flipped["joins"][0]["join_column"], "ref")
 
     def test_full_table_names_work_as_qualifiers_too(self):
         result = analyze_sql(
@@ -73,8 +74,8 @@ class TestJoin(unittest.TestCase):
             "INNER JOIN `tabPurchase Order` ON `tabPurchase Order`.`ref` = "
             "`tabStudent Applicant`.`po`")
         self.assertTrue(result["supported"], result["reasons"])
-        self.assertEqual(result["join"]["source_column"], "po")
-        self.assertEqual(result["join"]["join_column"], "ref")
+        self.assertEqual(result["joins"][0]["source_column"], "po")
+        self.assertEqual(result["joins"][0]["join_column"], "ref")
 
     def test_every_join_keyword_maps_to_its_insights_type(self):
         for keyword, expected in (("LEFT ", "left"), ("LEFT OUTER ", "left"),
@@ -84,7 +85,7 @@ class TestJoin(unittest.TestCase):
                 f"SELECT a.`name` FROM `tabStudent Applicant` a {keyword}JOIN "
                 "`tabPurchase Order` b ON b.`ref` = a.`po`")
             self.assertTrue(result["supported"], result["reasons"])
-            self.assertEqual(result["join"]["join_type"], expected,
+            self.assertEqual(result["joins"][0]["join_type"], expected,
                              f"{keyword or 'bare'}JOIN")
 
     def test_aliases_resolve_in_the_where_clause_and_group_by(self):
@@ -117,7 +118,7 @@ class TestJoinRefusals(unittest.TestCase):
     def assert_refused(self, sql, fragment):
         result = analyze_sql(sql)
         self.assertFalse(result["supported"], "expected a refusal")
-        self.assertIsNone(result["join"], "a refused join was still handed back")
+        self.assertEqual(result["joins"], [], "a refused join was still handed back")
         joined = " | ".join(result["reasons"])
         self.assertIn(fragment, joined)
         return joined
@@ -149,7 +150,7 @@ class TestJoinRefusals(unittest.TestCase):
     def test_a_self_join_is_refused(self):
         self.assert_refused(
             "SELECT a.`name` FROM `tabStudent Applicant` a JOIN `tabStudent Applicant` b "
-            "ON b.`ref` = a.`po`", "joins a table to itself")
+            "ON b.`ref` = a.`po`", "joins Student Applicant more than once")
 
     def test_a_cross_join_is_refused_by_name(self):
         self.assert_refused(
@@ -161,13 +162,15 @@ class TestJoinRefusals(unittest.TestCase):
             "SELECT a.`name` FROM `tabStudent Applicant` a JOIN `tabPurchase Order` b "
             "ON b.`ref` = CONCAT(a.`po`, 'x')", "does not name one column from")
 
-    def test_two_joins_are_still_refused(self):
+    def test_a_second_join_onto_a_table_not_yet_joined_is_refused(self):
+        """Order matters: a join cannot attach to a table the query reaches
+        only later, and Insights' left_column is the result SO FAR."""
         result = analyze_sql(
             "SELECT a.`name` FROM `tabStudent Applicant` a "
-            "JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+            "JOIN `tabPurchase Order` b ON b.`ref` = `tabSales Order`.`x` "
             "JOIN `tabSales Order` c ON c.`ref` = a.`so`")
         self.assertFalse(result["supported"])
-        self.assertIn("multiple joins (2)", " | ".join(result["reasons"]))
+        self.assertIn("has not joined yet", " | ".join(result["reasons"]))
 
     def test_an_unknown_alias_is_refused(self):
         """The join itself is fine here — the WHERE names a table that is not in

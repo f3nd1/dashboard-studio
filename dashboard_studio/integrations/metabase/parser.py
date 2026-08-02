@@ -47,8 +47,10 @@ _JOIN_TABLE = re.compile(
     r"\b(?:(?P<strategy>LEFT|RIGHT|FULL|INNER|CROSS)\s+)?(?:OUTER\s+)?"
     r"JOIN\s+`" + _TAB + r"(?P<joined>[^`]+)`" + _ALIAS
     # GROUP/ORDER need their BY: "Purchase Order" is a real DocType, and a bare
-    # \bORDER\b truncates the ON clause in the middle of the table name.
-    + r"\s+ON\s+(?P<on>.+?)(?=\bWHERE\b|\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
+    # \bORDER\b truncates the ON clause in the middle of the table name. The
+    # next JOIN ends this ON clause too, or join 1 swallows join 2.
+    + r"\s+ON\s+(?P<on>.+?)(?=\b(?:(?:LEFT|RIGHT|FULL|INNER|CROSS)\s+)?(?:OUTER\s+)?JOIN\b"
+    + r"|\bWHERE\b|\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -173,6 +175,31 @@ def _matching_paren(text: str, start: int) -> int:
                 return i
         i += 1
     return -1
+
+
+def _clause_text(text: str) -> str:
+    """A WHERE/GROUP BY region, cut at the ')' that closes the query it is in.
+
+    The region is found by scanning forward to GROUP BY / ORDER BY / LIMIT / end,
+    which sweeps straight past the end of an enclosing subquery: a WHERE inside a
+    Metabase wrapper came back as ``… = 'Aggregated Performance Index' ) AS
+    `__mb_source```, which is not ``field <op> value`` and refused as unparsed —
+    naming a condition that was, on its own, perfectly ordinary.
+    """
+    depth, i = 0, 0
+    while i < len(text):
+        char = text[i]
+        if char in "`'\"":
+            i = _skip_quoted(text, i)
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                return text[:i]
+            depth -= 1
+        i += 1
+    return text
 
 
 def _split_items(text: str) -> list[str]:
@@ -340,22 +367,29 @@ def _on_side(text: str, aliases: dict) -> dict | None:
     return {"doctype": doctype, "column": match.group("column").strip()}
 
 
-def _build_join(source: str, joined: str, strategy: str, clause: str, aliases: dict):
-    """The ON clause -> the two named columns Insights needs, or a reason why not.
+def _build_join(scope: list, joined: str, strategy: str, clause: str, aliases: dict):
+    """One ON clause -> the two named columns Insights needs, or a reason why not.
 
-    The result is oriented by TABLE: ``source_column`` always belongs to the
-    FROM table and ``join_column`` always to the joined one, whichever side of
-    the ``=`` they were typed on. Insights' join_condition means exactly that,
-    and orienting by writing order instead would silently swap them for half of
-    all real queries.
+    The result is oriented by TABLE: ``join_column`` always belongs to the table
+    being joined and ``source_column`` to one already in scope, whichever side
+    of the ``=`` they were typed on. Insights' join_condition means exactly that
+    — its left_column is a column of the result so far — and orienting by
+    writing order instead would silently swap them for half of all real queries.
+
+    ``scope`` is the FROM table plus every table joined before this one, in
+    order. That is what makes N joins the same problem as one: each join adds
+    its table to the scope the next one may attach to, and Insights takes them
+    as N separate join operations anyway.
     """
     join_type = JOIN_STRATEGIES.get(strategy)
     if not join_type:
         return None, f"{strategy} JOIN has no Insights equivalent"
-    if source == joined:
+    if joined in scope:
+        # Two copies of one table — a self join, or the same child table joined
+        # twice. `columns` is keyed by DocType, so the two cannot be told apart.
         return None, (
-            f"this query joins a table to itself ({source}), and which side of the "
-            "condition is which cannot be told apart from the SQL"
+            f"this query joins {joined} more than once (or to itself), and the columns "
+            "of the two copies cannot be told apart from the SQL"
         )
 
     parts = clause.split("=")
@@ -364,21 +398,28 @@ def _build_join(source: str, joined: str, strategy: str, clause: str, aliases: d
             f"the join condition '{clause}' is not a single equality — this converter "
             "translates only `a.column = b.column`"
         )
-    left, right = _on_side(parts[0], aliases), _on_side(parts[1], aliases)
     sides = {}
-    for side in (left, right):
+    for side in (_on_side(parts[0], aliases), _on_side(parts[1], aliases)):
         if side:
             sides[side["doctype"]] = side["column"]
-    if set(sides) != {source, joined}:
+    if joined not in sides or len(sides) != 2:
         return None, (
-            f"the join condition '{clause}' does not name one column from {source} and "
-            f"one from {joined} — this converter translates only `a.column = b.column`"
+            f"the join condition '{clause}' does not name one column from {joined} and "
+            "one from a table already in the query — this converter translates only "
+            "`a.column = b.column`"
+        )
+    source_table = next(table for table in sides if table != joined)
+    if source_table not in scope:
+        return None, (
+            f"the join condition '{clause}' attaches {joined} to {source_table}, which "
+            "this query has not joined yet"
         )
     return {
         "doctype": joined,
         "join_type": join_type,
         "on": clause,
-        "source_column": sides[source],
+        "source_table": source_table,
+        "source_column": sides[source_table],
         "join_column": sides[joined],
     }, None
 
@@ -397,7 +438,7 @@ def _parse_filters(sql: str, aliases: dict, reasons: list) -> tuple[list[dict], 
     )
     if not m:
         return [], []
-    clause = m.group(1)
+    clause = _clause_text(m.group(1))
     # OR cannot map to the engine's AND-only conditions. Checked textually, so a
     # literal " OR " inside a string value also flags — conservative by design.
     if re.search(r"\bOR\b", clause, re.IGNORECASE):
@@ -405,6 +446,9 @@ def _parse_filters(sql: str, aliases: dict, reasons: list) -> tuple[list[dict], 
     filters, problems = [], []
     # Naive split on AND — sufficient for the simple flat WHERE clauses in scope.
     for part in re.split(r"\bAND\b", clause, flags=re.IGNORECASE):
+        # NOT whitespace-normalised. `\s*` around the operator already spans a
+        # newline, so a condition wrapped across lines parses as it is; joining
+        # the lines first would rewrite a multi-line string literal instead.
         cm = _CONDITION.match(part)
         if not cm:
             problems.append(f"unparsed WHERE condition: {' '.join(part.split())[:60]}")
@@ -423,7 +467,7 @@ def _parse_group_by(sql: str, aliases: dict, reasons: list) -> list[dict]:
     if not m:
         return []
     out = []
-    for part in m.group(1).split(","):
+    for part in _split_items(_clause_text(m.group(1))):
         if not part.strip():
             continue
         qualifier, field = _split_ref(part)
@@ -496,8 +540,6 @@ def analyze_sql(sql: str) -> dict:
             )
 
     join_count = len(_JOIN_PATTERN.findall(statement))
-    if join_count > 1:
-        reasons.append(f"multiple joins ({join_count})")
 
     for pattern, message in _UNSUPPORTED_MARKERS:
         if pattern.search(statement):
@@ -511,26 +553,32 @@ def analyze_sql(sql: str) -> dict:
     from_match = _FROM_TABLE.search(statement)
     source_doctype = _dt(from_match.group(1)) if from_match else (doctypes[0] if doctypes else None)
 
-    join_match = _JOIN_TABLE.search(statement) if join_count == 1 else None
-    # Built before the join is validated so that a query whose ON clause is
+    join_matches = list(_JOIN_TABLE.finditer(statement))
+    # Built before the joins are validated so that a query whose ON clause is
     # refused still resolves its WHERE aliases — otherwise one bad join buries
     # its real reason under a pile of "unknown alias".
-    aliases = _aliases(from_match, source_doctype, join_match)
+    aliases = _aliases(from_match, source_doctype, join_matches)
 
-    join = None
-    if join_count == 1 and not subquery:
-        if not join_match or not from_match:
+    joins = []
+    if join_count and not subquery:
+        if len(join_matches) != join_count or not from_match:
             reasons.append("join present but not a simple `tab<DocType>` … ON <a> = <b>")
         else:
-            join, problem = _build_join(
-                source_doctype,
-                _dt(join_match.group("joined")),
-                (join_match.group("strategy") or "INNER").upper(),
-                " ".join(join_match.group("on").split()),
-                aliases,
-            )
-            if problem:
-                reasons.append(problem)
+            scope = [source_doctype]
+            for match in join_matches:
+                built, problem = _build_join(
+                    scope,
+                    _dt(match.group("joined")),
+                    (match.group("strategy") or "INNER").upper(),
+                    " ".join(match.group("on").split()),
+                    aliases,
+                )
+                if problem:
+                    reasons.append(problem)
+                    joins = []
+                    break
+                joins.append(built)
+                scope.append(built["doctype"])
 
     # Qualifiers that resolve to nothing are collected APART from the real
     # reasons. When a subquery survived, every alias inside it — Metabase's
@@ -556,21 +604,20 @@ def analyze_sql(sql: str) -> dict:
         "aggregations": aggregations,
         "filters": filters,
         "group_by": group_by,
-        "join": join,
+        "joins": joins,
     }
 
 
-def _aliases(from_match, source_doctype, join_match) -> dict:
+def _aliases(from_match, source_doctype, join_matches) -> dict:
     """``{alias or table name (lowercased): DocType}`` for this statement.
 
     Both spellings are keys because real SQL uses both: Metabase writes
     ```tabPurchase Order`.`ref``` and a person writes ``b.`ref```.
     """
+    pairs = [(from_match, source_doctype)]
+    pairs += [(m, _dt(m.group("joined"))) for m in (join_matches or [])]
     aliases: dict[str, str] = {}
-    for match, doctype in (
-        (from_match, source_doctype),
-        (join_match, _dt(join_match.group("joined")) if join_match else None),
-    ):
+    for match, doctype in pairs:
         if not doctype:
             continue
         aliases[doctype.lower()] = doctype

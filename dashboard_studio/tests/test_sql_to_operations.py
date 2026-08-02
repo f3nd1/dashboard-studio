@@ -211,6 +211,122 @@ class TestMetabaseCompiledSql(unittest.TestCase):
         self.assertEqual(result["operations"][-1]["dimensions"][0]["data_type"], "String")
 
 
+class TestParentWithChildTables(unittest.TestCase):
+    """The shape most UCC quality reports are built in: one parent DocType
+    joined to several of its child tables on `parent.name = child.parent`,
+    filtered to one parent record, aggregated over a child column.
+
+    N joins are N Insights operations. Each attaches its table to the result so
+    far, which is exactly what join_condition.left_column means, so the second
+    join is not a harder problem than the first — only a longer list.
+    """
+
+    SQL = ("SELECT AVG(`c`.`score`) AS `avg` "
+           "FROM `tabQuality Performance Outcomes` "
+           "LEFT JOIN `tabQPO Criteria` c "
+           "  ON `tabQuality Performance Outcomes`.`name` = c.`parent` "
+           "LEFT JOIN `tabQPO Band` b "
+           "  ON `tabQuality Performance Outcomes`.`name` = b.`parent` "
+           "WHERE `tabQuality Performance Outcomes`.`name` = 'Aggregated Performance Index' "
+           "GROUP BY `c`.`criteria`, `b`.`band`")
+
+    COLUMNS = {
+        "Quality Performance Outcomes": {"name": "String"},
+        "QPO Criteria": {"name": "String", "parent": "String", "criteria": "String",
+                         "score": "Decimal"},
+        "QPO Band": {"name": "String", "parent": "String", "band": "String"},
+    }
+
+    def result(self):
+        return run(self.SQL, columns=self.COLUMNS)
+
+    def test_two_joins_become_two_join_operations(self):
+        result = self.result()
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "join", "join", "filter", "summarize"])
+
+    def test_each_join_names_its_own_table_and_columns(self):
+        operations = self.result()["operations"]
+        self.assertEqual(operations[1]["table"]["table_name"], "tabQPO Criteria")
+        self.assertEqual(operations[1]["join_condition"], {
+            "left_column": {"type": "column", "column_name": "name"},
+            "right_column": {"type": "column", "column_name": "parent"}})
+        self.assertEqual(operations[2]["table"]["table_name"], "tabQPO Band")
+        self.assertEqual(operations[2]["join_condition"], {
+            "left_column": {"type": "column", "column_name": "name"},
+            "right_column": {"type": "column", "column_name": "parent"}})
+
+    def test_the_filter_on_the_parent_survives(self):
+        """`table.column = 'literal'` with a fully-qualified backticked table."""
+        self.assertEqual(self.result()["operations"][3], {
+            "type": "filter", "column": {"type": "column", "column_name": "name"},
+            "operator": "=", "value": "Aggregated Performance Index"})
+
+    def test_grouping_by_a_column_from_each_child(self):
+        dimensions = self.result()["operations"][-1]["dimensions"]
+        self.assertEqual([d["column_name"] for d in dimensions], ["criteria", "band"])
+
+    def test_a_third_join_is_no_different(self):
+        columns = dict(self.COLUMNS,
+                       **{"QPO Note": {"parent": "String", "note": "String"}})
+        result = run(self.SQL.replace(
+            " WHERE ", " LEFT JOIN `tabQPO Note` n "
+            "ON `tabQuality Performance Outcomes`.`name` = n.`parent` WHERE "),
+            columns=columns)
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual([op["type"] for op in result["operations"]].count("join"), 3)
+
+    def test_a_chained_join_attaches_to_the_table_before_it(self):
+        """Join 2 onto join 1's table, not onto the source. Each join's
+        source_column has to be checked against the table it actually names —
+        checking it against the FROM table looks in the wrong place."""
+        columns = dict(self.COLUMNS,
+                       **{"QPO Note": {"criteria": "String", "note": "String"}})
+        result = run(
+            "SELECT COUNT(*) FROM `tabQuality Performance Outcomes` "
+            "LEFT JOIN `tabQPO Criteria` c "
+            "  ON `tabQuality Performance Outcomes`.`name` = c.`parent` "
+            "LEFT JOIN `tabQPO Note` n ON n.`criteria` = c.`criteria`",
+            columns=columns)
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["operations"][2]["join_condition"], {
+            "left_column": {"type": "column", "column_name": "criteria"},
+            "right_column": {"type": "column", "column_name": "criteria"}})
+
+    def test_a_chained_joins_source_column_is_checked_against_ITS_table(self):
+        """`nonsense` is not on QPO Criteria. Checked against the FROM table
+        instead, this would be reported against the wrong table — or, if the
+        FROM table happened to have the column, not reported at all."""
+        columns = dict(self.COLUMNS,
+                       **{"QPO Note": {"criteria": "String"},
+                          "Quality Performance Outcomes": {"name": "String",
+                                                           "nonsense": "String"}})
+        result = run(
+            "SELECT COUNT(*) FROM `tabQuality Performance Outcomes` "
+            "LEFT JOIN `tabQPO Criteria` c "
+            "  ON `tabQuality Performance Outcomes`.`name` = c.`parent` "
+            "LEFT JOIN `tabQPO Note` n ON n.`criteria` = c.`nonsense`",
+            columns=columns)
+        self.assertFalse(result["supported"], "a column of the wrong table passed")
+        self.assertIn("'nonsense', which is not a column of QPO Criteria",
+                      " | ".join(result["reasons"]))
+
+    def test_a_join_column_is_still_checked_against_its_own_table(self):
+        result = run(self.SQL.replace("c.`parent`", "c.`nonsense`"),
+                     columns=self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertIn("'nonsense', which is not a column of QPO Criteria",
+                      " | ".join(result["reasons"]))
+
+    def test_the_same_child_table_joined_twice_is_refused(self):
+        """`columns` is keyed by DocType, so two copies cannot be told apart."""
+        result = run(self.SQL.replace("`tabQPO Band` b", "`tabQPO Criteria` b"),
+                     columns=self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertIn("more than once", " | ".join(result["reasons"]))
+
+
 class TestJoinRefusals(unittest.TestCase):
     def assert_refused(self, result, fragment):
         self.assertFalse(result["supported"], "expected a refusal")

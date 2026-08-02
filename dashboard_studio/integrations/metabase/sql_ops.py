@@ -9,18 +9,19 @@ with its client and tests.
 **Where the line is, concretely.** `parser.analyze_sql` already draws most of it
 and this narrows it further:
 
-  works      one table, or two joined on a single `a.col = b.col` equality;
-             WHERE with AND-ed comparisons, GROUP BY, one COUNT/SUM/AVG
+  works      one table, or any number joined each on a single `a.col = b.col`
+             equality; WHERE with AND-ed comparisons, GROUP BY, one COUNT/SUM/AVG
              aggregate
-  refused    subqueries, more than one join, CROSS and self joins, an ON clause
+  refused    subqueries, CROSS joins, the same table joined twice, an ON clause
              that is anything but a single equality of two qualified columns,
              OR, UNION, HAVING, CASE, DISTINCT, window functions, more than one
              aggregate, LIKE and IN
 
-**How a join is translated, and where it stops.** `analyze_sql` reads the ON
-clause into two *named, table-oriented* columns — ``source_column`` always
-belongs to the FROM table and ``join_column`` to the joined one — which is
-exactly what Insights' ``join_condition`` means. Both names are then checked
+**How a join is translated, and where it stops.** `analyze_sql` reads each ON
+clause into two *named, table-oriented* columns — ``join_column`` always belongs
+to the table being joined and ``source_column`` to one already in scope — which
+is exactly what Insights' ``join_condition`` means, and why N joins are N
+operations rather than a harder problem than one. Both names are then checked
 against the real columns of their DocType here, so a column that does not exist
 refuses rather than being written into a query that runs and answers something
 else. Everything the orientation cannot be certain about (an unqualified side, a
@@ -240,7 +241,7 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     columns = columns or {}
     doctypes = [d for d in (analysis.get("doctypes") or []) if d]
     source = analysis.get("source_doctype") or (doctypes[0] if doctypes else None)
-    join = analysis.get("join")
+    joins = analysis.get("joins") or []
 
     if not source:
         reasons.append("no table found in this query")
@@ -256,7 +257,7 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     if reasons:
         return {"supported": False, "operations": [], "reasons": reasons}
 
-    tables = [source] + ([join["doctype"]] if join else [])
+    tables = [source] + [j["doctype"] for j in joins]
     # column -> {DocType: data_type}. A name in two tables is ambiguous, and the
     # ambiguity has to survive to the lookup rather than be flattened away here.
     available: dict[str, dict[str, str]] = {}
@@ -266,20 +267,27 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
 
     operations = [_source("tab" + source, data_source)]
 
-    if join:
+    # One Insights join operation per JOIN, in the order they were written: each
+    # attaches its table to the result built so far, which is what Insights'
+    # join_condition.left_column means.
+    for join in joins:
         join_columns = columns.get(join["doctype"]) or {}
         # The check that makes reading a join out of SQL safe: both names have to
         # be columns the DocTypes really have. A typo'd or misread one would
         # otherwise become a join that runs and answers a different question.
-        for column, doctype, known in ((join["source_column"], source, columns.get(source) or {}),
-                                       (join["join_column"], join["doctype"], join_columns)):
+        for column, doctype, known in (
+            (join["source_column"], join["source_table"],
+             columns.get(join["source_table"]) or {}),
+            (join["join_column"], join["doctype"], join_columns),
+        ):
             if column not in known:
                 reasons.append(f"the join condition uses '{column}', which is not a "
                                f"column of {doctype}")
-        if not reasons:
-            operations.append(_join(join["join_type"], "tab" + join["doctype"], data_source,
-                                    join["source_column"], join["join_column"],
-                                    sorted(join_columns)))
+        if reasons:
+            break
+        operations.append(_join(join["join_type"], "tab" + join["doctype"], data_source,
+                                join["source_column"], join["join_column"],
+                                sorted(join_columns)))
 
     for rule in analysis.get("filters") or []:
         operator = OPERATORS.get(str(rule.get("operator") or "").strip())
