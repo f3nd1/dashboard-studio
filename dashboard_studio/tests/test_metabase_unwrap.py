@@ -20,11 +20,15 @@ import unittest
 
 from dashboard_studio.integrations.metabase.parser import (
     analyze_sql,
+    lift_renaming_wrapper,
     unwrap_derived_tables,
 )
 
 REAL = (pathlib.Path(__file__).resolve().parents[2]
         / "reference" / "metabase" / "duration_from_counselling_to_admission.sql")
+# The second real capture: an AGGREGATING Metabase question, which wraps its
+# joins instead of leaving them at the top level.
+QPO = pathlib.Path(__file__).resolve().parent / "fixtures" / "quality_performance_outcomes.sql"
 
 # The inner wrapper, exactly as Metabase writes it.
 INNER = "( select * from `tabStudent Applicant` ) AS `__mb_source`"
@@ -218,6 +222,123 @@ class TestMetabaseDisplayNameAliases(unittest.TestCase):
         self.assertEqual(
             analyze_sql("SELECT COUNT(*) FROM `tabTable Layout`")["source_doctype"],
             "Table Layout")
+
+
+class TestLiftingARenamingWrapper(unittest.TestCase):
+    """Metabase's other wrapper: the one it puts round the joins when the
+    question aggregates.
+
+    It is NOT a passthrough — it renames every column — so unwrap_ leaves it
+    alone, correctly. It is still removable for a different and equally provable
+    reason: it neither filters nor aggregates, so it returns the same ROWS as
+    the query inside it, and a rename is a bijection on columns. Mapping the
+    outer references back through its own `X AS Y` list recovers the original.
+    """
+
+    def setUp(self):
+        self.sql = QPO.read_text()
+        self.result = analyze_sql(self.sql)
+
+    def test_the_real_report_converts(self):
+        self.assertTrue(self.result["supported"], self.result["reasons"])
+
+    def test_the_source_is_the_parent_doctype(self):
+        self.assertEqual(self.result["source_doctype"], "Quality Performance Outcomes")
+
+    def test_both_child_tables_are_joined_on_parent(self):
+        self.assertEqual(
+            [(j["doctype"], j["source_column"], j["join_column"], j["join_type"])
+             for j in self.result["joins"]],
+            [("Quality Performance Outcomes Performance Childtable", "name", "parent", "left"),
+             ("Quality Performance Actual Value Parameter Childtable", "name", "parent", "left")])
+
+    def test_the_filter_on_the_parent_record_survives_the_lift(self):
+        self.assertEqual(self.result["filters"], [
+            {"field": "name", "operator": "=", "value": "Aggregated Performance Index",
+             "table": "Quality Performance Outcomes"}])
+
+    def test_the_grouping_columns_map_back_through_the_rename(self):
+        """The outer query groups by `__mb_source`.`Tab…Child_a3e4a16b`, a name
+        no table has. It is the wrapper's alias for `metric`."""
+        self.assertEqual(
+            self.result["group_by"],
+            [{"field": "metric",
+              "table": "Quality Performance Actual Value Parameter Childtable"},
+             {"field": "year",
+              "table": "Quality Performance Actual Value Parameter Childtable"}])
+
+    def test_the_aggregate_maps_back_through_the_rename_AND_the_times_one(self):
+        """`AVG(`__mb_source`.`Observe Value`)` where the wrapper defines
+        `Observe Value` as `actual_value * 1`. For a number that is the column."""
+        self.assertEqual(self.result["aggregations"],
+                         [{"function": "AVG", "argument": "actual_value",
+                           "table": "Quality Performance Actual Value Parameter Childtable"}])
+
+
+class TestWhatIsNotLifted(unittest.TestCase):
+    """Every bail-out leaves the statement exactly as it was, so the subquery
+    check downstream turns it into a named refusal. Nothing is half-rewritten."""
+
+    WRAPPED = ("SELECT `w`.`m` AS `m`, COUNT(*) AS `n` FROM ( "
+               "SELECT `c`.`metric` AS `m` FROM `tabQPO` "
+               "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` "
+               "{extra}) AS `w` GROUP BY `w`.`m`")
+
+    def assert_not_lifted(self, sql):
+        self.assertEqual(lift_renaming_wrapper(sql), sql)
+        result = analyze_sql(sql)
+        self.assertFalse(result["supported"])
+        self.assertIn("subquery", " | ".join(result["reasons"]))
+
+    def test_the_shape_it_IS_meant_to_lift(self):
+        """A guard on the guard: if this stopped lifting, every case below would
+        pass for the wrong reason."""
+        sql = self.WRAPPED.format(extra="")
+        self.assertNotEqual(lift_renaming_wrapper(sql), sql)
+        self.assertTrue(analyze_sql(sql)["supported"], analyze_sql(sql)["reasons"])
+
+    def test_a_wrapper_that_aggregates_is_not_lifted(self):
+        self.assert_not_lifted(
+            "SELECT `w`.`n` FROM ( SELECT COUNT(*) AS `n` FROM `tabQPO` ) AS `w`")
+
+    def test_a_wrapper_that_groups_is_not_lifted(self):
+        self.assert_not_lifted(self.WRAPPED.format(extra="GROUP BY `c`.`metric` "))
+
+    def test_a_wrapper_with_a_limit_is_not_lifted(self):
+        self.assert_not_lifted(self.WRAPPED.format(extra="LIMIT 10 "))
+
+    def test_an_outer_WHERE_is_not_lifted(self):
+        """It would have to be ANDed with the inner one; that is a different
+        rewrite, and getting it wrong changes which rows are counted."""
+        self.assert_not_lifted(self.WRAPPED.format(extra="") .replace(
+            "GROUP BY `w`.`m`", "WHERE `w`.`m` = 'x' GROUP BY `w`.`m`"))
+
+    def test_a_computed_item_in_the_wrapper_is_not_lifted(self):
+        """`a - b AS x` is not a rename. Its value is not any column's."""
+        self.assert_not_lifted(
+            "SELECT `w`.`d` FROM ( SELECT `c`.`a` - `c`.`b` AS `d` FROM `tabQPO` "
+            "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` ) AS `w`")
+
+    def test_an_outer_reference_the_wrapper_does_not_define_is_not_lifted(self):
+        self.assert_not_lifted(
+            "SELECT `w`.`missing` FROM ( SELECT `c`.`metric` AS `m` FROM `tabQPO` "
+            "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` ) AS `w`")
+
+    def test_grouping_by_a_times_one_alias_is_not_lifted(self):
+        """`x * 1` is `x` for a number, but MySQL coerces `'abc' * 1` to 0, and
+        the types are not known here. Aggregating it is fine; grouping by it is
+        not grouping by the column."""
+        self.assert_not_lifted(
+            "SELECT `w`.`v` FROM ( SELECT `c`.`actual_value` * 1 AS `v` FROM `tabQPO` "
+            "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` ) AS `w` "
+            "GROUP BY `w`.`v`")
+
+    def test_a_wrapper_whose_joins_are_still_wrapped_is_not_lifted(self):
+        """Nothing readable to lift onto: the joins are still subqueries."""
+        self.assert_not_lifted(
+            "SELECT `w`.`m` FROM ( SELECT `c`.`metric` AS `m` FROM `tabQPO` "
+            "LEFT JOIN ( SELECT `x`.`metric` AS `metric` FROM `tabQPO Child` `x` "
+            "WHERE `x`.`ok` = 1 ) AS c ON `tabQPO`.`name` = c.`parent` ) AS `w`")
 
 
 class TestRefusalNoise(unittest.TestCase):

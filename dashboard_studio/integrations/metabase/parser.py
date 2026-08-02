@@ -291,6 +291,132 @@ def unwrap_derived_tables(sql: str) -> str:
     return sql
 
 
+# --------------------------------------------------------------------------
+# Metabase's outer wrapper: "aggregate over a joined source"
+#
+# When a Metabase question aggregates over joined tables, the joins become a
+# derived table and the aggregate runs outside it:
+#
+#   SELECT `__mb_source`.`Child_a3e4a16b`, AVG(`__mb_source`.`Observe Value`)
+#   FROM ( SELECT `Child_3c522490`.`metric` AS `Child_a3e4a16b`, …
+#          FROM `tabParent` LEFT JOIN … LEFT JOIN … WHERE … ) AS `__mb_source`
+#   GROUP BY `__mb_source`.`Child_a3e4a16b`
+#
+# That wrapper is NOT a passthrough — it renames every column — so the rule in
+# unwrap_derived_tables leaves it alone, correctly. But it is still removable,
+# for a different and equally provable reason: it neither filters nor
+# aggregates, so it returns the same ROWS as the query inside it, and a rename
+# is a bijection on columns. Mapping the outer references back through the
+# wrapper's own `X AS Y` list therefore recovers the original query exactly.
+#
+# So the two rules are different things and both are needed: unwrap_ replaces a
+# derived table that IS its table; this lifts an aggregate onto the query a
+# derived table renames.
+# --------------------------------------------------------------------------
+
+_FROM_PAREN = re.compile(r"\bFROM\s*\(", re.IGNORECASE)
+_WRAPPER_ALIAS = re.compile(r"\s*(?:AS\s+)?(?:`([^`]+)`|(\w+))", re.IGNORECASE)
+# One item of the wrapper's SELECT list: a qualified column, renamed.
+#
+# `* 1` is allowed because Metabase writes it for a custom numeric field and
+# `x * 1` IS `x` for a number — but only outside a GROUP BY, see below: on a
+# text column MySQL coerces `'abc' * 1` to 0, and grouping by that is not
+# grouping by the column.
+_WRAPPER_ITEM = re.compile(
+    r"^(?P<expr>(?:`[^`]+`|\w+)\.(?:`[^`]+`|\w+))(?P<arith>\s*\*\s*1)?"
+    r"\s+AS\s+(?:`(?P<alias_q>[^`]+)`|(?P<alias>\w+))$", re.IGNORECASE)
+# Anything here means the wrapper changes which rows come back, so its contents
+# cannot simply be re-pointed at.
+_WRAPPER_BLOCKS = re.compile(r"\b(GROUP\s+BY|HAVING|DISTINCT|UNION|LIMIT)\b", re.IGNORECASE)
+
+
+def lift_renaming_wrapper(sql: str) -> str:
+    """Fold a renaming wrapper into the query it wraps, or return sql unchanged.
+
+    Every bail-out is a refusal in disguise: the statement comes back as it was
+    and the subquery check downstream turns it into a named reason. Nothing is
+    half-rewritten.
+    """
+    if not isinstance(sql, str):
+        raise TypeError("sql must be a string")
+    match = _FROM_PAREN.search(sql)
+    if not match:
+        return sql
+    opened = match.end() - 1
+    closed = _matching_paren(sql, opened)
+    if closed < 0:
+        return sql
+    head, inner, after = sql[:match.start()], sql[opened + 1:closed], sql[closed + 1:]
+
+    named = _WRAPPER_ALIAS.match(after)
+    if not named:
+        return sql
+    wrapper = named.group(1) or named.group(2)
+    tail = after[named.end():]
+
+    # The outer query may only group, sort and select. Its own WHERE would have
+    # to be ANDed with the inner one, and a second derived table is a different
+    # shape entirely.
+    if re.search(r"\bWHERE\b", tail, re.IGNORECASE) or "(" in tail:
+        return sql
+    if len(re.findall(r"\bSELECT\b", head, re.IGNORECASE)) != 1:
+        return sql
+    # Exactly one SELECT inside: a second means a per-table wrapper this pass
+    # could not flatten, so the joins are not readable and there is nothing to
+    # lift onto. (A bare "( in source" check was written alongside this and
+    # removed — it caught nothing this did not, and a stray parenthesis in an
+    # ON clause fails the join parse downstream anyway, which is a refusal.)
+    if len(re.findall(r"\bSELECT\b", inner, re.IGNORECASE)) != 1:
+        return sql
+    if _WRAPPER_BLOCKS.search(inner):
+        return sql
+
+    inner_from = re.search(r"\bFROM\b", inner, re.IGNORECASE)
+    if not inner_from:
+        return sql
+    items, source = inner[:inner_from.start()], inner[inner_from.start():]
+    if not re.match(r"\s*SELECT\b", items, re.IGNORECASE):
+        return sql
+    renames = {}
+    for item in _split_items(items.strip()[len("SELECT"):]):
+        parsed = _WRAPPER_ITEM.match(" ".join(item.split()))
+        if not parsed:
+            return sql
+        alias = parsed.group("alias_q") or parsed.group("alias")
+        renames[alias] = (parsed.group("expr"), bool(parsed.group("arith")))
+
+    reference = re.compile(
+        r"(?:`" + re.escape(wrapper) + r"`|\b" + re.escape(wrapper) + r"\b)"
+        r"\.(?:`(?P<quoted>[^`]+)`|(?P<bare>\w+))")
+
+    # Grouping by `x * 1` is not grouping by x unless x is a number, and the
+    # types are not known here. Refuse rather than find out in the chart.
+    grouping = re.search(r"\bGROUP\s+BY\b(.+?)(?=\bORDER\s+BY\b|\bLIMIT\b|$)",
+                         tail, re.IGNORECASE | re.DOTALL)
+    if grouping:
+        for found in reference.finditer(grouping.group(1)):
+            entry = renames.get(found.group("quoted") or found.group("bare"))
+            if entry and entry[1]:
+                return sql
+
+    unmapped = []
+
+    def swap(found):
+        name = found.group("quoted") or found.group("bare")
+        entry = renames.get(name)
+        if not entry:
+            unmapped.append(name)
+            return found.group(0)
+        return entry[0]
+
+    rewritten_head = reference.sub(swap, head)
+    rewritten_tail = reference.sub(swap, tail)
+    if unmapped:
+        return sql
+    return (rewritten_head.rstrip() + " " + source.strip() + " "
+            + rewritten_tail.strip()).strip()
+
+
 def _select_problems(statement: str) -> list[str]:
     """Items in the SELECT list this converter would silently drop.
 
@@ -515,7 +641,11 @@ def analyze_sql(sql: str) -> dict:
     # reads the query somebody actually asked for rather than the scaffolding
     # Metabase compiled around it. Only provable identities are removed; a
     # wrapper that filters or aggregates survives and is refused as a subquery.
-    statement = unwrap_derived_tables(sql.strip().rstrip(";"))
+    # Two rewrites, in order. unwrap_ replaces a derived table that IS its
+    # table; lift_ folds away a wrapper that only RENAMES the query inside it.
+    # The second needs the first to have run, because a wrapper whose joins are
+    # still wrapped has nothing readable to lift onto.
+    statement = lift_renaming_wrapper(unwrap_derived_tables(sql.strip().rstrip(";")))
 
     # Subquery / nested SELECT: more than one SELECT keyword.
     subquery = len(re.findall(r"\bSELECT\b", statement, re.IGNORECASE)) > 1

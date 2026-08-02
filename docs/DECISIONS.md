@@ -72,14 +72,12 @@ Scope is a rule table, not a compiler. Compound aggregations, custom columns, li
 
 ## Known unsupported — recorded, not scheduled
 
-**Quality Performance Outcomes** (real UCC report, live-tested 2026-08-02) refuses and stays refused. Three reasons, all genuine limits rather than bugs:
+**Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.
 
-Two of the three reasons turned out to be fixable and were fixed:
+- **an unparsed WHERE condition** — a bug. The WHERE region ran past the `)` closing the wrapper it lived in, so `` `tabX`.`name` = 'literal' `` arrived as `` … 'literal' ) AS `__mb_source` ``. Worse than it looked: on one line it still *parsed*, with the wrapper's tail swallowed into the value.
+- **two joins** — a conservative cap, not a constraint. N joins are N Insights operations.
+- **the outer wrapper** — genuinely not a passthrough (it renames every column, carries the WHERE, and its FROM is a join), so `unwrap_derived_tables` was right to leave it. It is removable for a *different* reason: it neither filters nor aggregates, so it returns the same rows as the query inside it, and a rename is a bijection on columns. `lift_renaming_wrapper` maps the outer references back through the wrapper's own `X AS Y` list. That is the narrow, provable shape this file previously said should not be built against a reconstruction — it was built once the real SQL arrived.
 
-- ~~**two joins**~~ — this was a conservative cap, not a constraint. N joins are now N Insights operations; each attaches its table to the scope built so far, which is what `join_condition.left_column` already means.
-- ~~an **unparsed WHERE condition**~~ — a bug. The WHERE region ran past the `)` closing the wrapper it lived in, so `` `tabX`.`name` = 'literal' `` arrived as `` … 'literal' ) AS `__mb_source` ``.
+One judgement call worth naming: Metabase writes `` `col` * 1 `` for a custom numeric field, and the lift treats that as the column. `x * 1` IS `x` for a number, but MySQL coerces `'abc' * 1` to 0, and the column's type is not known at that point — so it is allowed as an aggregate argument and **refused in a GROUP BY**, where grouping by a coerced zero would not be grouping by the column.
 
-**What remains is the outer wrapper, and it is genuinely not flattenable.** Three independent reasons, each fatal alone: it *renames* every column (`` `Child A - Name`.`criteria` AS `Child A - Name__criteria` ``), it carries the WHERE, and its FROM is a join rather than a single table. The outer query then reads `` `__mb_source`.`Child A - Name__criteria` `` — a name no base table has. Flattening it is not removing a passthrough; it is rewriting a query and its column references, which is a different and much easier thing to get silently wrong.
-
-**The tractable next step, if it is ever wanted**, is narrower than "support subqueries": recognise a *single outermost wrapper* whose SELECT list is pure renames and whose contents already analyse, then lift the outer aggregate and GROUP BY onto it, mapping the renamed references back through the wrapper's own `X AS Y` map. That is provable in the same way the passthrough rule is. It is not built, and should not be built against a reconstruction — it needs the real SQL of a report in this shape.
-
+Still unsupported, unchanged: a wrapper that filters or aggregates, an outer WHERE alongside an inner one, the same DocType joined twice, computed columns in the SELECT list, and a row limit other than Metabase's own cap.
