@@ -756,6 +756,60 @@ class TestChartConfig(_Base):
         )
 
 
+class TestSeries(_ChartBase):
+    """The colour breakdown — Insights' split_by. One bar per x value, split
+    into a coloured segment per series value."""
+
+    COLUMNS = CARD_COLUMNS + [
+        {"name": "perspective", "display_name": "Perspective", "base_type": "type/Text"}]
+
+    def test_split_by_is_written_in_the_real_shape(self):
+        self.apply(columns=self.COLUMNS, series="perspective")
+        split = self.config()["split_by"]
+        self.assertEqual(split, {"dimension": {
+            "column_name": "perspective", "data_type": "String",
+            "dimension_name": "perspective"}},
+            "split_by must mirror x_axis.dimension — same Dimension type in v3")
+
+    def test_no_series_omits_the_key_entirely(self):
+        """v3 types split_by optional. Writing null asserts something the real
+        record never says."""
+        self.apply(columns=self.COLUMNS)
+        self.assertNotIn("split_by", self.config())
+
+    def test_a_series_is_never_guessed_from_a_spare_column(self):
+        """A third column is not evidence anyone wants it coloured by, and a
+        chart that silently splits into 40 segments is worse than one that
+        does not split at all."""
+        result = self.apply(columns=self.COLUMNS)
+        self.assertEqual(result["series"], "")
+
+    def test_a_series_the_query_does_not_return_is_refused(self):
+        message = self.refused(columns=self.COLUMNS, series="nonsense")
+        self.assertIn("'nonsense' is not a column", message)
+        self.assertEqual(self.charts(), [], "it wrote a chart despite refusing")
+
+    def test_a_numeric_series_is_refused_like_a_numeric_x_axis(self):
+        """A SECOND numeric column, so this reaches the type check rather than
+        stopping at "that is already the Y axis" — which is what it did when
+        this test named `count`, passing for the wrong reason."""
+        message = self.refused(
+            columns=self.COLUMNS + [{"name": "total", "base_type": "type/Float"}],
+            series="total")
+        self.assertIn("'total' is a Decimal", message)
+        self.assertIn("text, a date or a time", message)
+
+    def test_the_series_cannot_also_be_an_axis(self):
+        message = self.refused(columns=self.COLUMNS, series="academic_year")
+        self.assertIn("already the X axis", message)
+
+    def test_pick_series_is_frappe_free_and_says_no_by_default(self):
+        columns = self.api.axis_columns(self.COLUMNS)
+        self.assertEqual(self.api.pick_series(columns, "academic_year", "count"), (None, None))
+        chosen, reason = self.api.pick_series(columns, "academic_year", "count", "perspective")
+        self.assertEqual((chosen, reason), ("perspective", None))
+
+
 class TestSqlOperations(_Base):
     def test_round_trips(self):
         operations = self.api.sql_operations(SQL)

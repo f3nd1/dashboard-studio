@@ -98,6 +98,11 @@
       // needs and a SELECT does not label as such.
       x_axis: groupBy[0] || "",
       y_axis: fn === "COUNT" && (argument === "*" || !argument) ? "count" : argument,
+      // A second GROUP BY column is the colour breakdown — Insights' `split_by`,
+      // one bar per x value split into a coloured segment per series value.
+      // Only ever the SECOND: the first is the axis, and a query grouped by one
+      // column has no series, which is different from having an empty one.
+      series: groupBy[1] || "",
       chart_type: suggestedChartType(analysis),
     };
   }
@@ -113,7 +118,7 @@
     prefill = prefill || {};
     imported = imported || {};
     var out = { fields: {}, confirmed: {} };
-    ["title", "x_axis", "y_axis", "chart_type"].forEach(function (key) {
+    ["title", "x_axis", "y_axis", "series", "chart_type"].forEach(function (key) {
       var value = imported[key];
       if (value) {
         out.fields[key] = value;
@@ -131,8 +136,12 @@
     var aggregations = analysis.aggregations || [];
     // One number and nothing to break it down by is a KPI, not a bar of one.
     if (!groupBy.length && aggregations.length === 1) return "number";
-    if (groupBy.length === 1 && aggregations.length === 1) return "bar";
-    // More than one dimension, or nothing aggregated, is a list — saying "bar"
+    // One or two dimensions with one aggregate is a bar: the first is the axis
+    // and the second, if any, is the colour breakdown. Two used to fall through
+    // to "table" because there was nowhere to put the second dimension.
+    if (groupBy.length <= 2 && groupBy.length && aggregations.length === 1) return "bar";
+    // Three or more dimensions, or nothing aggregated, is a list — a chart has
+    // an axis and a colour and nothing else to spend a dimension on, so "bar"
     // would be a suggestion that cannot be drawn from what the query returns.
     return "table";
   }

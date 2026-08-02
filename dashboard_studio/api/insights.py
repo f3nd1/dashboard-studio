@@ -226,6 +226,35 @@ def axis_columns(columns):
     return out
 
 
+def pick_series(columns, x, y, series=None):
+    """Validate the colour breakdown column, or refuse — ``(series, reason)``.
+
+    Never guessed. A third column in the result is not evidence that somebody
+    wants it coloured by, and a chart that silently splits into 40 segments is
+    worse than one that does not split at all. So this only ever confirms a
+    column the caller asked for.
+    """
+    if not series:
+        return None, None
+    types = {c["name"]: c["data_type"] for c in columns}
+    if series not in types:
+        return None, (
+            f"'{series}' is not a column this query returns, so it cannot be the "
+            "colour breakdown. It returns: " + ", ".join(types) + "."
+        )
+    if series in (x, y):
+        return None, (
+            f"'{series}' is already the {'X axis' if series == x else 'Y axis'}, so "
+            "it cannot also be the colour breakdown."
+        )
+    if types[series] not in DIMENSION_DATA_TYPES:
+        return None, (
+            f"'{series}' is a {types[series]}, and a colour breakdown has to be "
+            "text, a date or a time — the same rule as the X axis."
+        )
+    return series, None
+
+
 def pick_axes(columns, x_axis=None, y_axis=None):
     """Choose the two axes from the query's real columns, or refuse.
 
@@ -307,20 +336,22 @@ def pick_axes(columns, x_axis=None, y_axis=None):
     return x, y, None
 
 
-def chart_config(x, y, x_type, y_type, series_type):
+def _dimension(name, data_type):
+    """``dimension_name`` repeats the column name — that is what the real
+    record does, and it is the label the chart shows."""
+    return {"column_name": name, "data_type": data_type, "dimension_name": name}
+
+
+def chart_config(x, y, x_type, y_type, series_type, split=None, split_type=None):
     """The v3 axis-chart config, in the shape read back from a real record.
 
-    ``dimension_name`` and ``measure_name`` repeat the column name: that is what
-    the real record does, and they are the labels the chart shows.
+    ``split`` is the colour breakdown — Insights calls it ``split_by``, and it
+    is what turns one bar per x value into one bar split into a coloured segment
+    per series value. Omitted entirely when there is none: v3 types it optional,
+    and writing ``split_by: null`` asserts something the real record never says.
     """
-    return {
-        "x_axis": {
-            "dimension": {
-                "column_name": x,
-                "data_type": x_type,
-                "dimension_name": x,
-            }
-        },
+    config = {
+        "x_axis": {"dimension": _dimension(x, x_type)},
         "y_axis": {
             "series": [{
                 "measure": {
@@ -333,6 +364,9 @@ def chart_config(x, y, x_type, y_type, series_type):
             }]
         },
     }
+    if split:
+        config["split_by"] = {"dimension": _dimension(split, split_type)}
+    return config
 
 
 def _mask_sql(text):
@@ -636,7 +670,7 @@ def _result(name, title, workbook, reused):
 
 @frappe.whitelist()
 def apply_insights_chart(query: str, chart_type: str = None, x_axis: str = None,
-                         y_axis: str = None, columns=None):
+                         y_axis: str = None, columns=None, series: str = None):
     """Set the axes and type on this query's chart, creating the chart if needed.
 
     ``columns`` is a Metabase card's ``result_metadata`` as
@@ -672,13 +706,17 @@ def apply_insights_chart(query: str, chart_type: str = None, x_axis: str = None,
     x, y, reason = pick_axes(mapped, x_axis, y_axis)
     if reason:
         frappe.throw(reason)
+    split, reason = pick_series(mapped, x, y, (series or "").strip() or None)
+    if reason:
+        frappe.throw(reason)
     types = {c["name"]: c["data_type"] for c in mapped}
 
     doc = frappe.get_doc(QUERY_DOCTYPE, query)
     workbook = doc.get("workbook")
-    config = frappe.as_json(
-        chart_config(x, y, types[x], types[y], _SERIES_TYPE[resolved_type])
-    )
+    config = frappe.as_json(chart_config(
+        x, y, types[x], types[y], _SERIES_TYPE[resolved_type],
+        split, types.get(split),
+    ))
 
     existing = frappe.get_all(
         CHART_DOCTYPE, filters={"query": query}, fields=["name"],
@@ -707,6 +745,7 @@ def apply_insights_chart(query: str, chart_type: str = None, x_axis: str = None,
         "chart_type": resolved_type,
         "x_axis": x,
         "y_axis": y,
+        "series": split or "",
         "columns": mapped,
         "insights_url": INSIGHTS_QUERY_PATH.format(workbook=workbook, name=query),
     }

@@ -2897,6 +2897,12 @@
     body.appendChild(this.vizField("y_axis", "Y Axis field", fields.y_axis,
       "From the aggregate column.", false,
       "No aggregate column in this query — set the Y axis in Insights."));
+    // The colour breakdown. Only ever suggested from a SECOND GROUP BY column;
+    // a query grouped by one thing has no series, which is not the same as
+    // having an empty one — hence its own "nothing to guess from" sentence.
+    body.appendChild(this.vizField("series", "Colour by (series)", fields.series,
+      "From the second GROUP BY column. Splits each bar by this field.", false,
+      "Only one GROUP BY column — nothing to break the bars down by."));
 
     // Chart type
     var typeWrap = el("div", "dss-field");
@@ -3115,6 +3121,9 @@
     } else {
       if (haveX) axes.appendChild(el("span", null, "x: " + fields.x_axis));
       if (haveY) axes.appendChild(el("span", null, "y: " + fields.y_axis));
+      if (core.axisState(fields.series) !== "missing") {
+        axes.appendChild(el("span", null, "colour: " + fields.series));
+      }
     }
     card.appendChild(axes);
     return card;
@@ -3185,6 +3194,7 @@
       // Carry the axes across, so the handoff note survives the round trip.
       made.x_axis = fields.x_axis;
       made.y_axis = fields.y_axis;
+      made.series = fields.series;
       made.chart_type = fields.chart_type;
       self.state.insightsResult = made;
       self.state.vizError = "";
@@ -3226,11 +3236,12 @@
     // save a query's result, so there is nothing for Studio to read back after
     // Run, and nothing it can apply on its own. These are the two fields and the
     // shape to set in the Insights chart editor.
-    if (made.x_axis || made.y_axis || made.chart_type) {
+    if (made.x_axis || made.y_axis || made.series || made.chart_type) {
       var todo = el("div", "dss-handoff-todo");
       todo.appendChild(el("div", "dss-handoff-todo-head",
         made.applied ? "Set in Insights" : "Set these in Insights"));
-      [["X Axis", made.x_axis], ["Y Axis", made.y_axis], ["Chart type", made.chart_type]]
+      [["X Axis", made.x_axis], ["Y Axis", made.y_axis], ["Colour by", made.series],
+       ["Chart type", made.chart_type]]
         .forEach(function (pair) {
           if (!pair[1]) return;
           var row = el("div", "dss-handoff-todo-row");
@@ -3305,6 +3316,9 @@
         // from parsed SQL, and the server picks better from the card's columns.
         x_axis: (this.state.vizConfirmed || {}).x_axis ? fields.x_axis : null,
         y_axis: (this.state.vizConfirmed || {}).y_axis ? fields.y_axis : null,
+        // Never guessed server-side — a third column is not evidence anyone
+        // wants it coloured by — so it is sent only when it is really set.
+        series: fields.series || null,
         // The Metabase card's result_metadata. The server has no other source
         // of per-column types on v3, and refuses rather than guessing without
         // them — so this is the argument the whole action depends on.

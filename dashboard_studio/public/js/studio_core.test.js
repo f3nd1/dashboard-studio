@@ -559,7 +559,7 @@ var pf = core.insightsPrefill({
   aggregations: [{ function: "COUNT", argument: "*" }],
 });
 assert.deepStrictEqual(pf, { title: "Count of Student Applicant by agent",
-  x_axis: "agent", y_axis: "count", chart_type: "bar" });
+  x_axis: "agent", y_axis: "count", series: "", chart_type: "bar" });
 
 // A named aggregate column, not COUNT(*), becomes the Y axis.
 assert.strictEqual(core.insightsPrefill({ doctypes: ["Fee"], group_by: ["term"],
@@ -583,7 +583,9 @@ assert.strictEqual(core.suggestedChartType({ group_by: [], aggregations: [{ func
 assert.strictEqual(core.suggestedChartType({ group_by: ["a"], aggregations: [{ function: "COUNT" }] }),
   "bar");
 assert.strictEqual(core.suggestedChartType({ group_by: ["a", "b"], aggregations: [{ function: "COUNT" }] }),
-  "table", "two dimensions cannot be a bar chart");
+  "bar", "two dimensions is a bar split by colour — the second is the series");
+assert.strictEqual(core.suggestedChartType({ group_by: ["a", "b", "c"], aggregations: [{ function: "COUNT" }] }),
+  "table", "three dimensions has nowhere to put the third");
 assert.strictEqual(core.suggestedChartType({ group_by: ["a"], aggregations: [] }), "table");
 assert.strictEqual(core.suggestedChartType(null), "table");
 assert.deepStrictEqual(core.INSIGHTS_CHART_TYPES.map(function (t) { return t.value; }),
@@ -623,6 +625,24 @@ var wide = core.insightsPrefill({ doctypes: [alias, alias + "2", alias + "3", al
 assert.ok(wide.title.length <= 140, "compiled-SQL title would still be refused");
 assert.strictEqual(wide.title, alias + " + 3 more",
   "the many-table title should name the base and count the rest");
+
+// series: the colour breakdown, from a SECOND group-by column only.
+var twoDim = core.insightsPrefill({ doctypes: ["Objective"], group_by: ["quarter", "perspective"],
+  aggregations: [{ function: "COUNT", argument: "*" }] });
+assert.strictEqual(twoDim.x_axis, "quarter");
+assert.strictEqual(twoDim.series, "perspective", "the second group-by is the colour field");
+assert.strictEqual(twoDim.chart_type, "bar",
+  "two dimensions plus an aggregate is a bar split by colour, not a table");
+var oneDim = core.insightsPrefill({ doctypes: ["Objective"], group_by: ["quarter"],
+  aggregations: [{ function: "COUNT", argument: "*" }] });
+assert.strictEqual(oneDim.series, "", "a series was invented from one group-by");
+// Three dimensions has nowhere left to put the third — still a table.
+assert.strictEqual(core.insightsPrefill({ doctypes: ["O"], group_by: ["a", "b", "c"],
+  aggregations: [{ function: "COUNT", argument: "*" }] }).chart_type, "table");
+// An imported card's series wins and reads Confirmed, same as the axes.
+var withSeries = core.mergeImportedFields({ series: "guessed" }, { series: "perspective" });
+assert.strictEqual(withSeries.fields.series, "perspective");
+assert.strictEqual(withSeries.confirmed.series, true);
 
 // mergeImportedFields: the card's own settings beat anything guessed from SQL.
 var guessed = { title: "Guessed title", x_axis: "gx", y_axis: "gy", chart_type: "table" };

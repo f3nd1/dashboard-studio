@@ -77,10 +77,16 @@ _NATIVE_STAGE = "mbql.stage/native"
 _TEMPLATE_MARKERS = ("{{", "[[")
 
 
-def _first(value):
-    """A settings value that may be a bare name or an array of them."""
+def _at(value, index=0):
+    """A settings value that may be a bare name or an array of them.
+
+    ``graph.dimensions`` is an array precisely because a chart can have two: the
+    X axis and the colour breakdown. Index 1 is that second one.
+    """
     if isinstance(value, (list, tuple)):
-        value = value[0] if value else None
+        value = value[index] if len(value) > index else None
+    elif index:
+        return None
     value = str(value or "").strip()
     return value or None
 
@@ -276,15 +282,19 @@ def describe_card(card):
     settings = card.get("visualization_settings")
     settings = settings if isinstance(settings, dict) else {}
     known = {column["name"] for column in columns}
-    x_axis = y_axis = None
+    x_axis = y_axis = series = None
     for dimension_key, measure_key in _AXIS_SETTINGS:
-        x_axis = x_axis or _first(settings.get(dimension_key))
-        y_axis = y_axis or _first(settings.get(measure_key))
+        x_axis = x_axis or _at(settings.get(dimension_key))
+        y_axis = y_axis or _at(settings.get(measure_key))
+        # The second dimension is the colour breakdown — the thing that makes
+        # one bar per x value split into a segment per series value.
+        series = series or _at(settings.get(dimension_key), 1)
     # An axis naming a column the card does not return is dropped, not imported
     # and not refused: Step 2 already has a "nothing to guess from" state, and a
     # blank the person fills in beats a name that charts the wrong column.
     x_axis = x_axis if x_axis in known else None
     y_axis = y_axis if y_axis in known else None
+    series = series if series in known and series != x_axis else None
 
     return {
         "card_id": card.get("id"),
@@ -294,6 +304,7 @@ def describe_card(card):
         "chart_type": chart_type or "",
         "x_axis": x_axis or "",
         "y_axis": y_axis or "",
+        "series": series or "",
         "columns": columns,
         "supported": not reasons,
         "reasons": reasons,

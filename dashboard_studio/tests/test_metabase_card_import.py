@@ -82,6 +82,24 @@ class TestSupportedCard(unittest.TestCase):
         self.assertEqual(describe_card(pie)["x_axis"], "country")
         self.assertEqual(describe_card(card(display="scalar"))["chart_type"], "number")
 
+    def test_a_second_graph_dimension_is_the_colour_series(self):
+        """The screenshot shape: bars grouped by one field, coloured by another."""
+        two = card(result_metadata=NATIVE_CARD["result_metadata"] + [
+            {"name": "perspective", "display_name": "Perspective", "base_type": "type/Text"}],
+            visualization_settings={"graph.dimensions": ["country", "perspective"],
+                                    "graph.metrics": ["count"]})
+        result = describe_card(two)
+        self.assertEqual(result["x_axis"], "country")
+        self.assertEqual(result["series"], "perspective")
+
+    def test_one_dimension_means_no_series_not_an_empty_one(self):
+        self.assertEqual(describe_card(NATIVE_CARD)["series"], "")
+
+    def test_a_series_naming_a_column_the_card_does_not_return_is_dropped(self):
+        stale = card(visualization_settings={
+            "graph.dimensions": ["country", "renamed"], "graph.metrics": ["count"]})
+        self.assertEqual(describe_card(stale)["series"], "")
+
     def test_axis_naming_a_column_the_card_does_not_return_is_dropped_not_imported(self):
         stale = card(visualization_settings={
             "graph.dimensions": ["renamed_column"], "graph.metrics": ["count"]})
