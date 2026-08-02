@@ -38,7 +38,7 @@
   // "worked, returned nothing" from "threw". That is how creating a migration
   // project failed in total silence — request sent, refusal returned, .then ran,
   // nothing said. Normalise it once, here, into a real rejection carrying the
-  // server's own text, which refusalMessage() already knows how to read.
+  // server's own text, which core.refusalMessage already knows how to read.
   //
   // A missing `message` is NOT an error: get_migration_project returns null for
   // an empty project. Only an explicit refusal marker counts.
@@ -54,42 +54,29 @@
   // "worked, returned nothing" from "threw". That is how creating a migration
   // project failed in total silence — request sent, refusal returned, .then ran,
   // nothing said. Normalise it once, here, into a real rejection carrying the
-  // server's own text, which refusalMessage() already knows how to read.
+  // server's own text, which core.refusalMessage already knows how to read.
   //
   // A missing `message` is NOT an error: get_migration_project returns null for
   // an empty project. Only an explicit refusal marker counts.
   function dsCall(opts) {
     return root.frappe.call(opts).then(function (r) {
       r = r || {};
-      if (r.exc_type || r.exc || r._server_messages) {
-        // Empty message on purpose: refusalMessage() prefers err.message, so a
-        // class name like "ValidationError" here would hide the server's actual
-        // sentence. Only fall back to the class when there is no sentence.
-        var e = new Error(r._server_messages ? "" : (r.exc_type || ""));
-        e._server_messages = r._server_messages;
-        e.exc = r.exc;
+      if (r.exc_type || r.exc || r.exception || r._server_messages || r.errors) {
+        // Empty message on purpose: core.refusalMessage prefers err.message, so
+        // a class name like "ValidationError" here would hide the server's own
+        // sentence. Only fall back to the class when there is none.
+        var e = new Error(
+          r._server_messages || r.exception || r.exc ? "" : (r.exc_type || ""));
+        // The WHOLE payload, not three hand-picked fields. Which key carries the
+        // message depends on the site's settings and API version, and dropping
+        // the others is what turned a specific refusal into "Could not convert
+        // that card."
+        e.responseJSON = r;
         throw e;
       }
       return r;
     });
   }
-
-  // A refused frappe.call carries the server's own message. The publish gate
-  // names every offending chart in that message; discarding it and toasting a
-  // generic line is how a refusal that knew the answer stopped giving it.
-  //
-  // ponytail: reads the two shapes Frappe puts a thrown message in. Frappe also
-  // raises its own dialog for _server_messages, so this may be the second place
-  // the text appears — a duplicate is a far cheaper fault than a swallowed one.
-  function refusalMessage(err, fallback) {
-    var raw = err && (err.message || err._server_messages);
-    if (typeof raw === "string" && raw.charAt(0) === "[") {
-      try { raw = JSON.parse(JSON.parse(raw)[0]).message; } catch (e) { /* not that shape */ }
-    }
-    if (typeof raw !== "string" || !raw.trim()) return fallback;
-    return raw.replace(/<[^>]*>/g, "").trim() || fallback;
-  }
-
 
   // ------------------------------------------------------------------- app
   function App(mount, options) {
@@ -300,7 +287,7 @@
       self.render();
       return made;
     }).catch(function (err) {
-      note.textContent = refusalMessage(err, "Could not convert that card.");
+      note.textContent = core.refusalMessage(err, "Could not convert that card.");
     });
   };
 
@@ -328,7 +315,7 @@
       self.render();
       return made;
     }).catch(function (err) {
-      note.textContent = refusalMessage(err, "Could not convert that query.");
+      note.textContent = core.refusalMessage(err, "Could not convert that query.");
     });
   };
 
@@ -419,7 +406,7 @@
     }).catch(function (err) {
       // The server refuses a mismatch. Shown in full: "Metabase says 1234,
       // Insights says 1200" is the useful part, not a generic failure.
-      self.state.verifyError = refusalMessage(err, "Could not verify that.");
+      self.state.verifyError = core.refusalMessage(err, "Could not verify that.");
       self.render();
     });
   };

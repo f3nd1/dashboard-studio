@@ -35,6 +35,91 @@
     return op.type || "";
   }
 
-  root.DSStudioCore = { describeOperation: describeOperation };
+  // What the user is told when the server refuses.
+  //
+  // Frappe puts a thrown message in one of SEVERAL places, and which one depends
+  // on the site's settings and API version — response.py sets `_server_messages`
+  // only `if frappe.local.message_log`, and `exc` only `if
+  // is_traceback_allowed()`. Reading two of them and falling back to a generic
+  // string is how "aggregation '*' is a compound or custom expression" became
+  // "Could not convert that card.", which defeats the entire point of writing
+  // specific refusals.
+  //
+  // So this tries every shape, most faithful first, and only gives up when the
+  // payload genuinely carries no sentence.
+  function refusalMessage(err, fallback) {
+    var sources = [];
+    var body = (err && (err.responseJSON || err.response)) || {};
+    function push(value) { if (value) sources.push(value); }
+
+    push(err && err.message);
+    push(err && err._server_messages);
+    push(body._server_messages);
+    push(err && err._error_message);
+    push(body._error_message);
+    // API v2: {errors: [{type, exception}]}
+    var errors = body.errors || (err && err.errors);
+    if (errors && errors.length) {
+      push(errors[0].exception);
+      push(errors[0].message);
+    }
+    push(err && err.exception);
+    push(body.exception);
+    push(err && err.exc);
+    push(body.exc);
+
+    for (var i = 0; i < sources.length; i++) {
+      var text = readOne(sources[i]);
+      if (text) return text;
+    }
+    return fallback;
+  }
+
+  // One candidate -> a sentence, or "" if it holds none.
+  function readOne(raw) {
+    if (typeof raw !== "string") return "";
+    raw = raw.trim();
+    if (!raw) return "";
+
+    // _server_messages / exc: a JSON array of JSON strings, or of tracebacks.
+    if (raw.charAt(0) === "[") {
+      var parsed;
+      try { parsed = JSON.parse(raw); } catch (e) { return clean(raw); }
+      if (!parsed || !parsed.length) return "";
+      for (var i = 0; i < parsed.length; i++) {
+        var entry = parsed[i];
+        if (typeof entry === "string") {
+          try { entry = JSON.parse(entry); } catch (e) { /* a raw traceback */ }
+        }
+        var text = typeof entry === "string" ? lastLine(entry)
+          : clean(entry && (entry.message || entry.title));
+        if (text) return text;
+      }
+      return "";
+    }
+    // "frappe.exceptions.ValidationError: the actual sentence"
+    return lastLine(raw);
+  }
+
+  // A traceback's final line is the one carrying the message; the class prefix
+  // in front of it ("frappe.exceptions.ValidationError: ") is noise to a reader.
+  function lastLine(text) {
+    var lines = String(text).split("\n");
+    for (var i = lines.length - 1; i >= 0; i--) {
+      var line = clean(lines[i]);
+      if (!line) continue;
+      var match = /^[\w.]*(?:Error|Exception)\s*:\s*(.+)$/.exec(line);
+      return match ? match[1].trim() : line;
+    }
+    return "";
+  }
+
+  function clean(text) {
+    if (typeof text !== "string") return "";
+    return text.replace(/<[^>]*>/g, "").trim();
+  }
+
+  root.DSStudioCore = { describeOperation: describeOperation,
+    refusalMessage: refusalMessage };
   if (typeof module !== "undefined" && module.exports) module.exports = root.DSStudioCore;
 })(typeof window !== "undefined" ? window : this);
