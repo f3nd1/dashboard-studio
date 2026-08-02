@@ -346,6 +346,29 @@ class TestColumnsFromMeta(unittest.TestCase):
     def test_a_doctypes_own_field_wins_over_the_standard_one(self):
         self.assertEqual(columns_from_meta([("idx", "Data")])["idx"], "String")
 
+    def test_frappes_OPTIONAL_columns_are_never_assumed(self):
+        """`_user_tags`, `_comments`, `_assign` and `_liked_by` are Frappe's own
+        `optional_fields` and are not on every table. Assuming them produced a
+        query that converted and then failed in Insights with "Column
+        '_comments' is not found in table". Without a real column list, they are
+        left out — this is the path taken when the schema cannot be read."""
+        columns = columns_from_meta([("score", "Float")])
+        for optional in ("_user_tags", "_comments", "_assign", "_liked_by", "_seen"):
+            self.assertNotIn(optional, columns, f"{optional} is not on every table")
+
+    def test_the_real_column_list_decides_in_both_directions(self):
+        columns = columns_from_meta(
+            [("score", "Float"), ("layout", "Section Break")],
+            ["name", "parent", "score", "_comments"])
+        # Present because the TABLE has it, though no DocField declares it.
+        self.assertEqual(columns["_comments"], "String")
+        # Typed from the DocField, not defaulted.
+        self.assertEqual(columns["score"], "Decimal")
+        # Absent because the table does not have them, seed or no seed.
+        self.assertNotIn("idx", columns)
+        self.assertNotIn("layout", columns, "a Section Break is not a column")
+        self.assertEqual(set(columns), {"name", "parent", "score", "_comments"})
+
 
 class TestJoiningAChildTable(unittest.TestCase):
     """A child table joins on `parent`, which no DocType lists as a field."""

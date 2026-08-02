@@ -127,15 +127,10 @@ SQL_AGGREGATIONS = {"COUNT": "count", "SUM": "sum", "AVG": "avg",
                     "MIN": "min", "MAX": "max"}
 
 
-# The columns Frappe puts on every table, which NO DocType lists among its
-# fields — `frappe.get_meta(...).fields` returns the ones somebody defined, so
-# without this seed a join on `parent` refuses as "not a column of X" on a child
-# table where `parent` is the only column that matters.
-#
-# Read off the real compiled output rather than assumed: both tables in
-# reference/metabase/duration_from_counselling_to_admission.sql project exactly
-# these, and `tabStudent Admission UCC` is a parent DocType — so parent /
-# parentfield / parenttype are there whether or not the DocType is a child.
+# The framework columns Frappe puts on EVERY table, which no DocType lists among
+# its fields — `frappe.get_meta(...).fields` returns the ones somebody defined,
+# so without this seed a join on `parent` refuses as "not a column of X" on a
+# child table where `parent` is the only column a join can use.
 STANDARD_COLUMNS = {
     "name": "String",
     "owner": "String",
@@ -147,26 +142,47 @@ STANDARD_COLUMNS = {
     "parent": "String",
     "parentfield": "String",
     "parenttype": "String",
+}
+
+# Frappe's OPTIONAL columns — its own name for them. They are not created on
+# every table, so they are typed here but never assumed present: a live
+# conversion succeeded in Studio and then failed in Insights with "Column
+# '_comments' is not found in table", on a table carrying the ten above and none
+# of these four. Only `valid_columns` below decides whether they exist.
+OPTIONAL_COLUMNS = {
     "_user_tags": "String",
     "_comments": "String",
     "_assign": "String",
     "_liked_by": "String",
+    "_seen": "String",
 }
 
 
-def columns_from_meta(meta_fields):
+def columns_from_meta(meta_fields, valid_columns=None):
     """Frappe DocType fields -> ``{column_name: data_type}``.
 
     ``meta_fields`` is ``[(fieldname, fieldtype), …]`` — passed in rather than
-    read here, so this module stays Frappe-free and testable. The framework's
-    own columns are seeded first; a DocType field of the same name would
-    override, which is the right way round.
+    read here, so this module stays Frappe-free and testable.
+
+    ``valid_columns`` is the table's REAL column list, read from the database by
+    the caller. When given it is authoritative in both directions: a framework
+    column the table does not have is dropped, and a column that exists without
+    a DocField (the underscore ones) is kept. It also drops the DocType fields
+    that are not columns at all — Section Break, Column Break, HTML — which have
+    fieldnames and would otherwise look like columns you could group by.
+
+    Without it, only the unconditional columns are assumed. Guessing which
+    optional ones exist is what produced a query Insights refused to run.
     """
     columns = dict(STANDARD_COLUMNS)
     for fieldname, fieldtype in meta_fields or []:
         if fieldname:
             columns[fieldname] = FIELDTYPE_TO_DATA_TYPE.get(fieldtype, "String")
-    return columns
+    if valid_columns is None:
+        return columns
+    known = dict(OPTIONAL_COLUMNS)
+    known.update(columns)
+    return {column: known.get(column, "String") for column in valid_columns}
 
 
 def _value(raw, data_type):

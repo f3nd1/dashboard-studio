@@ -14,7 +14,9 @@ One job: **convert a pasted SQL query into a Frappe Insights v3 query built from
 
 **A join is oriented by table, never by writing order.** `analyze_sql` returns `{doctype, join_type, source_column, join_column}` where `source_column` always belongs to the FROM table — which is what Insights' `join_condition` means. `b.ref = a.po` and `a.po = b.ref` are the same join, so deciding from which side of the `=` a column was typed would silently swap them for half of all real queries. Both column names are then checked against `frappe.get_meta` for their own DocType before anything is written; that check is what makes reading a join out of text safe at all. Related: the source table is the **FROM** table, not the first `` `tab…` `` in the text — a joined table's column can appear in the SELECT list first, and building on that side is a different question with the same row count.
 
-The types Insights needs on every dimension and measure come from **Frappe's own DocType metadata** (`tab<DocType>` → `frappe.get_meta`). A type is never guessed — and the same lookup is what proves a join's two column names are real. `meta.fields` returns the fields somebody *defined*, so `columns_from_meta` seeds the framework's own columns first (`name`, `parent`, `parentfield`, `parenttype`, `idx`, `owner`, `creation`, `modified`, `modified_by`, `docstatus`, `_user_tags`, `_comments`, `_assign`, `_liked_by` — the exact set both tables project in `reference/`). Without that seed a child table's join on `parent` refused as "not a column of X".
+The types come from **Frappe's own DocType metadata**, and the column list from the **database itself** (`frappe.db.get_table_columns`). Both are needed and neither substitutes for the other. `meta.fields` returns the fields somebody *defined* — not `parent`, which is the only column a child-table join can use, so without a seed those joins refused. But seeding is not enough either: Frappe's `_user_tags`, `_comments`, `_assign` and `_liked_by` are its OPTIONAL columns and are **not on every table**, so assuming them produced a query that converted here and then failed on open with *"Column '_comments' is not found in table"*. Ten framework columns are unconditional (`name`, `owner`, `creation`, `modified`, `modified_by`, `docstatus`, `idx`, `parent`, `parentfield`, `parenttype`); everything else is whatever the schema says, which also drops layout fieldnames like Section Break that are not columns at all.
+
+The `reference/` SQL is a useful sample but **not a schema** — it happens to show a table carrying all four optional columns, which is what made assuming them look safe.
 
 This was once a much larger product (dashboard builder, source mapping, DocType catalogue, validation centre, governance/publishing). All of it is in `archive/` — see `archive/README.md`. **Nothing in `archive/` is imported, tested, linted or shipped.** Don't fix things in there; if something is needed again, move it back and give it tests.
 
@@ -33,7 +35,7 @@ This was once a much larger product (dashboard builder, source mapping, DocType 
 # Python tests — plain unittest, no Frappe site needed (pure logic + injected fakes)
 python -m unittest discover -s dashboard_studio/tests
 # Single test
-python -m unittest dashboard_studio.tests.test_convert_gate.TestTheGate
+python -m unittest dashboard_studio.tests.test_convert_gate.TestSqlConversion
 
 # Frontend logic self-check — pure JS, run under Node (no browser/bundler)
 node dashboard_studio/public/js/studio_core.test.js
@@ -60,21 +62,19 @@ pasted SQL
   → parser.analyze_sql                         # tables, join, WHERE, GROUP BY
   → convert._table_columns                     # frappe.get_meta, per DocType
   → sql_ops.operations_from_sql                # → Insights operations
-  → convert.convert_sql                        # writes an [UNVERIFIED] query
-  → convert.verify_converted_query             # a person clears the marker
+  → convert.convert_sql                        # writes the Insights query
 ```
 
-### The verification gate — the reason translation is allowed at all
+### No verification gate — and what carries the risk instead
 
-`docs/DECISIONS.md` ADR-006 rejected translation; **ADR-007 reopened it on one condition**, and that condition is load-bearing:
+`docs/DECISIONS.md` ADR-006 rejected translation; ADR-007 reopened it behind a human number check; **ADR-008 removed that check on request**. There is no `[UNVERIFIED]` marker and no comparison step. The gate is intact in `archive/api_convert_verification_gate.py` if it is ever wanted back.
 
-- A converted query is titled `[UNVERIFIED] …`. The marker is in the **title** so it travels into Insights — someone who finds the query there, having never seen this tool, still learns nobody checked it.
-- Verifying takes the number from the original report and the number from Insights. **A mismatch refuses and leaves the marker.** There is no "verify anyway".
-- The translated operations are listed in readable form so a wrong translation can be spotted before the query is ever run.
+Read ADR-008 before changing anything in the refusal path, because the trade it records is now load-bearing:
 
-Never weaken any of that. A translation that disagrees with the original **does not fail, it returns a different number** — the fault `docs/SOPHIA_FAULT_PATTERN.md` names. The gate is what pays for the risk.
-
-The gate's *presence* is non-negotiable; its **weight** is not. It was deliberately made lighter — one row, "Same number? [ ] = [ ] [Confirm]" — because two labelled fields, a paragraph and a full-width button read like paperwork, and paperwork gets skipped. Both numbers are still typed, the server still refuses a mismatch, and the marker still stays. Keep it one line.
+- A translation that disagrees with the original **does not fail, it returns a different number** — `docs/SOPHIA_FAULT_PATTERN.md`. Nothing detects that any more.
+- So the refusal table IS the safety argument. Anything off it refuses **by name and hands back no operations**. Softening one refusal to make a query go through costs more than it did when a person was checking the number afterwards.
+- Column names are checked against the table's **real schema** (`frappe.db.get_table_columns`) before anything is written, so a query that would not run refuses here rather than in Insights.
+- The operations are listed back in readable form after conversion. That was never part of the number check — it is how a wrong translation gets spotted by reading it — and it stays.
 
 ### SQL → operations (`integrations/metabase/parser.py` + `sql_ops.py`)
 
@@ -113,7 +113,7 @@ The read-only HTTP client went to `archive/metabase_client_card_path.py` with th
 
 ## Working rules
 
-- **The gate is not negotiable.** See above. Nothing may make a conversion look done before a person has compared the numbers.
+- **Refusals are the safety argument now** (ADR-008). Anything that cannot be translated with certainty refuses by name and writes nothing. Do not soften one to make a query go through.
 - Never execute arbitrary user- or AI-generated SQL. This tool executes nothing, anywhere.
 - Never store configuration as an opaque JSON blob when a real field would do — a blob is invisible to validation, querying, and per-field diffing.
 - Keep `reference/`, `prototypes/` and `archive/` unchanged unless explicitly asked.

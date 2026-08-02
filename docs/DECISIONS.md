@@ -42,7 +42,7 @@ The coverage argument does not survive contact either: translation is unambiguou
 
 Revisit only if Metabase's compiled-SQL endpoint is ruled out permanently AND a specific, counted set of cards is blocked by nothing else.
 
-## ADR-007 — Translate MBQL, behind a human verification gate (supersedes ADR-006)
+## ADR-007 — Translate MBQL, behind a human verification gate (supersedes ADR-006; *gate removed by ADR-008*)
 
 Decision: Dashboard Studio DOES convert a GUI-built Metabase card into Insights v3 operations — and every converted query carries an `[UNVERIFIED]` marker in its title until a person has compared its number against the Metabase card it came from.
 
@@ -51,3 +51,32 @@ Reason: clickable Operations are maintainable in a way a pasted block of SQL is 
 What made the second attempt viable where the first was not: both formats were read from source at the installed versions (Metabase `lib/schema.cljc`, `schema/join.cljc`, `schema/ref.cljc`; Insights v3.12.2 `query.types.ts`) rather than assumed on either side.
 
 Scope is a rule table, not a compiler. Compound aggregations, custom columns, limits, sorts, explicit column selections, multi-stage queries, date buckets and questions built on other questions all refuse by name and hand back no operations — a partial translation is a query that answers a different question.
+
+## ADR-008 — Remove the verification gate (supersedes ADR-007's condition)
+
+**Decision.** The number-comparison step and the `[UNVERIFIED]` title marker are removed. A converted query is written to Insights under the title the user chose, with nothing recording whether anybody has checked it.
+
+**Requested explicitly**, superseding ADR-007's condition: *"Remove the verification row entirely — the 'Same number? [x] = [y] Confirm' control, and the number-comparison gate behind it. This supersedes the earlier decision to keep it; the check is being dropped by choice."*
+
+**The marker went too, rather than staying as a permanent label.** Both were offered. A marker that no mechanism can ever clear would be on 100% of converted queries, so it would distinguish nothing — it would read as a warning while carrying no information, and the first person to notice that would strip it by hand. Removing it is the honest version of the same state.
+
+**What this costs, stated plainly so nobody rediscovers it as a surprise.** ADR-006's objection was never withdrawn, only answered; the gate was the answer, and it is now gone. A translation that disagrees with the original **does not fail, it returns a different number** — `SOPHIA_FAULT_PATTERN.md`, *"they do not fail, they disagree."* Nothing in the tool now detects that case, and nothing on the record marks a converted query as unchecked.
+
+**What still stands in its place**, and is therefore now the whole of the safety argument:
+
+- The refusal table in `integrations/metabase/sql_ops.py` and `parser.py`. Anything that cannot be translated with certainty refuses **by name** and writes **no operations**. That is the only remaining protection, so softening a refusal to make a query go through now costs more than it did before this ADR.
+- Column names are checked against the table's real schema before anything is written, so a query that would not run refuses here rather than in Insights.
+- The operations are listed back in readable form after conversion. That was never part of the number check — it is how somebody spots a wrong translation by reading it, and it remains.
+
+**If the gate is ever wanted back**, it is intact in `archive/api_convert_verification_gate.py` with its tests in `archive/test_convert_gate_verification.py`. The non-obvious part is `_THOUSANDS`: it stops `"12,34"` being read as 1234, which across most of Europe means 12.34 — a hundredfold disagreement passing silently, inside the one function whose job was catching a disagreement.
+
+## Known unsupported — recorded, not scheduled
+
+**Quality Performance Outcomes** (real UCC report, live-tested 2026-08-02) refuses and stays refused. Three reasons, all genuine limits rather than bugs:
+
+- a **subquery containing a join** — not a pure projection, so flattening it would change which rows are counted (see the unwrapping rule in `sql_ops.py`);
+- **two joins** — `analyze_sql` reads one, and Insights' operation list would take several, but a second join doubles the orientation problem the first one solves;
+- an **unparsed WHERE condition** — a shape outside `field <op> value`.
+
+Recorded here because it is the concrete report the tool cannot do, and because "multi-join support" should be decided against a real query rather than in the abstract. Nothing is scheduled.
+

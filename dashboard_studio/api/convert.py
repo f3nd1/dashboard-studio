@@ -4,18 +4,15 @@ Instead of a block of text nobody can click, Insights gets an Operations list �
 Select Source, Join Table, Filter Rows, Group & Summarize — which is what makes
 a migrated report maintainable afterwards.
 
-**Nothing here is trustworthy until a person says it is.** ADR-006 rejected
-translation once, and it is reopened on one condition: a converted query
-carries an ``[UNVERIFIED]`` marker until somebody has compared its number
-against the report it came from. That marker is in the TITLE on purpose — it
-travels into Insights, so a person who finds the query there without ever
-having seen Studio still sees that nobody has checked it.
-
-The reason the gate exists, stated plainly because it is easy to erode: a
+**Nothing checks that a converted query counts the same rows.** ADR-007 made
+that a person's job, behind an ``[UNVERIFIED]`` marker and a number comparison;
+ADR-008 removed both, on request. What is left standing in their place is the
+refusal table in `integrations/metabase/sql_ops.py`: anything this cannot
+translate with certainty refuses BY NAME and writes nothing, because a
 translation that disagrees with the original does not fail, it returns a
-different number. `docs/SOPHIA_FAULT_PATTERN.md` — *"they do not fail, they
-disagree."* Every refusal in `integrations/metabase/sql_ops.py` and every step
-of this gate is paying for that.
+different number — `docs/SOPHIA_FAULT_PATTERN.md`, *"they do not fail, they
+disagree."* Those refusals are now the only thing paying for that risk, so do
+not soften one to make a query go through.
 
 Studio never executes anything, here or anywhere else — it reads DocType
 metadata and writes an Insights record, and that is all.
@@ -24,7 +21,6 @@ metadata and writes an Insights record, and that is all.
 import frappe
 
 from dashboard_studio.api.insights import (
-    MAX_TITLE_LENGTH,
     QUERY_DOCTYPE,
     SITE_DB,
     _require_insights,
@@ -38,16 +34,6 @@ from dashboard_studio.integrations.metabase.sql_ops import (
 )
 from dashboard_studio.roles import DS_WRITE_ROLES
 
-# Carried in the title so it travels with the record. A person who opens this
-# query in Insights next month, having never seen Studio, still learns that its
-# number has not been checked against the report it was converted from.
-#
-# ponytail: the marker IS the state — no new DocType, no parallel table to drift
-# from the record it describes. The ceiling: someone can rename the title in
-# Insights and erase the marker by hand. That is a deliberate action rather than
-# a silent default, which is the line this gate is drawn at.
-UNVERIFIED_PREFIX = "[UNVERIFIED] "
-
 
 def _table_columns(doctype):
     """``{column_name: data_type}`` for a DocType, from Frappe's own metadata.
@@ -56,6 +42,12 @@ def _table_columns(doctype):
     grouping and measure, and this site already knows what every column is —
     which is why pasted SQL can reach structured output without anybody
     guessing, and why a join's column names can be checked rather than trusted.
+
+    The table's REAL column list comes from the database, not from the DocType:
+    Frappe's `_user_tags`, `_comments`, `_assign` and `_liked_by` are optional
+    and are NOT on every table. Assuming them produced a query that converted
+    here and then failed in Insights with "Column '_comments' is not found in
+    table" — the schema is the only thing that knows, so the schema is asked.
     """
     if not frappe.db.exists("DocType", doctype):
         frappe.throw(
@@ -63,12 +55,26 @@ def _table_columns(doctype):
             "of that table cannot be typed. Check the table name in the query."
         )
     meta = frappe.get_meta(doctype)
-    return columns_from_meta([(f.fieldname, f.fieldtype) for f in meta.fields])
+    fields = [(f.fieldname, f.fieldtype) for f in meta.fields]
+    # getattr rather than a version check: older Frappe has no get_table_columns,
+    # and falling back to the unconditional columns is the safe direction.
+    read_columns = getattr(frappe.db, "get_table_columns", None)
+    if not read_columns:
+        return columns_from_meta(fields)
+    try:
+        return columns_from_meta(fields, read_columns(doctype))
+    except Exception:
+        # A DocType with no table of its own — a Single, most likely. Named,
+        # rather than surfacing a raw traceback from the schema layer.
+        frappe.throw(
+            f"'{doctype}' has no table on this site, so its columns cannot be "
+            "read. A Single DocType has no rows to query."
+        )
 
 
 @frappe.whitelist()
 def convert_sql(sql: str, title: str = None, workbook: str = None):
-    """Translate pasted SQL into Insights operations and file it, UNVERIFIED.
+    """Translate pasted SQL into Insights operations and file it in Insights.
 
     Refuses outright rather than returning reasons, because this writes: a
     partial conversion is a query that answers a different question.
@@ -96,8 +102,7 @@ def convert_sql(sql: str, title: str = None, workbook: str = None):
         )
 
     workbook = _resolve_workbook(workbook)
-    name = (title or "").strip() or f"{source} query"
-    name = UNVERIFIED_PREFIX + clamp_title(name)[: MAX_TITLE_LENGTH - len(UNVERIFIED_PREFIX)]
+    name = clamp_title((title or "").strip() or f"{source} query")
 
     doc = frappe.get_doc({
         "doctype": QUERY_DOCTYPE,
@@ -113,83 +118,6 @@ def convert_sql(sql: str, title: str = None, workbook: str = None):
         "title": name,
         "workbook": workbook,
         "data_source": SITE_DB,
-        "verified": False,
         "operations": result["operations"],
         "insights_url": f"/insights/workbook/{workbook}/query/{doc.name}",
     }
-
-
-# A number with commas as THOUSANDS separators: 1,234 / 1,234,567 / 1,234.50.
-# Anything else keeps its commas.
-#
-# This pattern is load-bearing, and the reason is a 100x error. Stripping every
-# comma before parsing treats "12,34" as 1234 — but in most of Europe that
-# string means 12.34, so a genuine hundredfold disagreement would have passed
-# verification silently. Inside the one function whose entire job is catching a
-# disagreement.
-_THOUSANDS = __import__("re").compile(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$")
-
-
-def _as_number(text):
-    """``text`` as a float, or None if it is not unambiguously one."""
-    candidate = text.replace(",", "") if _THOUSANDS.match(text) else text
-    try:
-        return float(candidate)
-    except ValueError:
-        return None
-
-
-def verification_matches(metabase_value, insights_value):
-    """Do the two numbers agree — ``(matches, reason)``.
-
-    Compared as NUMBERS when both parse unambiguously, so "1,234" and "1234"
-    and "1234.0" agree — thousands separators and trailing zeros are formatting.
-    Compared as exact text otherwise, which is the safe direction: a string this
-    cannot read as a number has to match character for character rather than be
-    guessed at.
-    """
-    left = str(metabase_value or "").strip()
-    right = str(insights_value or "").strip()
-    if not left or not right:
-        return False, "Enter the number from both Metabase and Insights."
-
-    left_number, right_number = _as_number(left), _as_number(right)
-    if left_number is not None and right_number is not None:
-        if left_number == right_number:
-            return True, None
-    elif left == right:
-        return True, None
-
-    return False, (
-        f"Those do not match: Metabase says {left}, Insights says {right}. The "
-        "conversion stays unverified. A difference here is the whole reason this "
-        "check exists — compare the filters and the grouping before trusting it."
-    )
-
-
-@frappe.whitelist()
-def verify_converted_query(query: str, metabase_value: str, insights_value: str):
-    """Record that a person compared the two numbers, and clear the marker.
-
-    Refuses when they differ. There is deliberately no "verify anyway": the
-    marker is the only thing telling a later reader that this number was ever
-    checked, and a mismatched pair is precisely when it must stay.
-    """
-    frappe.only_for(DS_WRITE_ROLES)
-    _require_insights()
-
-    matches, reason = verification_matches(metabase_value, insights_value)
-    if not matches:
-        frappe.throw(reason)
-
-    doc = frappe.get_doc(QUERY_DOCTYPE, query)
-    title = str(doc.get("title") or "")
-    if not title.startswith(UNVERIFIED_PREFIX):
-        # Already verified, or never converted. Not an error — someone clicking
-        # twice should not be told off — but say which, so it is not mistaken
-        # for the check having just passed.
-        return {"name": query, "title": title, "verified": True, "already": True}
-
-    doc.title = title[len(UNVERIFIED_PREFIX):]
-    doc.save()
-    return {"name": query, "title": doc.title, "verified": True, "already": False}

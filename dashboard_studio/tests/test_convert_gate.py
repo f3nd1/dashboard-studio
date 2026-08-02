@@ -1,9 +1,9 @@
-"""The conversion flow, and the gate that makes it safe to have at all.
+"""The conversion flow, end to end, through the real endpoint.
 
-The gate is the condition ADR-006 was reopened on: a converted query is not
-trustworthy until a person has compared its number against the original. The
-tests that matter most here are the ones asserting it CANNOT be skipped —
-a mismatch must not clear the marker, and a refused translation must not write.
+The number-comparison gate that used to live here went to
+archive/test_convert_gate_verification.py with the gate itself (ADR-008). What
+remains is the load-bearing half: a query this cannot translate must REFUSE and
+write nothing, because a partial conversion answers a different question.
 """
 
 import sys
@@ -23,8 +23,23 @@ SQL = ("SELECT `academic_year`, COUNT(*) FROM `tabStudent Applicant` "
 # the proof that both column names are real.
 META = {
     "Student Applicant": [("status", "Select"), ("academic_year", "Data"),
-                          ("fee", "Currency"), ("po", "Data")],
+                          ("fee", "Currency"), ("po", "Data"),
+                          ("layout", "Section Break")],
     "Purchase Order": [("ref", "Data"), ("amount", "Currency")],
+}
+
+# The columns the TABLES actually have. The two differ on purpose: Frappe's
+# underscore columns are optional and are not on every table, which is how a
+# conversion succeeded here and then failed in Insights with "Column
+# '_comments' is not found in table".
+UNCONDITIONAL = ["name", "owner", "creation", "modified", "modified_by",
+                 "docstatus", "idx", "parent", "parentfield", "parenttype"]
+TABLES = {
+    "Student Applicant": UNCONDITIONAL + ["_user_tags", "_comments", "_assign",
+                                          "_liked_by", "status", "academic_year",
+                                          "fee", "po"],
+    # No underscore columns at all — the live failure's shape.
+    "Purchase Order": UNCONDITIONAL + ["ref", "amount"],
 }
 
 
@@ -47,6 +62,7 @@ class _Base(unittest.TestCase):
         self.frappe._doctypes = {"Insights Query v3", "Student Applicant", "Purchase Order"}
         self.frappe.get_meta = lambda dt: types.SimpleNamespace(fields=[
             types.SimpleNamespace(fieldname=f, fieldtype=t) for f, t in META[dt]])
+        self.frappe._table_columns = {k: list(v) for k, v in TABLES.items()}
 
     def tearDown(self):
         for key in list(sys.modules):
@@ -64,7 +80,7 @@ class _Base(unittest.TestCase):
 
 
 class TestSqlConversion(_Base):
-    """Pasted SQL reaches structured output, behind the gate."""
+    """Pasted SQL reaches structured output."""
 
     def test_it_is_a_builder_query_not_a_native_one(self):
         self.api.convert_sql(SQL, workbook="2")
@@ -94,18 +110,19 @@ class TestSqlConversion(_Base):
         stored = __import__("json").loads(self.queries()[0]["operations"])
         self.assertEqual(stored[2]["dimensions"][0]["data_type"], "String")
 
-    def test_the_same_gate_applies(self):
-        result = self.api.convert_sql(SQL, workbook="2")
-        self.assertFalse(result["verified"])
-        self.assertTrue(result["title"].startswith("[UNVERIFIED] "))
-        self.assertTrue(self.queries()[0]["title"].startswith("[UNVERIFIED] "))
+    def test_a_long_title_is_clamped_rather_than_aborting_the_insert(self):
+        """Insights Query v3.title is varchar(140) and Frappe refuses an
+        over-long value with "Value too big", which aborts the whole insert."""
+        result = self.api.convert_sql(SQL, title="Q" * 400, workbook="2")
+        self.assertLessEqual(len(result["title"]), 140)
+        self.assertEqual(self.queries()[0]["title"], result["title"])
 
-    def test_verifying_a_sql_conversion_uses_the_same_endpoint(self):
-        made = self.api.convert_sql(SQL, workbook="2")
-        self.assertIn("Metabase says 1234, Insights says 1200", self.refusal(
-            self.api.verify_converted_query, made["name"], "1234", "1200"))
-        self.api.verify_converted_query(made["name"], "1234", "1234")
-        self.assertFalse(self.queries()[0]["title"].startswith("[UNVERIFIED] "))
+    def test_no_marker_is_left_on_the_title(self):
+        """ADR-008 removed the number check. A marker nobody can ever clear
+        would be on every converted query, so it would distinguish nothing."""
+        result = self.api.convert_sql(SQL, title="Enrolled by year", workbook="2")
+        self.assertEqual(result["title"], "Enrolled by year")
+        self.assertEqual(self.queries()[0]["title"], "Enrolled by year")
 
     def test_a_join_becomes_a_join_operation_with_types_from_both_doctypes(self):
         """End to end: pasted SQL with a join lands as a clickable Join Table
@@ -125,6 +142,40 @@ class TestSqlConversion(_Base):
         # `amount` is Purchase Order's, and typed from ITS metadata, not the
         # source table's — a string 100 here matches nothing.
         self.assertEqual(stored[2]["value"], 100.0)
+
+    def test_an_optional_column_the_table_lacks_is_refused_here_not_in_insights(self):
+        """Purchase Order has none of the underscore columns. Assuming it did
+        produced a query that converted cleanly and then failed on open with
+        "Column '_comments' is not found in table"."""
+        message = self.refusal(
+            self.api.convert_sql,
+            "SELECT COUNT(*) FROM `tabPurchase Order` WHERE `_comments` = 'x'",
+            workbook="2")
+        self.assertIn("'_comments' is not a column of Purchase Order", message)
+        self.assertEqual(self.queries(), [])
+
+    def test_an_optional_column_the_table_DOES_have_still_works(self):
+        self.api.convert_sql(
+            "SELECT COUNT(*) FROM `tabStudent Applicant` WHERE `_comments` = 'x'",
+            workbook="2")
+        stored = __import__("json").loads(self.queries()[0]["operations"])
+        self.assertEqual(stored[1]["column"]["column_name"], "_comments")
+
+    def test_the_unconditional_columns_are_there_on_a_table_without_the_others(self):
+        self.api.convert_sql(
+            "SELECT COUNT(*) FROM `tabPurchase Order` WHERE `parent` = 'x'",
+            workbook="2")
+        stored = __import__("json").loads(self.queries()[0]["operations"])
+        self.assertEqual(stored[1]["column"]["column_name"], "parent")
+
+    def test_a_layout_field_is_not_a_column(self):
+        """A Section Break has a fieldname and no column. Grouping by one is a
+        query the database rejects."""
+        message = self.refusal(
+            self.api.convert_sql,
+            "SELECT `layout`, COUNT(*) FROM `tabStudent Applicant` GROUP BY `layout`",
+            workbook="2")
+        self.assertIn("'layout' is not a column of Student Applicant", message)
 
     def test_a_join_on_a_column_that_does_not_exist_writes_nothing(self):
         message = self.refusal(self.api.convert_sql,
@@ -151,105 +202,21 @@ class TestSqlConversion(_Base):
     def test_empty_sql_is_refused(self):
         self.assertIn("Paste a SQL query", self.refusal(self.api.convert_sql, "   "))
 
-    def test_a_supplied_title_is_used_and_still_carries_the_marker(self):
+    def test_a_supplied_title_is_used_as_given(self):
         result = self.api.convert_sql(SQL, title="Enrolled by intake year", workbook="2")
-        self.assertEqual(result["title"], "[UNVERIFIED] Enrolled by intake year")
-        self.assertEqual(self.queries()[0]["title"], "[UNVERIFIED] Enrolled by intake year")
+        self.assertEqual(result["title"], "Enrolled by intake year")
+        self.assertEqual(self.queries()[0]["title"], "Enrolled by intake year")
 
     def test_a_blank_title_falls_back_to_the_table(self):
         for blank in (None, "", "   "):
             self.store.pop("Insights Query v3", None)
             self.assertEqual(self.api.convert_sql(SQL, title=blank, workbook="2")["title"],
-                             "[UNVERIFIED] Student Applicant query")
-
-    def test_verifying_clears_the_marker_from_a_supplied_title(self):
-        made = self.api.convert_sql(SQL, title="Enrolled by intake year", workbook="2")
-        self.api.verify_converted_query(made["name"], "12", "12")
-        self.assertEqual(self.queries()[0]["title"], "Enrolled by intake year")
+                             "Student Applicant query")
 
     def test_a_non_editor_cannot_convert_sql(self):
         self.frappe._roles = {"Dashboard Studio Viewer", "Insights User"}
         with self.assertRaises(_PermissionError):
             self.api.convert_sql(SQL, workbook="2")
-
-
-class TestTheGate(_Base):
-    """The condition ADR-006 was reopened on."""
-
-    def convert(self):
-        return self.api.convert_sql(SQL, workbook="2")
-
-    def test_a_converted_query_is_marked_unverified_in_its_title(self):
-        result = self.convert()
-        self.assertTrue(result["title"].startswith("[UNVERIFIED] "))
-        self.assertFalse(result["verified"])
-        self.assertTrue(self.queries()[0]["title"].startswith("[UNVERIFIED] "),
-                        "the marker must be ON THE RECORD, not only in the response — "
-                        "it is what a person sees when they open it in Insights")
-
-    def test_matching_numbers_clear_the_marker(self):
-        made = self.convert()
-        result = self.api.verify_converted_query(made["name"], "1234", "1234")
-        self.assertTrue(result["verified"])
-        self.assertFalse(result["already"])
-        self.assertEqual(self.queries()[0]["title"], "Student Applicant query")
-
-    def test_differing_numbers_refuse_AND_leave_the_marker(self):
-        made = self.convert()
-        message = self.refusal(
-            self.api.verify_converted_query, made["name"], "1234", "1200")
-        self.assertIn("Metabase says 1234, Insights says 1200", message)
-        self.assertTrue(self.queries()[0]["title"].startswith("[UNVERIFIED] "),
-                        "a mismatch cleared the marker — the gate is not a gate")
-
-    def test_a_blank_number_is_not_a_match(self):
-        made = self.convert()
-        for pair in (("", "5"), ("5", ""), ("", "")):
-            message = self.refusal(
-                self.api.verify_converted_query, made["name"], pair[0], pair[1])
-            self.assertIn("Enter the number", message)
-        self.assertTrue(self.queries()[0]["title"].startswith("[UNVERIFIED] "))
-
-    def test_formatting_differences_are_not_disagreements(self):
-        for left, right in (("1,234", "1234"), ("1234", "1234.0"), ("0", "0.00")):
-            matches, _ = self.api.verification_matches(left, right)
-            self.assertTrue(matches, f"{left} vs {right} should agree")
-
-    def test_a_genuinely_different_number_never_passes(self):
-        for left, right in (("1234", "1235"), ("0", "1"), ("1,234", "12,34"),
-                            ("12,34", "1234"), ("1.234", "1234")):
-            matches, reason = self.api.verification_matches(left, right)
-            self.assertFalse(matches, f"{left} vs {right} must not agree")
-            self.assertIn("do not match", reason)
-
-    def test_a_decimal_comma_is_not_a_thousands_separator(self):
-        """"12,34" is 12.34 across most of Europe. Stripping every comma before
-        parsing would read it as 1234 and let a hundredfold disagreement pass —
-        inside the one function whose job is catching a disagreement."""
-        self.assertFalse(self.api.verification_matches("12,34", "1234")[0])
-        self.assertTrue(self.api.verification_matches("12,34", "12,34")[0])
-
-    def test_non_numeric_answers_must_match_exactly(self):
-        self.assertTrue(self.api.verification_matches("n/a", "n/a")[0])
-        self.assertFalse(self.api.verification_matches("n/a", "N/A")[0])
-
-    def test_verifying_twice_says_so_rather_than_pretending_it_rechecked(self):
-        made = self.convert()
-        self.api.verify_converted_query(made["name"], "5", "5")
-        again = self.api.verify_converted_query(made["name"], "5", "5")
-        self.assertTrue(again["already"])
-
-    def test_the_marker_survives_a_long_title(self):
-        result = self.api.convert_sql(SQL, title="Q" * 400, workbook="2")
-        self.assertTrue(result["title"].startswith("[UNVERIFIED] "),
-                        "clamping ate the marker")
-        self.assertLessEqual(len(result["title"]), 140)
-
-    def test_a_viewer_cannot_mark_something_verified(self):
-        made = self.convert()
-        self.frappe._roles = {"Dashboard Studio Viewer", "Insights User"}
-        with self.assertRaises(_PermissionError):
-            self.api.verify_converted_query(made["name"], "5", "5")
 
 
 if __name__ == "__main__":

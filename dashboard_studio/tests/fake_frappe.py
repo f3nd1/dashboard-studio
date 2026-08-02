@@ -148,5 +148,16 @@ def _make_fake_frappe(store, roles, doctypes=("Insights Query v3",), sources=("S
     frappe.get_roles = lambda: list(frappe._roles)
     frappe.parse_json = __import__("json").loads
     frappe.throw = lambda msg: (_ for _ in ()).throw(_ValidationError(msg))
-    frappe.db = types.SimpleNamespace(exists=exists)
+    # The REAL column list, as frappe.db.get_table_columns returns it. Modelled
+    # because the optional framework columns (_comments and friends) are not on
+    # every table, and assuming they were produced a query that converted here
+    # and then failed in Insights. Tests set frappe._table_columns per DocType.
+    frappe._table_columns = {}
+
+    def get_table_columns(doctype):
+        if doctype not in frappe._table_columns:
+            raise _ValidationError(f"Table for {doctype} does not exist")
+        return list(frappe._table_columns[doctype])
+
+    frappe.db = types.SimpleNamespace(exists=exists, get_table_columns=get_table_columns)
     return frappe

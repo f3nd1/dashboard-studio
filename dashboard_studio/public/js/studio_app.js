@@ -84,8 +84,6 @@
       vizWorkbook: (options || {}).workbook || "",
       vizWorkbooks: null,
       conversion: null,
-      verifyValues: {},
-      verifyError: "",
     };
   }
 
@@ -93,21 +91,9 @@
     this.mount.innerHTML = "";
     var wrap = el("div", "dss-wrap");
 
-    // No title here. frappe.ui.make_app_page already renders the page header
-    // from the Desk page's own `title`, and adding an <h1> put "Metabase →
-    // Insights" on screen twice, stacked. The Desk page owns the title; this
-    // app owns everything below it.
-    var hero = el("div", "dss-hero");
-    hero.appendChild(el("div", "dss-kicker", "Converter"));
-    hero.appendChild(el("h3", "dss-hero-title", "Rebuild a query in Insights"));
-    hero.appendChild(el("p", "dss-hero-blurb",
-      "Paste the SQL and it writes the same question into Insights as clickable " +
-      "operations rather than a block of text. Nothing is trusted until you have " +
-      "compared its number against the original. Covers one table, or two joined " +
-      "on a single a.column = b.column; subqueries and anything the join cannot " +
-      "be read out of are refused rather than guessed at."));
-    wrap.appendChild(hero);
-
+    // No heading and no preamble. frappe.ui.make_app_page already renders the
+    // page title from the Desk page's own `title`; everything else that used to
+    // sit here was explanation, and the controls are the explanation.
     var card = el("section", "dss-vizstep");
     var body = el("div", "dss-vizstep-body");
     body.appendChild(this.buildSqlInput());
@@ -140,10 +126,6 @@
     input.value = this.state.vizTitle || "";
     input.addEventListener("input", function () { self.state.vizTitle = input.value; });
     wrap.appendChild(input);
-    // Said here because the title comes back different from what was typed, and
-    // an unexplained prefix reads like a bug rather than the gate working.
-    wrap.appendChild(el("p", "dss-hint",
-      "Created as “[UNVERIFIED] …” until you confirm the number below."));
     return wrap;
   };
 
@@ -274,23 +256,17 @@
     });
   };
 
-  // A converted query, and the check that has to happen before anyone trusts it.
+  // What was created, and the operations it was created from.
   //
-  // Deliberately not styled as a success. A conversion that LOOKS done is the
-  // failure this whole gate exists to prevent: the translation may be right,
-  // and nothing here can tell — only a person comparing the two numbers can.
+  // The operations list stays. It was never part of the number check — it is
+  // how somebody reads back what the translation decided and spots a wrong one
+  // before running it, which is the only review step left (ADR-008).
   App.prototype.buildConversionResult = function () {
-    var self = this;
     var made = this.state.conversion;
     if (!made) return null;
-    var verified = !!made.verified;
-    var box = el("div", "dss-saveresult " + (verified ? "is-ok" : "is-unverified"));
-    box.appendChild(el("div", "dss-saveresult-title", verified
-      ? "Verified — " + made.name
-      : "Converted, NOT yet verified — " + made.name));
-    box.appendChild(el("div", "dss-saveresult-detail", verified
-      ? "“" + made.title + "” — you confirmed its number matches the original."
-      : "“" + made.title + "” — nothing has checked that it counts the same rows."));
+    var box = el("div", "dss-saveresult is-ok");
+    box.appendChild(el("div", "dss-saveresult-title", "Converted — " + made.name));
+    box.appendChild(el("div", "dss-saveresult-detail", "“" + made.title + "”"));
 
     var steps = el("div", "dss-handoff-todo");
     steps.appendChild(el("div", "dss-handoff-todo-head", "Operations created"));
@@ -309,67 +285,7 @@
     open.rel = "noopener";
     links.appendChild(open);
     box.appendChild(links);
-
-    if (verified) return box;
-
-    // One line: two small numbers and a button. The gate is unchanged — a
-    // person still has to type both and the server still refuses a mismatch —
-    // but a form with two labelled fields and a paragraph read like paperwork,
-    // and paperwork gets skipped. Labels are aria-label + placeholder rather
-    // than <label> elements so it stays one row without losing the screen
-    // reader.
-    var check = el("div", "dss-verify");
-    check.appendChild(el("span", "dss-verify-head", "Same number?"));
-    var inputs = {};
-    [["metabase", "Number in Metabase", "Metabase"],
-     ["insights", "Number in Insights", "Insights"]].forEach(function (spec, i) {
-      if (i) check.appendChild(el("span", "dss-verify-eq", "="));
-      var field = el("input", "dss-input dss-verify-num");
-      field.setAttribute("aria-label", spec[1]);
-      field.placeholder = spec[2];
-      field.value = (self.state.verifyValues || {})[spec[0]] || "";
-      field.addEventListener("input", function () {
-        var values = self.state.verifyValues || (self.state.verifyValues = {});
-        values[spec[0]] = field.value;
-      });
-      inputs[spec[0]] = field;
-      check.appendChild(field);
-    });
-
-    var mark = el("button", "dss-btn dss-verify-go", "Confirm");
-    mark.title = "Records that you compared the two numbers. A mismatch is " +
-      "refused — the query stays marked unverified.";
-    mark.addEventListener("click", function () {
-      self.verifyConversion(made.name, inputs.metabase.value, inputs.insights.value);
-    });
-    check.appendChild(mark);
-    box.appendChild(check);
-    if (this.state.verifyError) {
-      box.appendChild(el("div", "dss-verify-error", this.state.verifyError));
-    }
     return box;
-  };
-
-  App.prototype.verifyConversion = function (query, metabaseValue, insightsValue) {
-    var self = this;
-    if (!hasFrappe()) return;
-    this.state.verifyError = "Checking…";
-    this.render();
-    dsCall({
-      method: "dashboard_studio.api.convert.verify_converted_query",
-      args: { query: query, metabase_value: metabaseValue, insights_value: insightsValue },
-    }).then(function (r) {
-      var done = r.message || {};
-      self.state.conversion = Object.assign({}, self.state.conversion,
-        { verified: true, title: done.title });
-      self.state.verifyError = "";
-      self.render();
-    }).catch(function (err) {
-      // The server refuses a mismatch. Shown in full: "Metabase says 1234,
-      // Insights says 1200" is the useful part, not a generic failure.
-      self.state.verifyError = core.refusalMessage(err, "Could not verify that.");
-      self.render();
-    });
   };
 
 

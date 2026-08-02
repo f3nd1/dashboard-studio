@@ -60,8 +60,12 @@ class TestEndpointsReachable(unittest.TestCase):
     def test_the_front_end_calls_something(self):
         """A guard on the guard: if the regex stops matching, everything below
         passes vacuously."""
-        self.assertGreaterEqual(len(js_call_sites()), 3,
-                                "no frappe.call sites found — has the call shape changed?")
+        # Two, and they are named: if the regex stops matching, everything below
+        # passes vacuously, so this has to fail loudly rather than quietly.
+        self.assertEqual(set(js_call_sites()), {
+            "dashboard_studio.api.insights.list_insights_workbooks",
+            "dashboard_studio.api.convert.convert_sql",
+        }, "the front end's call sites changed — has the call shape changed too?")
 
     def test_every_method_the_browser_calls_is_whitelisted(self):
         exposed = whitelisted()
