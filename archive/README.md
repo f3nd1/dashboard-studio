@@ -20,12 +20,19 @@ things in here; if something is needed again, move it back and give it tests.
 | `tests/` | the tests for all of the above |
 | `scripts/insights_v3_probe.py` | the v3 schema probe; its work is done |
 | `docs/` | design records for the archived surfaces |
+| `metabase_mbql_card_path.py` | the MBQL 5 → operations translator (`translate_card`), from when a Metabase **card id** was a way in. Its Insights-side shapes and constants — `_source`, `_filter`, `_join`, `_summarize`, the operator and aggregation tables — were moved into `integrations/metabase/sql_ops.py`, which is now the only translator |
+| `metabase_client_card_path.py` | the read-only Metabase HTTP client. Nothing in the app calls Metabase any more; `scripts/metabase_table_inventory.py` does its own GETs |
+| `test_mbql_translation.py` | the tests for `translate_card` |
 
 ## What was deliberately NOT archived
 
 - `dashboard_studio/fixtures/role.json` — creates `Dashboard Studio Editor`,
   which every `frappe.only_for` in the converter checks against. Archiving it
   would have made the converter refuse everybody on a fresh site.
-- `integrations/metabase/parser.py` + `mapper.py` — `card.py` imports
-  `TABLE_PATTERN` from the parser, so the SQL parser is still load-bearing for
-  reading a card's tables even though the SQL *path* is gone.
+- `integrations/metabase/parser.py` + `mapper.py` — the SQL parser IS the
+  converter's front half now: it reads the source table, the WHERE, the GROUP BY
+  and the join out of pasted text.
+- `integrations/metabase/card.py` — nothing in the app calls it, but
+  `scripts/metabase_table_inventory.py` imports `referenced_tables` to work out
+  which physical tables the Metabase cards read, for narrowing a database GRANT.
+  It is Frappe-free and imports only `parser.TABLE_PATTERN`.

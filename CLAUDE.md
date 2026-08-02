@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Purpose
 
-One job: **convert a GUI-built Metabase question into a Frappe Insights v3 query built from clickable operations** — Select Source, Filter Rows, Join Table, Group & Summarize. A migrated report is then maintainable in Insights' own editor rather than being a block of pasted SQL nobody can click.
+One job: **convert a pasted SQL query into a Frappe Insights v3 query built from clickable operations** — Select Source, Filter Rows, Join Table, Group & Summarize. A migrated report is then maintainable in Insights' own editor rather than being a block of pasted SQL nobody can click.
 
-Two ways in, one destination. A **Metabase card id** is read and translated from its MBQL structure. **Pasted SQL** is parsed and translated too — same operations, same verification gate — for one table, or two joined on a single `a.column = b.column`, with a flat WHERE and a GROUP BY. Subqueries, further joins, and every ON clause whose two sides cannot be told apart with certainty are refused *by name*.
+**One way in.** Paste the SQL; it is parsed and translated for one table, or two joined on a single `a.column = b.column`, with a flat WHERE and a GROUP BY. Subqueries, further joins, and every ON clause whose two sides cannot be told apart with certainty are refused *by name*. The Metabase **card id** route was removed — it is in `archive/metabase_mbql_card_path.py` with its HTTP client and tests, and nothing in the app calls Metabase any more.
 
-**On the SQL path a join is oriented by table, never by writing order.** `analyze_sql` returns `{doctype, join_type, source_column, join_column}` where `source_column` always belongs to the FROM table — which is what Insights' `join_condition` means. `b.ref = a.po` and `a.po = b.ref` are the same join, so deciding from which side of the `=` a column was typed would silently swap them for half of all real queries. Both column names are then checked against `frappe.get_meta` for their own DocType before anything is written; that check is what makes reading a join out of text safe at all. Related: the source table is the **FROM** table, not the first `` `tab…` `` in the text — a joined table's column can appear in the SELECT list first, and building on that side is a different question with the same row count.
+**A join is oriented by table, never by writing order.** `analyze_sql` returns `{doctype, join_type, source_column, join_column}` where `source_column` always belongs to the FROM table — which is what Insights' `join_condition` means. `b.ref = a.po` and `a.po = b.ref` are the same join, so deciding from which side of the `=` a column was typed would silently swap them for half of all real queries. Both column names are then checked against `frappe.get_meta` for their own DocType before anything is written; that check is what makes reading a join out of text safe at all. Related: the source table is the **FROM** table, not the first `` `tab…` `` in the text — a joined table's column can appear in the SELECT list first, and building on that side is a different question with the same row count.
 
-The types Insights needs on every dimension and measure come from Metabase's field metadata on the card path, and from **Frappe's own DocType metadata** on the SQL path (`tab<DocType>` → `frappe.get_meta`). Neither path ever guesses a type.
+The types Insights needs on every dimension and measure come from **Frappe's own DocType metadata** (`tab<DocType>` → `frappe.get_meta`). A type is never guessed — and the same lookup is what proves a join's two column names are real.
 
 This was once a much larger product (dashboard builder, source mapping, DocType catalogue, validation centre, governance/publishing). All of it is in `archive/` — see `archive/README.md`. **Nothing in `archive/` is imported, tested, linted or shipped.** Don't fix things in there; if something is needed again, move it back and give it tests.
 
@@ -52,12 +52,11 @@ Frappe app layout: the Python package is `dashboard_studio/`, and the Frappe *mo
 The whole flow:
 
 ```
-Metabase card id
-  → client.fetch_card + fetch_table_metadata   # GETs, read-only
-  → convert.build_metadata                     # ids → names + data types
-  → mbql.translate_card                        # MBQL 5 → Insights operations
-       (or) analyze_sql → sql_ops.operations_from_sql   # pasted SQL → the same
-  → convert.convert_metabase_card              # writes an [UNVERIFIED] query
+pasted SQL
+  → parser.analyze_sql                         # tables, join, WHERE, GROUP BY
+  → convert._table_columns                     # frappe.get_meta, per DocType
+  → sql_ops.operations_from_sql                # → Insights operations
+  → convert.convert_sql                        # writes an [UNVERIFIED] query
   → convert.verify_converted_query             # a person clears the marker
 ```
 
@@ -66,19 +65,20 @@ Metabase card id
 `docs/DECISIONS.md` ADR-006 rejected translation; **ADR-007 reopened it on one condition**, and that condition is load-bearing:
 
 - A converted query is titled `[UNVERIFIED] …`. The marker is in the **title** so it travels into Insights — someone who finds the query there, having never seen this tool, still learns nobody checked it.
-- Verifying takes the number from Metabase and the number from Insights. **A mismatch refuses and leaves the marker.** There is no "verify anyway".
+- Verifying takes the number from the original report and the number from Insights. **A mismatch refuses and leaves the marker.** There is no "verify anyway".
 - The translated operations are listed in readable form so a wrong translation can be spotted before the query is ever run.
 
-Never weaken any of that. A translation that disagrees with Metabase **does not fail, it returns a different number** — the fault `docs/SOPHIA_FAULT_PATTERN.md` names. The gate is what pays for the risk.
+Never weaken any of that. A translation that disagrees with the original **does not fail, it returns a different number** — the fault `docs/SOPHIA_FAULT_PATTERN.md` names. The gate is what pays for the risk.
 
-### MBQL 5 → operations (`integrations/metabase/mbql.py`)
+The gate's *presence* is non-negotiable; its **weight** is not. It was deliberately made lighter — one row, "Same number? [ ] = [ ] [Confirm]" — because two labelled fields, a paragraph and a full-width button read like paperwork, and paperwork gets skipped. Both numbers are still typed, the server still refuses a mismatch, and the marker still stays. Keep it one line.
 
-Frappe-free and metadata-injected, so the whole translation is unit-testable. **Both formats were read from source at the installed versions** — the first attempt at this failed because both ends were assumed:
+### SQL → operations (`integrations/metabase/parser.py` + `sql_ops.py`)
 
-- Metabase MBQL 5 (`lib/schema.cljc`, `schema/join.cljc`, `schema/ref.cljc`): a stage carries `source-table`, `filters` (**plural**), `aggregation`, `breakout`, `joins`, `expressions`, `fields`, `order-by`, `limit`. A field ref is `[:field opts id]` — **options at position 1, identifier at position 2**. That reversal is what made the first attempt parse nothing. A join's source table is inside the join's own `stages`.
-- Insights v3.12.2 (`frontend/src2/types/query.types.ts`): `source` / `filter` / `join` / `summarize`, with `TableArgs`, `FilterRule`, `JoinArgs` and `SummarizeArgs`.
+`analyze_sql` reads the text; `operations_from_sql` types it and builds the operations. Both are Frappe-free and metadata-injected (`columns` is `{DocType: {column: data_type}}`), so the whole translation is unit-testable without a Bench.
 
-**Flag-don't-guess, harder than anywhere else.** Everything off the rule table refuses **by name and hands back no operations** — a partial operation list is a query that answers a different question. Refused: compound aggregations (ratios), custom columns, row limits, sorts, explicit column selections, questions built on other questions, multi-stage queries, date buckets, unknown ids, field-to-field filters.
+**The Insights side was read from source at the installed version** — v3.12.2, `frontend/src2/types/query.types.ts`: `source` / `filter` / `join` / `summarize`, with `TableArgs`, `FilterRule`, `JoinArgs` and `SummarizeArgs`. Those shapes live at the top of `sql_ops.py`; they came from the archived MBQL translator, which is why the comment there says so. Don't change a shape without reading that file — a key Insights doesn't recognise is dropped silently.
+
+**Flag-don't-guess, harder than anywhere else.** Everything off the rule table refuses **by name and hands back no operations** — a partial operation list is a query that answers a different question. Refused: subqueries, more than one join, CROSS and self joins, an ON clause that is anything but a single equality of two qualified columns, an unqualified column that exists in both joined tables, OR, UNION, HAVING, CASE, DISTINCT, window functions, more than one aggregate, LIKE and IN.
 
 Expected operations are asserted **in full** in the tests, not spot-checked: the failure mode here is a query that runs fine and answers something else, so "the right keys are present" proves nothing.
 
@@ -90,18 +90,18 @@ What the converter needs and no more: the v3 DocType names, `clamp_title`, `_req
 
 `title` is a Frappe `Data` field — varchar(140) — and Frappe **aborts the insert** rather than trimming. `clamp_title` runs on the resolved name, so a caller-supplied title is clamped too.
 
-### Metabase client (`integrations/metabase/client.py`)
+### Nothing here calls Metabase
 
-**Can only read.** `_get` takes no method parameter, so no later caller can turn it into a POST. `POST /api/card/:id/query` and `POST /api/dataset` execute SQL against the connected production database and must never be added. `POST /api/dataset/native` compiles MBQL to SQL without executing, which is real and tempting — see ADR-006/007 before reaching for it.
+The read-only HTTP client went to `archive/metabase_client_card_path.py` with the card path. If a Metabase call is ever needed again, read ADR-006/007 first: `POST /api/card/:id/query` and `POST /api/dataset` execute SQL against the connected production database and must never be added, and `POST /api/dataset/native` compiles MBQL to SQL without executing — real, and tempting.
 
-`card.py` still imports `TABLE_PATTERN` from `parser.py`, so the SQL parser is load-bearing for reading which tables a card touches even though the SQL path is gone.
+`integrations/metabase/card.py` stays, unused by the app: `scripts/metabase_table_inventory.py` imports `referenced_tables` from it, and it in turn imports `TABLE_PATTERN` from `parser.py`.
 
 ### Front end (`public/js/`)
 
 **Dependency-free vanilla JS, no bundler.** The Desk page (`.../page/dashboard_studio/`) mounts it via `frappe.require`. Do not add a JS build step or a frontend dependency without explicit sign-off.
 
 - `studio_core.js` — pure logic, Node-testable via `studio_core.test.js`. Put new logic here so it can be checked without a browser.
-- `studio_app.js` — the whole UI: card id in, workbook picker, conversion result, verification panel.
+- `studio_app.js` — the whole UI: SQL in, workbook picker, conversion result, verification panel.
 
 ## Working rules
 
@@ -116,8 +116,8 @@ What the converter needs and no more: the v3 DocType names, `clamp_title`, `_req
 
 ## Security boundaries
 
-- Read-only against Metabase: GETs only, nothing written there, ever.
-- **The Metabase key lives in `site_config.json`** (`metabase_url`, `metabase_api_key`) — per-site, outside this repo. Fetched **server-side only**: the SPA calls our endpoint, our endpoint calls Metabase. Never return it to the browser, never log it, never echo it in a refusal — including the 401 path, where "helpful" context puts it into `_server_messages` and into a user's browser.
+- Nothing in the app talks to Metabase at all. `scripts/metabase_table_inventory.py` is the only thing that does, it is hand-run on the live site, and it is GETs only.
+- **The Metabase key lives in `site_config.json`** (`metabase_url`, `metabase_api_key`) — per-site, outside this repo. Only `scripts/metabase_table_inventory.py` reads it now, server-side. Never return it to the browser, never log it, never echo it in a refusal — including the 401 path, where "helpful" context puts it into `_server_messages` and into a user's browser. If a Metabase call is ever added back to the app, that rule comes with it.
 - **A key's group is a requirement someone has to meet, not a fact you can assert.** Metabase has no read-only key flag; only the group restricts it. A key in Administrators — or any group with `create-queries: query-builder-and-native` — is unrestricted on the Metabase side, making our GET-only client the *only* protection. Metabase's permission UI has been observed **not** to gate `/api/dataset/native` on this instance, so the durable control is a SELECT-only database login.
 - `fixtures/role.json` creates `Dashboard Studio Editor` — every `frappe.only_for` depends on it. Don't remove it.
 - No personal student data in fixtures or tests.

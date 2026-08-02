@@ -1,13 +1,13 @@
-"""Turn one Metabase card's JSON into the fields the Visualize tab needs.
+"""Read one Metabase card's JSON.
+
+**The app does not call this.** The card-id conversion route it was written for
+is in ``archive/metabase_mbql_card_path.py``. What keeps it here is
+``scripts/metabase_table_inventory.py``, which imports ``referenced_tables`` to
+work out which physical tables the Metabase cards read — the list a database
+GRANT is narrowed against. The caller does its own GETs.
 
 Frappe-free on purpose, so the whole translation is unit-testable without a
-Bench and without touching Metabase. ``client.fetch_card`` does the network part;
-this does the reading.
-
-**Why this exists.** The alternative is a person copying SQL out of Metabase's
-editor by hand, and then Studio guessing the title, the axes and the chart type
-back out of that SQL text. The card already knows all four. Reading them is a
-translation between two known JSON shapes instead of a parse.
+Bench and without touching Metabase.
 
 **The shape, confirmed live against UCC's Metabase (v1.62.5.1, 2026-07-28).**
 This version serialises ``dataset_query`` as MBQL 5 (the MLv2 pipeline form),

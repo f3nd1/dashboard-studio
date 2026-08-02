@@ -1,14 +1,11 @@
 /*
- * Metabase → Insights converter — the whole front end.
+ * SQL → Insights converter — the whole front end.
  *
  * What is left of a much larger SPA. The dashboard builder, source mapping,
  * catalogue, validation and governance workspaces went to
- * archive/studio_app_full.js when the product narrowed to one job: turn a
- * GUI-built Metabase card into an Insights Query Builder query.
- *
- * The converter code below is lifted from that file unchanged. This was a move,
- * not a rewrite — the flow and its verification gate are the thing that works,
- * and the point of the cut was to stop carrying everything around it.
+ * archive/studio_app_full.js when the product narrowed to one job; the
+ * Metabase card-id route went the same way later, leaving one front door:
+ * paste the query, get Insights operations.
  *
  * Dependency-free vanilla JS, no bundler. Mounted by the Desk page via
  * frappe.require; DSStudioApp.mount stays the entry point it always was.
@@ -102,19 +99,18 @@
     // app owns everything below it.
     var hero = el("div", "dss-hero");
     hero.appendChild(el("div", "dss-kicker", "Converter"));
-    hero.appendChild(el("h3", "dss-hero-title", "Rebuild a Metabase question in Insights"));
+    hero.appendChild(el("h3", "dss-hero-title", "Rebuild a query in Insights"));
     hero.appendChild(el("p", "dss-hero-blurb",
-      "Give it a Metabase card id, or paste SQL, and it writes the same question " +
-      "into Insights as clickable operations rather than a block of text. " +
-      "Nothing is trusted until you have compared its number against the " +
-      "original. Pasted SQL covers one table, or two joined on a single " +
-      "a.column = b.column; subqueries and anything the join cannot be read " +
-      "out of are refused rather than guessed at."));
+      "Paste the SQL and it writes the same question into Insights as clickable " +
+      "operations rather than a block of text. Nothing is trusted until you have " +
+      "compared its number against the original. Covers one table, or two joined " +
+      "on a single a.column = b.column; subqueries and anything the join cannot " +
+      "be read out of are refused rather than guessed at."));
     wrap.appendChild(hero);
 
     var card = el("section", "dss-vizstep");
     var body = el("div", "dss-vizstep-body");
-    body.appendChild(this.buildMetabaseImport());
+    body.appendChild(this.buildSqlInput());
     body.appendChild(this.buildWorkbookPicker());
     var result = this.buildConversionResult();
     if (result) body.appendChild(result);
@@ -193,45 +189,10 @@
     });
   };
 
-  // One editable field with its Guessed/Confirmed marker.
-  //
-  // The marker is flipped IN PLACE on input rather than by re-rendering: a
-  // re-render on every keystroke replaces the input mid-type and the caret and
-  // the rest of the word go with it. That fault has already been fixed twice in
-  // this app; do not reintroduce it here.
-
-  // Read a Metabase card instead of copying its SQL out by hand.
-  //
-  // The card already knows its title, its chart type and its axes; guessing
-  // those back out of pasted SQL text is where every bug in this flow has come
-  // from. Read-only — one GET, and Metabase is never written to.
-  // The card to convert. One input, one button — this is the whole front door.
-  App.prototype.buildMetabaseImport = function () {
+  // The query to convert. One box, one button — this is the whole front door.
+  App.prototype.buildSqlInput = function () {
     var self = this;
     var wrap = el("div", "dss-vizimport");
-    var row = el("div", "dss-vizimport-row");
-    var input = el("input", "dss-input dss-vizcardid");
-    input.type = "number";
-    input.min = "1";
-    input.placeholder = "Metabase card id, e.g. 1474";
-    input.setAttribute("aria-label", "Metabase card id");
-    input.value = this.state.vizCardId || "";
-    input.addEventListener("input", function () { self.state.vizCardId = input.value; });
-    var convert = el("button", "dss-btn dss-btn-primary", "Convert card →");
-    convert.title = "Turns a drag-and-drop Metabase question into Insights " +
-      "operations. The result is marked unverified until you check its number.";
-    row.appendChild(input);
-    row.appendChild(convert);
-    wrap.appendChild(row);
-
-    var note = el("div", "dss-vizimport-note",
-      "Read-only: the card is read, nothing is ever written to Metabase.");
-    wrap.appendChild(note);
-
-    // The other way in: SQL somebody already has, with no card behind it. Same
-    // destination and the same gate — it produces operations, not a raw SQL
-    // query, so the result stays clickable in Insights either way.
-    wrap.appendChild(el("div", "dss-vizimport-or", "or paste the SQL"));
     var box = el("textarea", "dss-input dss-sqlbox");
     box.placeholder =
       "SELECT `academic_year`, COUNT(*) FROM `tabStudent Applicant` GROUP BY `academic_year`";
@@ -240,68 +201,32 @@
     box.addEventListener("input", function () { self.state.vizSql = box.value; });
     wrap.appendChild(box);
 
-    var sqlRow = el("div", "dss-vizimport-row");
-    var sqlGo = el("button", "dss-btn", "Convert SQL →");
-    sqlGo.title = "Parses the query into the same Insights operations a card " +
-      "converts to, including a Join Table step when the ON clause is a single " +
-      "a.column = b.column. Both column names are checked against the DocType.";
-    sqlRow.appendChild(sqlGo);
-    wrap.appendChild(sqlRow);
+    var row = el("div", "dss-vizimport-row");
+    var go = el("button", "dss-btn dss-btn-primary", "Convert SQL →");
+    go.title = "Parses the query into Insights operations, including a Join " +
+      "Table step when the ON clause is a single a.column = b.column. Both " +
+      "column names are checked against the DocType.";
+    row.appendChild(go);
+    wrap.appendChild(row);
 
-    sqlGo.addEventListener("click", function () {
+    // Also the surface every refusal is written into, so the server's own
+    // sentence lands next to the box it is about.
+    var note = el("div", "dss-vizimport-note",
+      "One table, or two joined on a single a.column = b.column.");
+    wrap.appendChild(note);
+
+    go.addEventListener("click", function () {
       var sql = (box.value || "").trim();
       if (!sql) { note.textContent = "Paste a query first."; return; }
       if (!hasFrappe()) { note.textContent = "Converting needs the server."; return; }
       note.textContent = "Translating that query…";
-      sqlGo.disabled = true;
-      var done = function () { sqlGo.disabled = false; };
+      go.disabled = true;
+      var done = function () { go.disabled = false; };
       self.convertSql(sql, note).then(done, done);
-    });
-
-    convert.addEventListener("click", function () {
-      var id = (input.value || "").trim();
-      if (!id) { note.textContent = "Enter the card's id first."; return; }
-      if (!hasFrappe()) {
-        note.textContent = "Converting needs the server.";
-        return;
-      }
-      note.textContent = "Translating card " + id + "…";
-      convert.disabled = true;
-      var done = function () { convert.disabled = false; };
-      self.convertMetabaseCard(id, note).then(done, done);
     });
     return wrap;
   };
 
-  App.prototype.convertMetabaseCard = function (cardId, note) {
-    var self = this;
-    return dsCall({
-      method: "dashboard_studio.api.convert.convert_metabase_card",
-      args: { card_id: cardId, workbook: this.state.vizWorkbook || null },
-    }).then(function (r) {
-      var made = r.message;
-      if (!made || !made.name) {
-        note.textContent = "The server reported no query. Nothing was created.";
-        return null;
-      }
-      self.state.conversion = made;
-      self.state.vizError = "";
-      self.render();
-      return made;
-    }).catch(function (err) {
-      note.textContent = core.refusalMessage(err, "Could not convert that card.");
-    });
-  };
-
-  // A converted query, and the check that has to happen before anyone trusts it.
-  //
-  // Deliberately not styled as a success. A conversion that LOOKS done is the
-  // failure this whole gate exists to prevent: the translation may be right,
-  // and nothing here can tell — only a person comparing the two numbers can.
-  // Same flow as convertMetabaseCard, different source. Kept as its own method
-  // rather than a flag on that one: they take different arguments and refuse for
-  // different reasons, and a shared function with a mode is how those messages
-  // end up generic.
   App.prototype.convertSql = function (sql, note) {
     var self = this;
     return dsCall({
@@ -321,6 +246,11 @@
     });
   };
 
+  // A converted query, and the check that has to happen before anyone trusts it.
+  //
+  // Deliberately not styled as a success. A conversion that LOOKS done is the
+  // failure this whole gate exists to prevent: the translation may be right,
+  // and nothing here can tell — only a person comparing the two numbers can.
   App.prototype.buildConversionResult = function () {
     var self = this;
     var made = this.state.conversion;
@@ -331,12 +261,8 @@
       ? "Verified — " + made.name
       : "Converted, NOT yet verified — " + made.name));
     box.appendChild(el("div", "dss-saveresult-detail", verified
-      ? "“" + made.title + "”. You confirmed its number matches Metabase card "
-        + made.card_id + "."
-      : "“" + made.title + "”, built as Insights operations from Metabase card "
-        + made.card_id + ". Studio translated this; nothing has checked that it "
-        + "counts the same rows. Run it in Insights, compare the number with the "
-        + "card, and record both below."));
+      ? "“" + made.title + "” — you confirmed its number matches the original."
+      : "“" + made.title + "” — nothing has checked that it counts the same rows."));
 
     var steps = el("div", "dss-handoff-todo");
     steps.appendChild(el("div", "dss-handoff-todo-head", "Operations created"));
@@ -358,36 +284,41 @@
 
     if (verified) return box;
 
+    // One line: two small numbers and a button. The gate is unchanged — a
+    // person still has to type both and the server still refuses a mismatch —
+    // but a form with two labelled fields and a paragraph read like paperwork,
+    // and paperwork gets skipped. Labels are aria-label + placeholder rather
+    // than <label> elements so it stays one row without losing the screen
+    // reader.
     var check = el("div", "dss-verify");
-    check.appendChild(el("div", "dss-verify-head", "Check the number before trusting this"));
-    var pair = el("div", "dss-verify-pair");
+    check.appendChild(el("span", "dss-verify-head", "Same number?"));
     var inputs = {};
-    [["metabase", "Number in Metabase"], ["insights", "Number in Insights"]]
-      .forEach(function (spec) {
-        var field = el("div", "dss-field");
-        field.appendChild(el("label", "dss-field-label", spec[1]));
-        var box2 = el("input", "dss-input");
-        box2.setAttribute("aria-label", spec[1]);
-        box2.value = (self.state.verifyValues || {})[spec[0]] || "";
-        box2.addEventListener("input", function () {
-          var values = self.state.verifyValues || (self.state.verifyValues = {});
-          values[spec[0]] = box2.value;
-        });
-        inputs[spec[0]] = box2;
-        field.appendChild(box2);
-        pair.appendChild(field);
+    [["metabase", "Number in Metabase", "Metabase"],
+     ["insights", "Number in Insights", "Insights"]].forEach(function (spec, i) {
+      if (i) check.appendChild(el("span", "dss-verify-eq", "="));
+      var field = el("input", "dss-input dss-verify-num");
+      field.setAttribute("aria-label", spec[1]);
+      field.placeholder = spec[2];
+      field.value = (self.state.verifyValues || {})[spec[0]] || "";
+      field.addEventListener("input", function () {
+        var values = self.state.verifyValues || (self.state.verifyValues = {});
+        values[spec[0]] = field.value;
       });
-    check.appendChild(pair);
+      inputs[spec[0]] = field;
+      check.appendChild(field);
+    });
 
-    var mark = el("button", "dss-btn dss-btn-primary", "They match — mark verified");
+    var mark = el("button", "dss-btn dss-verify-go", "Confirm");
+    mark.title = "Records that you compared the two numbers. A mismatch is " +
+      "refused — the query stays marked unverified.";
     mark.addEventListener("click", function () {
       self.verifyConversion(made.name, inputs.metabase.value, inputs.insights.value);
     });
     check.appendChild(mark);
-    if (this.state.verifyError) {
-      check.appendChild(el("div", "dss-sqlnote dss-vizerror", this.state.verifyError));
-    }
     box.appendChild(check);
+    if (this.state.verifyError) {
+      box.appendChild(el("div", "dss-verify-error", this.state.verifyError));
+    }
     return box;
   };
 

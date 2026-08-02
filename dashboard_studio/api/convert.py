@@ -1,30 +1,29 @@
-"""Convert a GUI-built Metabase card into a real Insights v3 query.
+"""Convert a pasted SQL query into a real Insights v3 query.
 
-Where the SQL path hands Insights a block of text nobody can click, this hands
-it an Operations list — Select Source, Join Table, Filter Rows, Group &
-Summarize — which is what makes a migrated report maintainable afterwards.
+Instead of a block of text nobody can click, Insights gets an Operations list —
+Select Source, Join Table, Filter Rows, Group & Summarize — which is what makes
+a migrated report maintainable afterwards.
 
 **Nothing here is trustworthy until a person says it is.** ADR-006 rejected
 translation once, and it is reopened on one condition: a converted query
 carries an ``[UNVERIFIED]`` marker until somebody has compared its number
-against the Metabase card it came from. That marker is in the TITLE on purpose
-— it travels into Insights, so a person who finds the query there without ever
+against the report it came from. That marker is in the TITLE on purpose — it
+travels into Insights, so a person who finds the query there without ever
 having seen Studio still sees that nobody has checked it.
 
 The reason the gate exists, stated plainly because it is easy to erode: a
-translation that disagrees with Metabase does not fail, it returns a different
-number. `docs/SOPHIA_FAULT_PATTERN.md` — *"they do not fail, they disagree."*
-Every refusal in `integrations/metabase/mbql.py` and every step of this gate is
-paying for that.
+translation that disagrees with the original does not fail, it returns a
+different number. `docs/SOPHIA_FAULT_PATTERN.md` — *"they do not fail, they
+disagree."* Every refusal in `integrations/metabase/sql_ops.py` and every step
+of this gate is paying for that.
 
-Read-only against Metabase throughout: one GET for the card, one per table.
-Studio never executes anything, here or anywhere else.
+Studio never executes anything, here or anywhere else — it reads DocType
+metadata and writes an Insights record, and that is all.
 """
 
 import frappe
 
 from dashboard_studio.api.insights import (
-    BASE_TYPE_TO_DATA_TYPE,
     MAX_TITLE_LENGTH,
     QUERY_DOCTYPE,
     SITE_DB,
@@ -32,9 +31,6 @@ from dashboard_studio.api.insights import (
     _resolve_workbook,
     clamp_title,
 )
-from dashboard_studio.integrations.metabase.card import _scan_sources
-from dashboard_studio.integrations.metabase.client import fetch_card, fetch_table_metadata
-from dashboard_studio.integrations.metabase.mbql import translate_card
 from dashboard_studio.integrations.metabase.parser import analyze_sql
 from dashboard_studio.integrations.metabase.sql_ops import (
     columns_from_meta,
@@ -44,7 +40,7 @@ from dashboard_studio.roles import DS_WRITE_ROLES
 
 # Carried in the title so it travels with the record. A person who opens this
 # query in Insights next month, having never seen Studio, still learns that its
-# number has not been checked against the card it was converted from.
+# number has not been checked against the report it was converted from.
 #
 # ponytail: the marker IS the state — no new DocType, no parallel table to drift
 # from the record it describes. The ceiling: someone can rename the title in
@@ -53,109 +49,13 @@ from dashboard_studio.roles import DS_WRITE_ROLES
 UNVERIFIED_PREFIX = "[UNVERIFIED] "
 
 
-def build_metadata(card, fetch=None):
-    """Metabase ids -> the names and types the translator needs.
-
-    ``fetch`` is the injection seam: production passes nothing and one GET per
-    table happens; tests pass a dict-backed fake and no network is touched.
-    """
-    fetch = fetch or fetch_table_metadata
-    table_ids, _cards = _scan_sources(card.get("dataset_query"))
-    metadata = {"tables": {}, "fields": {}, "table_columns": {}}
-    for table_id in sorted(table_ids):
-        table = fetch(table_id) or {}
-        name = str(table.get("name") or "").strip()
-        if not name:
-            continue
-        metadata["tables"][table_id] = {"name": name}
-        columns = []
-        for field in table.get("fields") or []:
-            if not isinstance(field, dict):
-                continue
-            field_name = str(field.get("name") or "").strip()
-            if not field_name:
-                continue
-            columns.append(field_name)
-            if field.get("id") is not None:
-                metadata["fields"][field["id"]] = {
-                    "name": field_name,
-                    "data_type": BASE_TYPE_TO_DATA_TYPE.get(
-                        str(field.get("base_type") or ""), "String"),
-                }
-        metadata["table_columns"][table_id] = columns
-    return metadata
-
-
-@frappe.whitelist()
-def preview_conversion(card_id):
-    """What the conversion WOULD produce, without writing anything.
-
-    Returns ``{supported, reasons, operations, title, card_id}``. An unsupported
-    card comes back with reasons rather than a refusal, because the caller wants
-    to show them next to the card — "this question uses a custom column" is
-    something to read, not an error.
-    """
-    frappe.only_for(DS_WRITE_ROLES)
-    card = fetch_card(card_id)
-    result = translate_card(card, build_metadata(card))
-    result["card_id"] = card.get("id")
-    result["title"] = clamp_title(
-        str(card.get("name") or "").strip() or f"Metabase card {card.get('id')}")
-    return result
-
-
-@frappe.whitelist()
-def convert_metabase_card(card_id, workbook: str = None):
-    """Translate a card and file it in Insights as an UNVERIFIED query.
-
-    Refuses outright — rather than returning reasons — because this one writes.
-    A partial conversion is a query that answers a different question, and the
-    caller has ``preview_conversion`` for the read-only look.
-    """
-    frappe.only_for(DS_WRITE_ROLES)
-    _require_insights()
-
-    card = fetch_card(card_id)
-    result = translate_card(card, build_metadata(card))
-    if not result["supported"]:
-        frappe.throw(
-            "This card cannot be converted: " + "; ".join(result["reasons"]) +
-            ". Its SQL can still be copied across by hand."
-        )
-
-    workbook = _resolve_workbook(workbook)
-    title = str(card.get("name") or "").strip() or f"Metabase card {card.get('id')}"
-    # Clamped AFTER the prefix, so the marker is never the part that gets cut.
-    title = UNVERIFIED_PREFIX + clamp_title(title)[: MAX_TITLE_LENGTH - len(UNVERIFIED_PREFIX)]
-
-    doc = frappe.get_doc({
-        "doctype": QUERY_DOCTYPE,
-        "workbook": workbook,
-        "title": title,
-        "is_builder_query": 1,
-        "use_live_connection": 1,
-        "operations": frappe.as_json(result["operations"]),
-    }).insert()
-
-    return {
-        "name": doc.name,
-        "title": title,
-        "workbook": workbook,
-        "data_source": SITE_DB,
-        "verified": False,
-        "card_id": card.get("id"),
-        "operations": result["operations"],
-        "insights_url": f"/insights/workbook/{workbook}/query/{doc.name}",
-    }
-
-
 def _table_columns(doctype):
     """``{column_name: data_type}`` for a DocType, from Frappe's own metadata.
 
     The types SQL text cannot supply. Insights needs a data_type on every
     grouping and measure, and this site already knows what every column is —
-    which is why the SQL path can reach the same structured output as the card
-    path without anybody guessing.
+    which is why pasted SQL can reach structured output without anybody
+    guessing, and why a join's column names can be checked rather than trusted.
     """
     if not frappe.db.exists("DocType", doctype):
         frappe.throw(
@@ -170,9 +70,8 @@ def _table_columns(doctype):
 def convert_sql(sql: str, title: str = None, workbook: str = None):
     """Translate pasted SQL into Insights operations and file it, UNVERIFIED.
 
-    The same destination as the card path and the same gate — a query is a query
-    however it arrived, and one built from parsed SQL text is if anything more in
-    need of checking than one built from a card's own structure.
+    Refuses outright rather than returning reasons, because this writes: a
+    partial conversion is a query that answers a different question.
     """
     frappe.only_for(DS_WRITE_ROLES)
     _require_insights()
@@ -215,7 +114,6 @@ def convert_sql(sql: str, title: str = None, workbook: str = None):
         "workbook": workbook,
         "data_source": SITE_DB,
         "verified": False,
-        "card_id": None,
         "operations": result["operations"],
         "insights_url": f"/insights/workbook/{workbook}/query/{doc.name}",
     }

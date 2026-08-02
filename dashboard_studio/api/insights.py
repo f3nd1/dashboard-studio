@@ -57,27 +57,6 @@ WORKBOOK_TITLE = "Dashboard Studio"
 MAX_TITLE_LENGTH = 140
 
 
-# Metabase's base_type -> v3's data_type. Anything unlisted becomes String, which
-# degrades safely: a String X axis is normal, and a String Y axis is refused by
-# name below rather than charted.
-BASE_TYPE_TO_DATA_TYPE = {
-    "type/Integer": "Integer",
-    "type/BigInteger": "Integer",
-    "type/SmallInteger": "Integer",
-    "type/Quantity": "Integer",
-    "type/Float": "Decimal",
-    "type/Decimal": "Decimal",
-    "type/Number": "Decimal",
-    "type/Date": "Date",
-    "type/DateTime": "Datetime",
-    "type/DateTimeWithTZ": "Datetime",
-    "type/DateTimeWithLocalTZ": "Datetime",
-    "type/Instant": "Datetime",
-    "type/Time": "Time",
-    "type/TimeWithTZ": "Time",
-}
-
-
 def clamp_title(name):
     """A title Insights will accept, or as much of one as fits.
 

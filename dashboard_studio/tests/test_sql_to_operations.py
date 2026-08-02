@@ -3,14 +3,13 @@
 Driven through the REAL parser rather than hand-built analysis dicts: the point
 of this path is that somebody pastes SQL, so the test starts where they do.
 
-Expected operations are asserted in full and against the MBQL path's output for
-the same question — if the two converters ever disagree about what a query
-means, that is the bug worth catching, not a formatting difference.
+Expected operations are asserted IN FULL rather than spot-checked. The failure
+mode here is a query that runs fine and answers something else, so "the right
+keys are present" proves nothing.
 """
 
 import unittest
 
-from dashboard_studio.integrations.metabase.mbql import translate_card
 from dashboard_studio.integrations.metabase.parser import analyze_sql
 from dashboard_studio.integrations.metabase.sql_ops import (
     columns_from_meta,
@@ -187,58 +186,6 @@ class TestJoinRefusals(unittest.TestCase):
                 "JOIN `tabPurchase Order` b ON b.`ref` = a.`po`",
                 columns={"Student Applicant": APPLICANT}),
             "the columns of Purchase Order are not known here")
-
-
-class TestAgreesWithTheCardPath(unittest.TestCase):
-    """Two converters, one question. A disagreement here is the real hazard."""
-
-    def test_the_same_question_produces_the_same_operations(self):
-        sql = ("SELECT `academic_year`, COUNT(*) FROM `tabStudent Applicant` "
-               "WHERE `status` = 'Enrolled' GROUP BY `academic_year`")
-        from_sql = run(sql)
-
-        card = {"id": 1, "dataset_query": {"lib/type": "mbql/query", "stages": [{
-            "lib/type": "mbql.stage/mbql", "source-table": 1,
-            "filters": [["=", {}, ["field", {}, 11], "Enrolled"]],
-            "aggregation": [["count", {}]],
-            "breakout": [["field", {}, 12]]}]}}
-        from_card = translate_card(card, {
-            "tables": {1: {"name": "tabStudent Applicant"}},
-            "fields": {11: {"name": "status", "data_type": "String"},
-                       12: {"name": "academic_year", "data_type": "String"}}})
-
-        self.assertTrue(from_sql["supported"], from_sql["reasons"])
-        self.assertTrue(from_card["supported"], from_card["reasons"])
-        self.assertEqual(from_sql["operations"], from_card["operations"],
-                         "the SQL and card paths disagree about the same question")
-
-    def test_the_same_JOINED_question_produces_the_same_operations(self):
-        """The one that matters most. Metabase hands the card path two already
-        separated columns; the SQL path reads them out of the ON clause. If those
-        two ever disagree, one of them is building a different join."""
-        from_sql = run("SELECT a.`academic_year`, COUNT(*) FROM `tabStudent Applicant` a "
-                       "LEFT JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
-                       "GROUP BY a.`academic_year`")
-
-        card = {"id": 2, "dataset_query": {"lib/type": "mbql/query", "stages": [{
-            "lib/type": "mbql.stage/mbql", "source-table": 1,
-            "joins": [{"lib/type": "mbql/join", "stages": [{"source-table": 2}],
-                       "strategy": "left-join",
-                       "conditions": [["=", {}, ["field", {}, 21], ["field", {}, 22]]]}],
-            "aggregation": [["count", {}]],
-            "breakout": [["field", {}, 12]]}]}}
-        from_card = translate_card(card, {
-            "tables": {1: {"name": "tabStudent Applicant"},
-                       2: {"name": "tabPurchase Order"}},
-            "fields": {12: {"name": "academic_year", "data_type": "String"},
-                       21: {"name": "po", "data_type": "String"},
-                       22: {"name": "ref", "data_type": "String"}},
-            "table_columns": {2: ["amount", "name", "ref", "status"]}})
-
-        self.assertTrue(from_sql["supported"], from_sql["reasons"])
-        self.assertTrue(from_card["supported"], from_card["reasons"])
-        self.assertEqual(from_sql["operations"], from_card["operations"],
-                         "the SQL and card paths disagree about the same join")
 
 
 class TestRefusals(unittest.TestCase):

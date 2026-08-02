@@ -1,9 +1,10 @@
-"""Pasted SQL -> the same Insights v3 operations the MBQL path produces.
+"""Pasted SQL -> Insights v3 operations. The only translator in the app.
 
-The card path reads a Metabase question's structure and translates it. This does
-the same job from SQL text, so a query that was never a Metabase card — or one
-whose card cannot be reached — still lands in Insights as clickable operations
-rather than a block of SQL nobody can edit.
+Paste the query, get Select Source / Join Table / Filter Rows / Group &
+Summarize — a report that stays clickable in Insights' own editor instead of
+being a block of SQL nobody can edit. The Metabase card-id route that used to
+sit alongside this was removed; it is in ``archive/metabase_mbql_card_path.py``
+with its client and tests.
 
 **Where the line is, concretely.** `parser.analyze_sql` already draws most of it
 and this narrows it further:
@@ -26,34 +27,85 @@ else. Everything the orientation cannot be certain about (an unqualified side, a
 compound ON, a self join) refuses back in the parser, by name.
 
 **The one thing SQL cannot supply is types**, and Insights needs a ``data_type``
-on every dimension and measure. The MBQL path gets them from Metabase's field
-metadata. Here they come from Frappe's own DocType metadata — the tables are
-``tab<DocType>``, so the site already knows what every column is. That is the
+on every dimension and measure. They come from Frappe's own DocType metadata —
+the tables are ``tab<DocType>``, so the site already knows what every column is. That is the
 injected ``columns`` argument — ``{DocType: {column: data_type}}``, one entry per
 table the query touches — and without it nothing is translated: a guessed type
 draws a chart that is wrong without saying so. It doubles as the check that
 makes joins safe: every column name read out of the SQL has to be one the
 DocType really has.
 
-Everything converted this way is subject to the same verification gate as the
-card path. See ADR-007.
+Nothing converted here is trustworthy until a person has compared its number
+against the original. See ADR-007 — that condition is why translating is allowed
+at all.
 """
 
 from __future__ import annotations
 
-from dashboard_studio.integrations.metabase.mbql import (
-    AGGREGATIONS,
-    COUNT_COLUMN,
-    DEFAULT_DATA_SOURCE,
-    DIMENSION_DATA_TYPES,
-    MEASURE_DATA_TYPES,
-    NUMERIC_ONLY_AGGREGATIONS,
-    OPERATORS,
-    _filter,
-    _join,
-    _source,
-    _summarize,
-)
+# ---------------------------------------------------------------------------
+# The Insights v3 side, read from source at the installed version
+# (v3.12.2, ``frontend/src2/types/query.types.ts``). These shapes and the
+# constants above them came from the MBQL card-path translator, which was
+# archived when the card-id route was removed; they are here now because this is
+# the only path that builds operations. Do not adjust a shape without reading
+# that file — a key Insights does not recognise is dropped silently, and the
+# query then answers a different question without failing.
+# ---------------------------------------------------------------------------
+
+# Insights writes queries against this data source; see api/insights.SITE_DB.
+DEFAULT_DATA_SOURCE = "Site DB"
+
+# SQL comparison operator -> Insights FilterOperator. Only the ones that mean
+# the same thing on both sides. BETWEEN, LIKE and IN exist in Insights too, but
+# their argument shapes have not been read from a real query, and a filter that
+# selects different rows is a different number.
+OPERATORS = {"=": "=", "!=": "!=", ">": ">", ">=": ">=", "<": "<", "<=": "<="}
+
+# What Insights accepts: ibis_utils.apply_aggregate throws on anything else.
+INSIGHTS_AGGREGATIONS = ("sum", "count", "avg", "min", "max", "count_distinct")
+
+# A bare COUNT has no column. Insights' own count measure names the column
+# "count" (frontend/src2/query/helpers.ts), so this matches what Insights does
+# to itself rather than inventing a convention.
+COUNT_COLUMN = "count"
+
+DIMENSION_DATA_TYPES = ("String", "Date", "Datetime", "Time")
+MEASURE_DATA_TYPES = ("Integer", "Decimal")
+
+# Aggregations that need a number to work on. Counting is not one of them:
+# count_distinct of a text column is an ordinary thing to want, and Insights'
+# MeasureDataType allows String precisely because of it.
+NUMERIC_ONLY_AGGREGATIONS = ("sum", "avg", "min", "max")
+
+
+def _source(table_name, data_source):
+    return {"type": "source",
+            "table": {"type": "table", "data_source": data_source, "table_name": table_name}}
+
+
+def _filter(column, operator, value):
+    return {"type": "filter",
+            "column": {"type": "column", "column_name": column},
+            "operator": operator,
+            "value": value}
+
+
+def _join(join_type, table_name, data_source, left, right, select_columns):
+    return {
+        "type": "join",
+        "join_type": join_type,
+        "table": {"type": "table", "data_source": data_source, "table_name": table_name},
+        "select_columns": [{"type": "column", "column_name": c} for c in select_columns],
+        "join_condition": {
+            "left_column": {"type": "column", "column_name": left},
+            "right_column": {"type": "column", "column_name": right},
+        },
+    }
+
+
+def _summarize(measures, dimensions):
+    return {"type": "summarize", "measures": measures, "dimensions": dimensions}
+
 
 # Frappe fieldtype -> Insights data_type. Anything unlisted becomes String,
 # which degrades safely: a String dimension is normal, and a String measure is
@@ -238,7 +290,7 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
 def _measures(aggregation, available, tables, reasons):
     function = str(aggregation.get("function") or "").upper()
     name = SQL_AGGREGATIONS.get(function)
-    if not name or name not in AGGREGATIONS.values():
+    if not name or name not in INSIGHTS_AGGREGATIONS:
         reasons.append(f"aggregation '{function or 'unknown'}' is not translated")
         return []
     argument = str(aggregation.get("argument") or "").strip().strip("`")
