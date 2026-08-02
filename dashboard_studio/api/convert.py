@@ -182,10 +182,12 @@ def convert_sql(sql: str, title: str = None, workbook: str = None):
 
     analysis = analyze_sql(sql)
     doctypes = [d for d in (analysis.get("doctypes") or []) if d]
-    # Columns are only fetched once the query is down to a single table; asking
-    # for the metadata of a join this cannot translate anyway would refuse for
-    # the wrong reason.
-    columns = _table_columns(doctypes[0]) if len(doctypes) == 1 else {}
+    source = analysis.get("source_doctype") or (doctypes[0] if doctypes else None)
+    # Types for EVERY table the query touches — a join needs both sides typed,
+    # and both join columns checked against real DocType metadata. Only fetched
+    # once the analysis itself is clean, so a query refused for a subquery says
+    # so rather than "there is no DocType called '(SELECT'".
+    columns = {d: _table_columns(d) for d in doctypes} if analysis.get("supported") else {}
     result = operations_from_sql(analysis, columns)
     if not result["supported"]:
         frappe.throw(
@@ -195,7 +197,7 @@ def convert_sql(sql: str, title: str = None, workbook: str = None):
         )
 
     workbook = _resolve_workbook(workbook)
-    name = (title or "").strip() or f"{doctypes[0]} query"
+    name = (title or "").strip() or f"{source} query"
     name = UNVERIFIED_PREFIX + clamp_title(name)[: MAX_TITLE_LENGTH - len(UNVERIFIED_PREFIX)]
 
     doc = frappe.get_doc({

@@ -107,8 +107,9 @@
       "Give it a Metabase card id, or paste SQL, and it writes the same question " +
       "into Insights as clickable operations rather than a block of text. " +
       "Nothing is trusted until you have compared its number against the " +
-      "original. Pasted SQL covers a single table with WHERE and GROUP BY; " +
-      "joins and subqueries are refused rather than guessed at."));
+      "original. Pasted SQL covers one table, or two joined on a single " +
+      "a.column = b.column; subqueries and anything the join cannot be read " +
+      "out of are refused rather than guessed at."));
     wrap.appendChild(hero);
 
     var card = el("section", "dss-vizstep");
@@ -242,7 +243,8 @@
     var sqlRow = el("div", "dss-vizimport-row");
     var sqlGo = el("button", "dss-btn", "Convert SQL →");
     sqlGo.title = "Parses the query into the same Insights operations a card " +
-      "converts to. Single table with WHERE and GROUP BY; joins are refused.";
+      "converts to, including a Join Table step when the ON clause is a single " +
+      "a.column = b.column. Both column names are checked against the DocType.";
     sqlRow.appendChild(sqlGo);
     wrap.appendChild(sqlRow);
 

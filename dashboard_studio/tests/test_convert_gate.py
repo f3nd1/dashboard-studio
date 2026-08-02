@@ -140,15 +140,19 @@ class TestSqlConversion(_Base):
     SQL = ("SELECT `academic_year`, COUNT(*) FROM `tabStudent Applicant` "
            "WHERE `status` = 'Enrolled' GROUP BY `academic_year`")
 
+    # Frappe's own DocType metadata is where the SQL path gets its types — and,
+    # for a join, its proof that both column names are real.
+    META = {
+        "Student Applicant": [("status", "Select"), ("academic_year", "Data"),
+                              ("fee", "Currency"), ("po", "Data")],
+        "Purchase Order": [("ref", "Data"), ("amount", "Currency")],
+    }
+
     def setUp(self):
         super().setUp()
-        # Frappe's own DocType metadata is where the SQL path gets its types.
-        self.frappe._doctypes = {"Insights Query v3", "Student Applicant"}
+        self.frappe._doctypes = {"Insights Query v3", "Student Applicant", "Purchase Order"}
         self.frappe.get_meta = lambda dt: types.SimpleNamespace(fields=[
-            types.SimpleNamespace(fieldname="status", fieldtype="Select"),
-            types.SimpleNamespace(fieldname="academic_year", fieldtype="Data"),
-            types.SimpleNamespace(fieldname="fee", fieldtype="Currency"),
-        ])
+            types.SimpleNamespace(fieldname=f, fieldtype=t) for f, t in self.META[dt]])
 
     def test_it_writes_operations_not_raw_sql(self):
         self.api.convert_sql(self.SQL, workbook="2")
@@ -176,13 +180,39 @@ class TestSqlConversion(_Base):
         self.api.verify_converted_query(made["name"], "1234", "1234")
         self.assertFalse(self.queries()[0]["title"].startswith("[UNVERIFIED] "))
 
-    def test_a_join_is_refused_and_nothing_is_written(self):
+    def test_a_join_becomes_a_join_operation_with_types_from_both_doctypes(self):
+        """End to end: pasted SQL with a join lands as a clickable Join Table
+        operation, both columns validated against real DocType metadata."""
+        self.api.convert_sql(
+            "SELECT a.`academic_year`, COUNT(*) FROM `tabStudent Applicant` a "
+            "LEFT JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+            "WHERE b.`amount` >= 100 GROUP BY a.`academic_year`", workbook="2")
+        stored = __import__("json").loads(self.queries()[0]["operations"])
+        self.assertEqual([op["type"] for op in stored],
+                         ["source", "join", "filter", "summarize"])
+        self.assertEqual(stored[1]["join_type"], "left")
+        self.assertEqual(stored[1]["table"]["table_name"], "tabPurchase Order")
+        self.assertEqual(stored[1]["join_condition"], {
+            "left_column": {"type": "column", "column_name": "po"},
+            "right_column": {"type": "column", "column_name": "ref"}})
+        # `amount` is Purchase Order's, and typed from ITS metadata, not the
+        # source table's — a string 100 here matches nothing.
+        self.assertEqual(stored[2]["value"], 100.0)
+
+    def test_a_join_on_a_column_that_does_not_exist_writes_nothing(self):
         message = self.refusal(self.api.convert_sql,
-                               "SELECT a.`name` FROM `tabStudent Applicant` a "
-                               "JOIN `tabPurchase Order` b ON b.`ref` = a.`po`",
+                               "SELECT COUNT(*) FROM `tabStudent Applicant` a "
+                               "JOIN `tabPurchase Order` b ON b.`nonsense` = a.`po`",
                                workbook="2")
-        self.assertIn("joins tables", message)
-        self.assertIn("build it in Insights by hand", message)
+        self.assertIn("not a column of Purchase Order", message)
+        self.assertEqual(self.queries(), [])
+
+    def test_an_unparseable_join_condition_writes_nothing(self):
+        message = self.refusal(self.api.convert_sql,
+                               "SELECT COUNT(*) FROM `tabStudent Applicant` a "
+                               "JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+                               "AND b.`amount` = a.`fee`", workbook="2")
+        self.assertIn("single equality", message)
         self.assertEqual(self.queries(), [])
 
     def test_an_unknown_table_is_refused_before_anything_is_written(self):

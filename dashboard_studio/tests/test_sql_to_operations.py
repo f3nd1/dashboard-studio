@@ -17,14 +17,19 @@ from dashboard_studio.integrations.metabase.sql_ops import (
     operations_from_sql,
 )
 
-COLUMNS = {
+APPLICANT = {
     "name": "String",
     "status": "String",
     "academic_year": "String",
     "fee": "Decimal",
     "applied_on": "Date",
     "headcount": "Integer",
+    "po": "String",
 }
+# `name` and `status` are deliberately in BOTH: every Frappe table has a `name`,
+# so an unqualified column in a joined query is genuinely ambiguous.
+PURCHASE = {"name": "String", "ref": "String", "amount": "Decimal", "status": "String"}
+COLUMNS = {"Student Applicant": APPLICANT, "Purchase Order": PURCHASE}
 
 
 def run(sql, columns=None):
@@ -88,6 +93,102 @@ class TestSupported(unittest.TestCase):
         self.assertEqual(result["operations"][1]["dimensions"][0]["data_type"], "Date")
 
 
+class TestJoins(unittest.TestCase):
+    """The join a screenshot was once thought to be needed for. Everything
+    Insights' JoinArgs wants is in the SQL: both tables, the strategy, and both
+    columns. The only thing SQL cannot supply is the types, and those come from
+    the DocType metadata — which doubles as the check that both column names are
+    real."""
+
+    JOIN = ("SELECT a.`academic_year`, COUNT(*) FROM `tabStudent Applicant` a "
+            "LEFT JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+            "WHERE b.`amount` >= 100 GROUP BY a.`academic_year`")
+
+    def test_the_whole_operation_list_in_full(self):
+        result = run(self.JOIN)
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["operations"], [
+            {"type": "source", "table": {"type": "table", "data_source": "Site DB",
+                                         "table_name": "tabStudent Applicant"}},
+            {"type": "join", "join_type": "left",
+             "table": {"type": "table", "data_source": "Site DB",
+                       "table_name": "tabPurchase Order"},
+             "select_columns": [{"type": "column", "column_name": c}
+                                for c in ["amount", "name", "ref", "status"]],
+             "join_condition": {
+                 "left_column": {"type": "column", "column_name": "po"},
+                 "right_column": {"type": "column", "column_name": "ref"}}},
+            {"type": "filter", "column": {"type": "column", "column_name": "amount"},
+             "operator": ">=", "value": 100.0},
+            {"type": "summarize",
+             "measures": [{"measure_name": "count", "column_name": "count",
+                           "data_type": "Integer", "aggregation": "count"}],
+             "dimensions": [{"dimension_name": "academic_year",
+                             "column_name": "academic_year", "data_type": "String"}]},
+        ])
+
+    def test_the_left_column_is_the_source_table_whichever_side_it_was_typed(self):
+        flipped = run(self.JOIN.replace("ON b.`ref` = a.`po`", "ON a.`po` = b.`ref`"))
+        self.assertTrue(flipped["supported"], flipped["reasons"])
+        self.assertEqual(flipped["operations"][1]["join_condition"],
+                         run(self.JOIN)["operations"][1]["join_condition"])
+
+    def test_a_joined_column_is_typed_from_its_own_doctype(self):
+        """`amount` only exists on Purchase Order. Typing it against the source
+        table would make the filter value a string and match nothing."""
+        result = run("SELECT COUNT(*) FROM `tabStudent Applicant` a "
+                     "JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+                     "WHERE b.`amount` > 5")
+        self.assertIsInstance(result["operations"][2]["value"], float)
+
+    def test_summing_a_column_of_the_joined_table(self):
+        result = run("SELECT a.`academic_year`, SUM(b.`amount`) "
+                     "FROM `tabStudent Applicant` a "
+                     "JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+                     "GROUP BY a.`academic_year`")
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["operations"][-1]["measures"], [
+            {"measure_name": "sum_of_amount", "column_name": "amount",
+             "data_type": "Decimal", "aggregation": "sum"}])
+
+
+class TestJoinRefusals(unittest.TestCase):
+    def assert_refused(self, result, fragment):
+        self.assertFalse(result["supported"], "expected a refusal")
+        self.assertEqual(result["operations"], [])
+        self.assertIn(fragment, " | ".join(result["reasons"]))
+
+    def test_a_join_column_the_doctype_does_not_have_is_refused(self):
+        """The check that makes reading a join out of text safe at all: a name
+        that is not a real column must never reach Insights."""
+        self.assert_refused(
+            run("SELECT COUNT(*) FROM `tabStudent Applicant` a "
+                "JOIN `tabPurchase Order` b ON b.`nonsense` = a.`po`"),
+            "the join condition uses 'nonsense', which is not a column of Purchase Order")
+
+    def test_a_source_side_column_is_checked_too(self):
+        self.assert_refused(
+            run("SELECT COUNT(*) FROM `tabStudent Applicant` a "
+                "JOIN `tabPurchase Order` b ON b.`ref` = a.`nonsense`"),
+            "not a column of Student Applicant")
+
+    def test_a_column_in_both_tables_must_be_qualified(self):
+        """After a join, `name` and `status` exist on both sides. Picking one is
+        picking which rows the filter keeps."""
+        self.assert_refused(
+            run("SELECT COUNT(*) FROM `tabStudent Applicant` a "
+                "JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+                "WHERE `status` = 'Paid'"),
+            "is a column of both Student Applicant and Purchase Order")
+
+    def test_the_joined_tables_columns_are_needed_too(self):
+        self.assert_refused(
+            run("SELECT COUNT(*) FROM `tabStudent Applicant` a "
+                "JOIN `tabPurchase Order` b ON b.`ref` = a.`po`",
+                columns={"Student Applicant": APPLICANT}),
+            "the columns of Purchase Order are not known here")
+
+
 class TestAgreesWithTheCardPath(unittest.TestCase):
     """Two converters, one question. A disagreement here is the real hazard."""
 
@@ -111,6 +212,34 @@ class TestAgreesWithTheCardPath(unittest.TestCase):
         self.assertEqual(from_sql["operations"], from_card["operations"],
                          "the SQL and card paths disagree about the same question")
 
+    def test_the_same_JOINED_question_produces_the_same_operations(self):
+        """The one that matters most. Metabase hands the card path two already
+        separated columns; the SQL path reads them out of the ON clause. If those
+        two ever disagree, one of them is building a different join."""
+        from_sql = run("SELECT a.`academic_year`, COUNT(*) FROM `tabStudent Applicant` a "
+                       "LEFT JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+                       "GROUP BY a.`academic_year`")
+
+        card = {"id": 2, "dataset_query": {"lib/type": "mbql/query", "stages": [{
+            "lib/type": "mbql.stage/mbql", "source-table": 1,
+            "joins": [{"lib/type": "mbql/join", "stages": [{"source-table": 2}],
+                       "strategy": "left-join",
+                       "conditions": [["=", {}, ["field", {}, 21], ["field", {}, 22]]]}],
+            "aggregation": [["count", {}]],
+            "breakout": [["field", {}, 12]]}]}}
+        from_card = translate_card(card, {
+            "tables": {1: {"name": "tabStudent Applicant"},
+                       2: {"name": "tabPurchase Order"}},
+            "fields": {12: {"name": "academic_year", "data_type": "String"},
+                       21: {"name": "po", "data_type": "String"},
+                       22: {"name": "ref", "data_type": "String"}},
+            "table_columns": {2: ["amount", "name", "ref", "status"]}})
+
+        self.assertTrue(from_sql["supported"], from_sql["reasons"])
+        self.assertTrue(from_card["supported"], from_card["reasons"])
+        self.assertEqual(from_sql["operations"], from_card["operations"],
+                         "the SQL and card paths disagree about the same join")
+
 
 class TestRefusals(unittest.TestCase):
     def assert_refused(self, result, fragment):
@@ -120,15 +249,6 @@ class TestRefusals(unittest.TestCase):
         joined = " | ".join(result["reasons"])
         self.assertIn(fragment, joined)
         return joined
-
-    def test_a_join_is_refused_and_says_why(self):
-        """The line. analyze_sql hands a join condition back as text with table
-        aliases in it; splitting that is how a wrong join gets built."""
-        joined = self.assert_refused(
-            run("SELECT a.`name` FROM `tabStudent Applicant` a "
-                "JOIN `tabPurchase Order` b ON b.`ref` = a.`po`"),
-            "this query joins tables")
-        self.assertIn("Build the join in Insights", joined)
 
     def test_a_subquery_is_refused(self):
         self.assert_refused(

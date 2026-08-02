@@ -8,25 +8,32 @@ rather than a block of SQL nobody can edit.
 **Where the line is, concretely.** `parser.analyze_sql` already draws most of it
 and this narrows it further:
 
-  works      single table, WHERE with AND-ed comparisons, GROUP BY, one
-             COUNT/SUM/AVG aggregate
-  refused    any JOIN, subqueries, multiple joins, OR, UNION, HAVING, CASE,
-             DISTINCT, window functions, more than one aggregate, LIKE and IN
+  works      one table, or two joined on a single `a.col = b.col` equality;
+             WHERE with AND-ed comparisons, GROUP BY, one COUNT/SUM/AVG
+             aggregate
+  refused    subqueries, more than one join, CROSS and self joins, an ON clause
+             that is anything but a single equality of two qualified columns,
+             OR, UNION, HAVING, CASE, DISTINCT, window functions, more than one
+             aggregate, LIKE and IN
 
-**Why joins are refused rather than attempted.** `analyze_sql` hands back a join
-condition as unparsed text — ``"b.`ref` = a.`po`"`` — with table aliases still in
-it. Turning that into Insights' structured ``{left_column, right_column}`` means
-splitting a string on ``=`` and guessing which side belongs to which table. That
-is exactly the string surgery that produces a join which runs, returns rows, and
-answers a different question. The MBQL path can do joins because Metabase hands
-over the two sides already separated; SQL text does not.
+**How a join is translated, and where it stops.** `analyze_sql` reads the ON
+clause into two *named, table-oriented* columns — ``source_column`` always
+belongs to the FROM table and ``join_column`` to the joined one — which is
+exactly what Insights' ``join_condition`` means. Both names are then checked
+against the real columns of their DocType here, so a column that does not exist
+refuses rather than being written into a query that runs and answers something
+else. Everything the orientation cannot be certain about (an unqualified side, a
+compound ON, a self join) refuses back in the parser, by name.
 
 **The one thing SQL cannot supply is types**, and Insights needs a ``data_type``
 on every dimension and measure. The MBQL path gets them from Metabase's field
 metadata. Here they come from Frappe's own DocType metadata — the tables are
 ``tab<DocType>``, so the site already knows what every column is. That is the
-injected ``columns`` argument, and without it nothing is translated: a guessed
-type draws a chart that is wrong without saying so.
+injected ``columns`` argument — ``{DocType: {column: data_type}}``, one entry per
+table the query touches — and without it nothing is translated: a guessed type
+draws a chart that is wrong without saying so. It doubles as the check that
+makes joins safe: every column name read out of the SQL has to be one the
+DocType really has.
 
 Everything converted this way is subject to the same verification gate as the
 card path. See ADR-007.
@@ -43,6 +50,7 @@ from dashboard_studio.integrations.metabase.mbql import (
     NUMERIC_ONLY_AGGREGATIONS,
     OPERATORS,
     _filter,
+    _join,
     _source,
     _summarize,
 )
@@ -98,40 +106,88 @@ def _value(raw, data_type):
         return raw
 
 
+def _type_of(reference, available, tables):
+    """A column reference -> ``(data_type, reason)``, exactly one of them set.
+
+    ``reference`` is ``{"field", "table"}`` as the parser returns it: ``table``
+    is set when the SQL qualified the column and None when it did not. An
+    unqualified name that exists in BOTH joined tables refuses — after a join
+    every Frappe table contributes a `name`, and picking one of them is picking
+    which rows the filter keeps.
+    """
+    column = str(reference.get("field") or "").strip()
+    table = reference.get("table")
+    owners = available.get(column) or {}
+    if table:
+        if table not in owners:
+            return None, f"'{column}' is not a column of {table}"
+        return owners[table], None
+    if not owners:
+        return None, f"'{column}' is not a column of {' or '.join(tables)}"
+    if len(owners) > 1:
+        return None, (
+            f"'{column}' is a column of both {' and '.join(owners)}, and the SQL does "
+            "not say which one is meant — qualify it with its table"
+        )
+    return next(iter(owners.values())), None
+
+
 def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     """``analyze_sql`` output + column types -> Insights operations.
 
-    Returns ``{supported, operations, reasons}``. As everywhere in this
-    integration, an unsupported query hands back NO operations: a partial list
-    is a query that answers a different question.
+    ``columns`` is ``{DocType: {column: data_type}}``, one entry per table the
+    query touches. Returns ``{supported, operations, reasons}``. As everywhere in
+    this integration, an unsupported query hands back NO operations: a partial
+    list is a query that answers a different question.
     """
     if not isinstance(analysis, dict):
         raise TypeError("analysis must be the dict analyze_sql returns")
     reasons = list(analysis.get("reasons") or [])
     columns = columns or {}
-
-    if analysis.get("join") or len(analysis.get("doctypes") or []) > 1:
-        reasons.append(
-            "this query joins tables, and a join condition arrives here as text "
-            "rather than as two named columns — converting it would mean guessing "
-            "which side is which. Build the join in Insights, or convert the "
-            "Metabase card instead"
-        )
     doctypes = [d for d in (analysis.get("doctypes") or []) if d]
-    if not doctypes:
+    source = analysis.get("source_doctype") or (doctypes[0] if doctypes else None)
+    join = analysis.get("join")
+
+    if not source:
         reasons.append("no table found in this query")
-    if not columns:
+    missing = [d for d in doctypes if not columns.get(d)]
+    # Only when nothing else already explains the refusal — otherwise a query
+    # rejected for a subquery also gets told its columns are unknown, which
+    # buries the reason that matters.
+    if missing and not reasons:
         reasons.append(
-            "the columns of that table are not known here, so nothing can be "
-            "typed — Insights needs a data type on every grouping and measure"
+            f"the columns of {', '.join(missing)} are not known here, so nothing can "
+            "be typed — Insights needs a data type on every grouping and measure"
         )
     if reasons:
         return {"supported": False, "operations": [], "reasons": reasons}
 
-    operations = [_source("tab" + doctypes[0], data_source)]
+    tables = [source] + ([join["doctype"]] if join else [])
+    # column -> {DocType: data_type}. A name in two tables is ambiguous, and the
+    # ambiguity has to survive to the lookup rather than be flattened away here.
+    available: dict[str, dict[str, str]] = {}
+    for doctype in tables:
+        for column, data_type in (columns.get(doctype) or {}).items():
+            available.setdefault(column, {})[doctype] = data_type
+
+    operations = [_source("tab" + source, data_source)]
+
+    if join:
+        join_columns = columns.get(join["doctype"]) or {}
+        # The check that makes reading a join out of SQL safe: both names have to
+        # be columns the DocTypes really have. A typo'd or misread one would
+        # otherwise become a join that runs and answers a different question.
+        for column, doctype, known in ((join["source_column"], source, columns.get(source) or {}),
+                                       (join["join_column"], join["doctype"], join_columns)):
+            if column not in known:
+                reasons.append(f"the join condition uses '{column}', which is not a "
+                               f"column of {doctype}")
+        if not reasons:
+            operations.append(_join(join["join_type"], "tab" + join["doctype"], data_source,
+                                    join["source_column"], join["join_column"],
+                                    sorted(join_columns)))
 
     for rule in analysis.get("filters") or []:
-        column = str(rule.get("field") or "").strip()
         operator = OPERATORS.get(str(rule.get("operator") or "").strip())
         if not operator:
             reasons.append(
@@ -139,31 +195,36 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                 "translates — it handles =, !=, >, >=, < and <="
             )
             continue
-        if column not in columns:
-            reasons.append(f"'{column}' is not a column of {doctypes[0]}")
+        data_type, problem = _type_of(rule, available, tables)
+        if problem:
+            reasons.append(problem)
             continue
-        operations.append(_filter(column, operator, _value(rule.get("value"), columns[column])))
+        operations.append(_filter(str(rule.get("field")).strip(), operator,
+                                  _value(rule.get("value"), data_type)))
 
     aggregations = analysis.get("aggregations") or []
-    group_by = [g for g in (analysis.get("group_by") or []) if g]
+    group_by = [g for g in (analysis.get("group_by") or []) if g.get("field")]
     if len(aggregations) > 1:
         reasons.append(
             f"this query has {len(aggregations)} aggregates — only one is translated"
         )
     elif aggregations:
-        measures, dimensions = _measures(aggregations[0], columns, reasons), []
-        for column in group_by:
-            if column not in columns:
-                reasons.append(f"'{column}' is not a column of {doctypes[0]}")
+        measures = _measures(aggregations[0], available, tables, reasons)
+        dimensions = []
+        for reference in group_by:
+            data_type, problem = _type_of(reference, available, tables)
+            if problem:
+                reasons.append(problem)
                 continue
-            if columns[column] not in DIMENSION_DATA_TYPES:
+            column = str(reference.get("field")).strip()
+            if data_type not in DIMENSION_DATA_TYPES:
                 reasons.append(
-                    f"'{column}' is {columns[column]}, and Insights groups only by "
+                    f"'{column}' is {data_type}, and Insights groups only by "
                     "text, a date or a time"
                 )
                 continue
             dimensions.append({"dimension_name": column, "column_name": column,
-                               "data_type": columns[column]})
+                               "data_type": data_type})
         if measures:
             operations.append(_summarize(measures, dimensions))
     elif group_by:
@@ -174,7 +235,7 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     return {"supported": True, "operations": operations, "reasons": []}
 
 
-def _measures(aggregation, columns, reasons):
+def _measures(aggregation, available, tables, reasons):
     function = str(aggregation.get("function") or "").upper()
     name = SQL_AGGREGATIONS.get(function)
     if not name or name not in AGGREGATIONS.values():
@@ -186,17 +247,19 @@ def _measures(aggregation, columns, reasons):
     if name == "count" and (not argument or argument == "*"):
         return [{"measure_name": COUNT_COLUMN, "column_name": COUNT_COLUMN,
                  "data_type": "Integer", "aggregation": "count"}]
-    if argument not in columns:
-        reasons.append(f"'{argument}' is not a column this query can aggregate")
+    data_type, problem = _type_of({"field": argument, "table": aggregation.get("table")},
+                                  available, tables)
+    if problem:
+        reasons.append(problem)
         return []
-    if name in NUMERIC_ONLY_AGGREGATIONS and columns[argument] not in MEASURE_DATA_TYPES:
+    if name in NUMERIC_ONLY_AGGREGATIONS and data_type not in MEASURE_DATA_TYPES:
         reasons.append(
-            f"'{argument}' is {columns[argument]}, and only a number can be {function}'d"
+            f"'{argument}' is {data_type}, and only a number can be {function}'d"
         )
         return []
     return [{
         "measure_name": f"{name}_of_{argument}",
         "column_name": argument,
-        "data_type": "Integer" if name == "count" else columns[argument],
+        "data_type": "Integer" if name == "count" else data_type,
         "aggregation": name,
     }]
