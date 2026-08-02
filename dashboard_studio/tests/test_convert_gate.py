@@ -151,6 +151,22 @@ class TestSqlConversion(_Base):
     def test_empty_sql_is_refused(self):
         self.assertIn("Paste a SQL query", self.refusal(self.api.convert_sql, "   "))
 
+    def test_a_supplied_title_is_used_and_still_carries_the_marker(self):
+        result = self.api.convert_sql(SQL, title="Enrolled by intake year", workbook="2")
+        self.assertEqual(result["title"], "[UNVERIFIED] Enrolled by intake year")
+        self.assertEqual(self.queries()[0]["title"], "[UNVERIFIED] Enrolled by intake year")
+
+    def test_a_blank_title_falls_back_to_the_table(self):
+        for blank in (None, "", "   "):
+            self.store.pop("Insights Query v3", None)
+            self.assertEqual(self.api.convert_sql(SQL, title=blank, workbook="2")["title"],
+                             "[UNVERIFIED] Student Applicant query")
+
+    def test_verifying_clears_the_marker_from_a_supplied_title(self):
+        made = self.api.convert_sql(SQL, title="Enrolled by intake year", workbook="2")
+        self.api.verify_converted_query(made["name"], "12", "12")
+        self.assertEqual(self.queries()[0]["title"], "Enrolled by intake year")
+
     def test_a_non_editor_cannot_convert_sql(self):
         self.frappe._roles = {"Dashboard Studio Viewer", "Insights User"}
         with self.assertRaises(_PermissionError):

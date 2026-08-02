@@ -14,7 +14,7 @@ One job: **convert a pasted SQL query into a Frappe Insights v3 query built from
 
 **A join is oriented by table, never by writing order.** `analyze_sql` returns `{doctype, join_type, source_column, join_column}` where `source_column` always belongs to the FROM table — which is what Insights' `join_condition` means. `b.ref = a.po` and `a.po = b.ref` are the same join, so deciding from which side of the `=` a column was typed would silently swap them for half of all real queries. Both column names are then checked against `frappe.get_meta` for their own DocType before anything is written; that check is what makes reading a join out of text safe at all. Related: the source table is the **FROM** table, not the first `` `tab…` `` in the text — a joined table's column can appear in the SELECT list first, and building on that side is a different question with the same row count.
 
-The types Insights needs on every dimension and measure come from **Frappe's own DocType metadata** (`tab<DocType>` → `frappe.get_meta`). A type is never guessed — and the same lookup is what proves a join's two column names are real.
+The types Insights needs on every dimension and measure come from **Frappe's own DocType metadata** (`tab<DocType>` → `frappe.get_meta`). A type is never guessed — and the same lookup is what proves a join's two column names are real. `meta.fields` returns the fields somebody *defined*, so `columns_from_meta` seeds the framework's own columns first (`name`, `parent`, `parentfield`, `parenttype`, `idx`, `owner`, `creation`, `modified`, `modified_by`, `docstatus`, `_user_tags`, `_comments`, `_assign`, `_liked_by` — the exact set both tables project in `reference/`). Without that seed a child table's join on `parent` refused as "not a column of X".
 
 This was once a much larger product (dashboard builder, source mapping, DocType catalogue, validation centre, governance/publishing). All of it is in `archive/` — see `archive/README.md`. **Nothing in `archive/` is imported, tested, linted or shipped.** Don't fix things in there; if something is needed again, move it back and give it tests.
 
@@ -87,6 +87,8 @@ The gate's *presence* is non-negotiable; its **weight** is not. It was deliberat
 Two of those exist because the SELECT list and the LIMIT used to be read and then **silently dropped**: a computed column vanished, so the converted query answered a smaller question, and a `LIMIT 10` became "all of them". The one exception is `LIMIT 1048575`, the row cap Metabase appends to everything it compiles — an exact match on the constant observed in `reference/`, not a threshold, and any other value refuses.
 
 Expected operations are asserted **in full** in the tests, not spot-checked: the failure mode here is a query that runs fine and answers something else, so "the right keys are present" proves nothing.
+
+**A refusal is only useful if its reasons are the real ones.** Qualifiers that resolve to nothing are collected apart and dropped when a subquery survived — inside a wrapper that could not be flattened, every alias is unknown by construction, and `'__mb_source' is not a table or alias` three times buries the line that says what is actually wrong under an identifier nobody typed. Reasons are de-duplicated for the same reason: one fault found in the WHERE, the GROUP BY and the aggregate is one fault.
 
 ### Insights plumbing (`api/insights.py`)
 

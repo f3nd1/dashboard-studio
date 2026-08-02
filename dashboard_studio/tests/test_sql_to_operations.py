@@ -331,6 +331,37 @@ class TestColumnsFromMeta(unittest.TestCase):
     def test_an_unknown_fieldtype_degrades_to_string(self):
         self.assertEqual(columns_from_meta([("x", "Geolocation")])["x"], "String")
 
+    def test_frappes_own_columns_are_there_even_though_no_DocType_lists_them(self):
+        """`frappe.get_meta(...).fields` returns the fields somebody DEFINED.
+        `parent` is not one of them, and on a child table it is the only column
+        a join can possibly use — it refused as "not a column of X"."""
+        columns = columns_from_meta([("score", "Float")])
+        for standard in ("name", "parent", "parentfield", "parenttype", "idx",
+                         "owner", "creation", "modified", "modified_by", "docstatus"):
+            self.assertIn(standard, columns, f"{standard} is on every Frappe table")
+        self.assertEqual(columns["creation"], "Datetime")
+        self.assertEqual(columns["docstatus"], "Integer")
+        self.assertEqual(columns["parent"], "String")
+
+    def test_a_doctypes_own_field_wins_over_the_standard_one(self):
+        self.assertEqual(columns_from_meta([("idx", "Data")])["idx"], "String")
+
+
+class TestJoiningAChildTable(unittest.TestCase):
+    """A child table joins on `parent`, which no DocType lists as a field."""
+
+    def test_a_join_on_parent_converts(self):
+        result = operations_from_sql(
+            analyze_sql("SELECT COUNT(*) FROM `tabAssessment Result` a "
+                        "LEFT JOIN `tabAssessment Result Detail` b "
+                        "ON b.`parent` = a.`name`"),
+            {"Assessment Result": columns_from_meta([("student", "Link")]),
+             "Assessment Result Detail": columns_from_meta([("score", "Float")])})
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["operations"][1]["join_condition"], {
+            "left_column": {"type": "column", "column_name": "name"},
+            "right_column": {"type": "column", "column_name": "parent"}})
+
 
 if __name__ == "__main__":
     unittest.main()

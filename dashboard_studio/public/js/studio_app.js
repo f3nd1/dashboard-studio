@@ -111,6 +111,7 @@
     var card = el("section", "dss-vizstep");
     var body = el("div", "dss-vizstep-body");
     body.appendChild(this.buildSqlInput());
+    body.appendChild(this.buildTitleField());
     body.appendChild(this.buildWorkbookPicker());
     var result = this.buildConversionResult();
     if (result) body.appendChild(result);
@@ -118,6 +119,32 @@
     wrap.appendChild(card);
 
     this.mount.appendChild(wrap);
+  };
+
+  // What the query is called in Insights.
+  //
+  // Set BEFORE it is created, not renamed afterwards: the auto-generated name
+  // is the table plus the word "query", which is the same string for every
+  // report built on that table.
+  //
+  // State is updated on input WITHOUT re-rendering. A re-render on every
+  // keystroke replaces the input mid-type and takes the caret with it — a fault
+  // already fixed twice in this app; do not reintroduce it.
+  App.prototype.buildTitleField = function () {
+    var self = this;
+    var wrap = el("div", "dss-field dss-titlefield");
+    wrap.appendChild(el("label", "dss-field-label", "Title in Insights"));
+    var input = el("input", "dss-input");
+    input.setAttribute("aria-label", "Title in Insights");
+    input.placeholder = "Left blank: named after the table";
+    input.value = this.state.vizTitle || "";
+    input.addEventListener("input", function () { self.state.vizTitle = input.value; });
+    wrap.appendChild(input);
+    // Said here because the title comes back different from what was typed, and
+    // an unexplained prefix reads like a bug rather than the gate working.
+    wrap.appendChild(el("p", "dss-hint",
+      "Created as “[UNVERIFIED] …” until you confirm the number below."));
+    return wrap;
   };
 
   // Which Insights workbook the query lands in.
@@ -231,7 +258,8 @@
     var self = this;
     return dsCall({
       method: "dashboard_studio.api.convert.convert_sql",
-      args: { sql: sql, workbook: this.state.vizWorkbook || null },
+      args: { sql: sql, title: (this.state.vizTitle || "").trim() || null,
+              workbook: this.state.vizWorkbook || null },
     }).then(function (r) {
       var made = r.message;
       if (!made || !made.name) {

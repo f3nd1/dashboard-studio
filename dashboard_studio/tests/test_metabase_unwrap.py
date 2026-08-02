@@ -218,6 +218,43 @@ class TestMetabaseDisplayNameAliases(unittest.TestCase):
             "Table Layout")
 
 
+class TestRefusalNoise(unittest.TestCase):
+    """When a wrapper legitimately cannot be flattened, its internal aliases are
+    unknown BY CONSTRUCTION. Reporting each one buries the reason that matters
+    under an identifier nobody typed."""
+
+    # A join nested inside the wrapper, so the wrapper is not a passthrough.
+    SQL = ("SELECT COUNT(*) AS `count` FROM `tabAssessment Result` LEFT JOIN ( "
+           "SELECT `__mb_source`.`name` AS `name` "
+           "FROM ( select * from `tabAssessment Result Detail` ) AS `__mb_source` "
+           "JOIN `tabStudent Applicant` ON 1 = 1 ) AS `W` "
+           "ON `tabAssessment Result`.`name` = `W`.`name` "
+           "WHERE `__mb_source`.`x` = 1 GROUP BY `__mb_source`.`y`")
+
+    def test_the_internal_wrapper_alias_is_not_reported(self):
+        reasons = analyze_sql(self.SQL)["reasons"]
+        self.assertFalse([r for r in reasons if "__mb_source" in r],
+                         f"Metabase's internal alias reached the user: {reasons}")
+
+    def test_the_real_reasons_survive(self):
+        joined = " | ".join(analyze_sql(self.SQL)["reasons"])
+        self.assertIn("subquery", joined)
+        self.assertIn("multiple joins (2)", joined)
+
+    def test_the_subquery_message_says_why_it_could_not_be_removed(self):
+        self.assertIn("plain projection of one table",
+                      " | ".join(analyze_sql(self.SQL)["reasons"]))
+
+    def test_one_fault_is_reported_once(self):
+        """The same unknown alias in the WHERE, the GROUP BY and the aggregate
+        is one thing wrong, not three."""
+        reasons = analyze_sql(
+            "SELECT COUNT(`z`.`a`) FROM `tabStudent Applicant` "
+            "WHERE `z`.`b` = 1 GROUP BY `z`.`c`")["reasons"]
+        self.assertEqual(len(reasons), len(set(reasons)), reasons)
+        self.assertEqual(len([r for r in reasons if "'z'" in r]), 1, reasons)
+
+
 class TestRowLimits(unittest.TestCase):
     """A row limit was previously read and then silently ignored, so "top 10"
     converted into "all of them" — a different number, with no error."""

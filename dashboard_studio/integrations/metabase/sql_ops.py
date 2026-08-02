@@ -127,16 +127,42 @@ SQL_AGGREGATIONS = {"COUNT": "count", "SUM": "sum", "AVG": "avg",
                     "MIN": "min", "MAX": "max"}
 
 
+# The columns Frappe puts on every table, which NO DocType lists among its
+# fields — `frappe.get_meta(...).fields` returns the ones somebody defined, so
+# without this seed a join on `parent` refuses as "not a column of X" on a child
+# table where `parent` is the only column that matters.
+#
+# Read off the real compiled output rather than assumed: both tables in
+# reference/metabase/duration_from_counselling_to_admission.sql project exactly
+# these, and `tabStudent Admission UCC` is a parent DocType — so parent /
+# parentfield / parenttype are there whether or not the DocType is a child.
+STANDARD_COLUMNS = {
+    "name": "String",
+    "owner": "String",
+    "creation": "Datetime",
+    "modified": "Datetime",
+    "modified_by": "String",
+    "docstatus": "Integer",
+    "idx": "Integer",
+    "parent": "String",
+    "parentfield": "String",
+    "parenttype": "String",
+    "_user_tags": "String",
+    "_comments": "String",
+    "_assign": "String",
+    "_liked_by": "String",
+}
+
+
 def columns_from_meta(meta_fields):
     """Frappe DocType fields -> ``{column_name: data_type}``.
 
     ``meta_fields`` is ``[(fieldname, fieldtype), …]`` — passed in rather than
-    read here, so this module stays Frappe-free and testable.
-
-    `name` is added because every Frappe table has it and no DocType lists it as
-    a field; a query grouping by `name` would otherwise look like a typo.
+    read here, so this module stays Frappe-free and testable. The framework's
+    own columns are seeded first; a DocType field of the same name would
+    override, which is the right way round.
     """
-    columns = {"name": "String"}
+    columns = dict(STANDARD_COLUMNS)
     for fieldname, fieldtype in meta_fields or []:
         if fieldname:
             columns[fieldname] = FIELDTYPE_TO_DATA_TYPE.get(fieldtype, "String")

@@ -476,7 +476,14 @@ def analyze_sql(sql: str) -> dict:
     # Subquery / nested SELECT: more than one SELECT keyword.
     subquery = len(re.findall(r"\bSELECT\b", statement, re.IGNORECASE)) > 1
     if subquery:
-        reasons.append("subquery / nested SELECT")
+        # Named for what it is to somebody who never wrote a subquery: Metabase
+        # compiled one, and this one is not a plain passthrough of a single
+        # table, so it cannot be flattened away without changing the answer.
+        reasons.append(
+            "subquery / nested SELECT — a subquery here is only removed when it is a "
+            "plain projection of one table; this one filters, aggregates or joins, so "
+            "removing it would change which rows are counted"
+        )
     else:
         # Only meaningful once there is one SELECT list to read.
         reasons.extend(_select_problems(statement))
@@ -525,17 +532,30 @@ def analyze_sql(sql: str) -> dict:
             if problem:
                 reasons.append(problem)
 
-    filters, filter_problems = _parse_filters(statement, aliases, reasons)
+    # Qualifiers that resolve to nothing are collected APART from the real
+    # reasons. When a subquery survived, every alias inside it — Metabase's
+    # `__mb_source` above all — is unknown by construction, and repeating
+    # "'__mb_source' is not a table or alias" three times buries the one line
+    # that says what is actually wrong under an internal name nobody typed.
+    alias_reasons: list[str] = []
+    filters, filter_problems = _parse_filters(statement, aliases, alias_reasons)
     reasons.extend(filter_problems)
+    aggregations = _parse_aggregations(statement, aliases, alias_reasons)
+    group_by = _parse_group_by(statement, aliases, alias_reasons)
+    if not subquery:
+        reasons.extend(alias_reasons)
 
+    # De-duplicated, order preserved: the same fault found in the WHERE, the
+    # GROUP BY and the aggregate is one thing wrong, not three.
+    reasons = list(dict.fromkeys(reasons))
     return {
         "supported": not reasons,
         "reasons": reasons,
         "doctypes": doctypes,
         "source_doctype": source_doctype,
-        "aggregations": _parse_aggregations(statement, aliases, reasons),
+        "aggregations": aggregations,
         "filters": filters,
-        "group_by": _parse_group_by(statement, aliases, reasons),
+        "group_by": group_by,
         "join": join,
     }
 
