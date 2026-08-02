@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import re
 
-TABLE_PATTERN = re.compile(r"`tab([^`]+)`", re.IGNORECASE)
+# A Frappe table is `tab<DocType>` with a LOWERCASE `tab` — Frappe creates them
+# that way, and Metabase's compiled SQL quotes the real name. The prefix is
+# therefore matched case-sensitively everywhere, via (?-i:tab) where the rest of
+# the pattern still needs IGNORECASE for its keywords.
+#
+# This is load-bearing, not tidiness. Metabase names a derived table after the
+# HUMANIZED table name, so joining `tabAssessment Result Detail` produces the
+# alias `TabAssessment Result Detail - Name` — capital T. Matched
+# case-insensitively, that alias read as a table called "Assessment Result
+# Detail - Name": a name in no alias map, so the join refused while insisting
+# the query did not contain the shape it plainly contained, and a DocType that
+# does not exist, which `_table_columns` would then refuse on.
+_TAB = r"(?-i:tab)"
+TABLE_PATTERN = re.compile(r"`" + _TAB + r"([^`]+)`")
 
 # Aggregations we can translate into a Dashboard Studio metric today.
 _AGG_PATTERN = re.compile(r"\b(COUNT|SUM|AVG)\s*\(\s*([^)]*?)\s*\)", re.IGNORECASE)
@@ -24,14 +37,15 @@ _ALIAS = r"(?:\s+(?:AS\s+)?(?:`(?P<alias_q>[^`]+)`|(?P<alias>\w+)))?"
 # A column's qualifier: a real table, a backticked alias, or a bare alias. Named
 # groups because each pattern below uses this exactly once, and positional
 # numbering across three alternatives is how a group index silently goes stale.
-_QUALIFIER = r"(?:`tab(?P<table>[^`]+)`|`(?P<alias_q>[^`]+)`|(?P<alias>\w+))"
+_QUALIFIER = (r"(?:`" + _TAB + r"(?P<table>[^`]+)`"
+              r"|`(?P<alias_q>[^`]+)`|(?P<alias>\w+))")
 
-_FROM_TABLE = re.compile(r"\bFROM\s+`tab([^`]+)`" + _ALIAS, re.IGNORECASE)
+_FROM_TABLE = re.compile(r"\bFROM\s+`" + _TAB + r"([^`]+)`" + _ALIAS, re.IGNORECASE)
 # JOIN `tabX` [alias] ON <condition>. The strategy word in front of it decides
 # the Insights join type, so it is captured rather than skipped over.
 _JOIN_TABLE = re.compile(
     r"\b(?:(?P<strategy>LEFT|RIGHT|FULL|INNER|CROSS)\s+)?(?:OUTER\s+)?"
-    r"JOIN\s+`tab(?P<joined>[^`]+)`" + _ALIAS
+    r"JOIN\s+`" + _TAB + r"(?P<joined>[^`]+)`" + _ALIAS
     # GROUP/ORDER need their BY: "Purchase Order" is a real DocType, and a bare
     # \bORDER\b truncates the ON clause in the middle of the table name.
     + r"\s+ON\s+(?P<on>.+?)(?=\bWHERE\b|\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
@@ -101,7 +115,8 @@ _SELECT_FROM = re.compile(r"^SELECT\s+(.+?)\s+FROM\s+(.+)$", re.IGNORECASE | re.
 # A keyword blocklist was written alongside this and removed: every case it
 # caught was already caught here or by _PROJECTED, and a redundant check that
 # cannot be made to fail is one a later reader would wrongly trust.
-_ONLY_TABLE = re.compile(r"^`tab([^`]+)`(?:\s+(?:AS\s+)?(?:`[^`]+`|\w+))?$", re.IGNORECASE)
+_ONLY_TABLE = re.compile(r"^`" + _TAB + r"([^`]+)`(?:\s+(?:AS\s+)?(?:`[^`]+`|\w+))?$",
+                         re.IGNORECASE)
 # One projected column: `q`.`col` [AS `col`]. The alias must repeat the column
 # name or it is a rename, not a passthrough.
 #

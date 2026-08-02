@@ -155,6 +155,69 @@ class TestTheRealMetabaseQuery(unittest.TestCase):
         self.assertIn("Process Duration", self.reasons)
 
 
+class TestMetabaseDisplayNameAliases(unittest.TestCase):
+    """Metabase names its derived tables after the humanized table name, so the
+    alias for `tabAssessment Result Detail` comes out as
+    `TabAssessment Result Detail - Name` — capital T.
+
+    Frappe's real tables are always lowercase `tab`. Matching that prefix
+    case-insensitively made every one of these aliases read as a TABLE called
+    "Assessment Result Detail - Name": a name in no alias map, and a DocType
+    that does not exist.
+    """
+
+    SQL = ("SELECT COUNT(*) AS `count` FROM `tabAssessment Result` "
+           "LEFT JOIN ( SELECT `__mb_source`.`parent` AS `parent` "
+           "FROM ( select * from `tabAssessment Result Detail` ) AS `__mb_source` ) "
+           "AS `TabAssessment Result Detail - Name` "
+           "ON `tabAssessment Result`.`name` = "
+           "`TabAssessment Result Detail - Name`.`parent`")
+
+    def test_the_join_is_read_rather_than_refused(self):
+        result = analyze_sql(self.SQL)
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["join"], {
+            "doctype": "Assessment Result Detail",
+            "join_type": "left",
+            "on": ("`tabAssessment Result`.`name` = "
+                   "`TabAssessment Result Detail - Name`.`parent`"),
+            "source_column": "name",
+            "join_column": "parent",
+        })
+
+    def test_the_alias_is_not_mistaken_for_a_third_table(self):
+        """`_table_columns` is called for every DocType found, so an invented
+        one refuses the whole conversion with "There is no DocType called…"."""
+        self.assertEqual(analyze_sql(self.SQL)["doctypes"],
+                         ["Assessment Result", "Assessment Result Detail"])
+
+    def test_the_alias_resolves_in_the_group_by_too(self):
+        """The ON clause, the WHERE and the GROUP BY all read a qualifier the
+        same way, so the alias has to resolve in all three."""
+        result = analyze_sql(
+            self.SQL + " WHERE `TabAssessment Result Detail - Name`.`score` > 5"
+            " GROUP BY `TabAssessment Result Detail - Name`.`criteria`")
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["group_by"],
+                         [{"field": "criteria", "table": "Assessment Result Detail"}])
+        self.assertEqual(result["filters"],
+                         [{"field": "score", "operator": ">", "value": "5",
+                           "table": "Assessment Result Detail"}])
+
+    def test_a_lowercase_tab_prefix_is_still_a_real_table(self):
+        self.assertEqual(
+            analyze_sql("SELECT COUNT(*) FROM `tabAssessment Result`")["source_doctype"],
+            "Assessment Result")
+
+    def test_a_doctype_whose_own_name_starts_with_Tab_is_not_beheaded(self):
+        """`tabTable Layout` -> "Table Layout". Stripping the prefix a second
+        time, case-insensitively, turns it into "le Layout" — a DocType that
+        does not exist, from a table that does."""
+        self.assertEqual(
+            analyze_sql("SELECT COUNT(*) FROM `tabTable Layout`")["source_doctype"],
+            "Table Layout")
+
+
 class TestRowLimits(unittest.TestCase):
     """A row limit was previously read and then silently ignored, so "top 10"
     converted into "all of them" — a different number, with no error."""
