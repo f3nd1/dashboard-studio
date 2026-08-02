@@ -1,7 +1,7 @@
 app_name = "dashboard_studio"
-app_title = "Dashboard Studio"
+app_title = "Metabase → Insights Converter"
 app_publisher = "United Ceres College Pte. Ltd."
-app_description = "Visual dashboard migration, validation, design, and publishing"
+app_description = "Convert Metabase questions into Frappe Insights queries"
 app_email = "replace-me@example.invalid"
 app_license = "Proprietary"
 

@@ -10,7 +10,7 @@ import sys
 import types
 import unittest
 
-from dashboard_studio.tests.test_insights_handoff import (
+from dashboard_studio.tests.fake_frappe import (
     _make_fake_frappe,
     _PermissionError,
     _ValidationError,

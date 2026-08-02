@@ -13,7 +13,7 @@ REQUIRED = [
     "CLAUDE.md",
     "pyproject.toml",
     "dashboard_studio/hooks.py",
-    "docs/MASTER_PROJECT_HANDOVER.md",
+    "docs/DECISIONS.md",
 ]
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),

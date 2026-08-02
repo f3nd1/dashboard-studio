@@ -32,10 +32,10 @@ from dashboard_studio.api.insights import (
     _resolve_workbook,
     clamp_title,
 )
-from dashboard_studio.api.studio import DS_WRITE_ROLES
 from dashboard_studio.integrations.metabase.card import _scan_sources
 from dashboard_studio.integrations.metabase.client import fetch_card, fetch_table_metadata
 from dashboard_studio.integrations.metabase.mbql import translate_card
+from dashboard_studio.roles import DS_WRITE_ROLES
 
 # Carried in the title so it travels with the record. A person who opens this
 # query in Insights next month, having never seen Studio, still learns that its
