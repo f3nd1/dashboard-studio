@@ -516,6 +516,20 @@ input.dss-vizcardid { width: auto; flex: 1 1 190px; min-width: 150px; }
 .dss-vizpreview-line polyline { fill: none; stroke: var(--dss-blue); stroke-width: 2.5;
   stroke-linejoin: round; stroke-linecap: round; opacity: .55;
   vector-effect: non-scaling-stroke; }
+/* A converted query that nobody has checked. Amber, not green: the whole
+   point of the gate is that this must not read as done. Same amber the
+   Guessed tag uses, so "unverified" looks like the other unconfirmed things
+   in this app rather than like an error. */
+.dss-saveresult.is-unverified { background: var(--dss-orange-100);
+  border: 1px solid #f0d19a; }
+.dss-saveresult.is-unverified .dss-saveresult-title { color: var(--dss-orange); }
+.dss-verify { margin-top: 12px; padding-top: 11px; border-top: 1px dashed #e0be8a; }
+.dss-verify-head { font-size: 11px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--dss-orange); margin-bottom: 9px; }
+.dss-verify-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .dss-verify-pair { grid-template-columns: 1fr; } }
+.dss-verify .dss-btn { margin-top: 4px; }
+
 .dss-vizpreview-kpi { font-size: 40px; font-weight: 800; color: var(--dss-line-dark); }
 .dss-vizpreview-donut { width: 104px; height: 104px; border-radius: 50%;
   border: 18px solid var(--dss-blue); opacity: .35; }

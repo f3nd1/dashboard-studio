@@ -2705,6 +2705,103 @@
     return grid;
   };
 
+  // A converted query, and the check that has to happen before anyone trusts it.
+  //
+  // Deliberately not styled as a success. A conversion that LOOKS done is the
+  // failure this whole gate exists to prevent: the translation may be right,
+  // and nothing here can tell — only a person comparing the two numbers can.
+  App.prototype.buildConversionResult = function () {
+    var self = this;
+    var made = this.state.conversion;
+    if (!made) return null;
+    var verified = !!made.verified;
+    var box = el("div", "dss-saveresult " + (verified ? "is-ok" : "is-unverified"));
+    box.appendChild(el("div", "dss-saveresult-title", verified
+      ? "Verified — " + made.name
+      : "Converted, NOT yet verified — " + made.name));
+    box.appendChild(el("div", "dss-saveresult-detail", verified
+      ? "“" + made.title + "”. You confirmed its number matches Metabase card "
+        + made.card_id + "."
+      : "“" + made.title + "”, built as Insights operations from Metabase card "
+        + made.card_id + ". Studio translated this; nothing has checked that it "
+        + "counts the same rows. Run it in Insights, compare the number with the "
+        + "card, and record both below."));
+
+    var steps = el("div", "dss-handoff-todo");
+    steps.appendChild(el("div", "dss-handoff-todo-head", "Operations created"));
+    (made.operations || []).forEach(function (op, i) {
+      var row = el("div", "dss-handoff-todo-row");
+      row.appendChild(el("span", "dss-handoff-todo-key", String(i + 1) + ". " + op.type));
+      row.appendChild(el("span", "dss-handoff-todo-val", core.describeOperation(op)));
+      steps.appendChild(row);
+    });
+    box.appendChild(steps);
+
+    var links = el("div", "dss-insights-links");
+    var open = el("a", "dss-link", "Open in Insights");
+    open.href = made.insights_url;
+    open.target = "_blank";
+    open.rel = "noopener";
+    links.appendChild(open);
+    box.appendChild(links);
+
+    if (verified) return box;
+
+    var check = el("div", "dss-verify");
+    check.appendChild(el("div", "dss-verify-head", "Check the number before trusting this"));
+    var pair = el("div", "dss-verify-pair");
+    var inputs = {};
+    [["metabase", "Number in Metabase"], ["insights", "Number in Insights"]]
+      .forEach(function (spec) {
+        var field = el("div", "dss-field");
+        field.appendChild(el("label", "dss-field-label", spec[1]));
+        var box2 = el("input", "dss-input");
+        box2.setAttribute("aria-label", spec[1]);
+        box2.value = (self.state.verifyValues || {})[spec[0]] || "";
+        box2.addEventListener("input", function () {
+          var values = self.state.verifyValues || (self.state.verifyValues = {});
+          values[spec[0]] = box2.value;
+        });
+        inputs[spec[0]] = box2;
+        field.appendChild(box2);
+        pair.appendChild(field);
+      });
+    check.appendChild(pair);
+
+    var mark = el("button", "dss-btn dss-btn-primary", "They match — mark verified");
+    mark.addEventListener("click", function () {
+      self.verifyConversion(made.name, inputs.metabase.value, inputs.insights.value);
+    });
+    check.appendChild(mark);
+    if (this.state.verifyError) {
+      check.appendChild(el("div", "dss-sqlnote dss-vizerror", this.state.verifyError));
+    }
+    box.appendChild(check);
+    return box;
+  };
+
+  App.prototype.verifyConversion = function (query, metabaseValue, insightsValue) {
+    var self = this;
+    if (!hasFrappe()) return;
+    this.state.verifyError = "Checking…";
+    this.render();
+    dsCall({
+      method: "dashboard_studio.api.convert.verify_converted_query",
+      args: { query: query, metabase_value: metabaseValue, insights_value: insightsValue },
+    }).then(function (r) {
+      var done = r.message || {};
+      self.state.conversion = Object.assign({}, self.state.conversion,
+        { verified: true, title: done.title });
+      self.state.verifyError = "";
+      self.render();
+    }).catch(function (err) {
+      // The server refuses a mismatch. Shown in full: "Metabase says 1234,
+      // Insights says 1200" is the useful part, not a generic failure.
+      self.state.verifyError = refusalMessage(err, "Could not verify that.");
+      self.render();
+    });
+  };
+
   App.prototype.buildVizStepOne = function () {
     var self = this;
     var card = el("section", "dss-vizstep");
@@ -2744,6 +2841,8 @@
     row.appendChild(run);
     row.appendChild(note);
     body.appendChild(row);
+    var converted = this.buildConversionResult();
+    if (converted) body.appendChild(converted);
     card.appendChild(body);
     return card;
   };
@@ -2822,7 +2921,53 @@
       var done = function () { pull.disabled = false; };
       self.importMetabaseCard(id, note).then(done, done);
     });
+
+    // The other way in: a GUI-built card has no SQL to import, but its
+    // structure can be converted into clickable Insights operations. Offered
+    // beside the SQL import rather than instead of it — a native card should
+    // still take the path that needs no translation at all.
+    var convert = el("button", "dss-btn", "Convert GUI card →");
+    convert.title = "Turns a drag-and-drop Metabase question into Insights " +
+      "operations. The result is marked unverified until you check its number.";
+    convert.addEventListener("click", function () {
+      var id = (input.value || "").trim();
+      if (!id) { note.textContent = "Enter the card's id first."; return; }
+      if (!hasFrappe()) {
+        note.textContent = "Converting needs the server (not available in sample mode).";
+        return;
+      }
+      note.textContent = "Translating card " + id + "…";
+      convert.disabled = true;
+      var done = function () { convert.disabled = false; };
+      self.convertMetabaseCard(id, note).then(done, done);
+    });
+    row.appendChild(convert);
     return wrap;
+  };
+
+  // Translate a GUI card into Insights operations and file it.
+  //
+  // Straight to convert rather than preview-then-convert: the endpoint refuses
+  // an untranslatable card without writing, so the preview would only be a
+  // second round trip to learn the same thing.
+  App.prototype.convertMetabaseCard = function (cardId, note) {
+    var self = this;
+    return dsCall({
+      method: "dashboard_studio.api.convert.convert_metabase_card",
+      args: { card_id: cardId, workbook: this.state.vizWorkbook || null },
+    }).then(function (r) {
+      var made = r.message;
+      if (!made || !made.name) {
+        note.textContent = "The server reported no query. Nothing was created.";
+        return null;
+      }
+      self.state.conversion = made;
+      self.state.vizError = "";
+      self.render();
+      return made;
+    }).catch(function (err) {
+      note.textContent = refusalMessage(err, "Could not convert that card.");
+    });
   };
 
   App.prototype.importMetabaseCard = function (cardId, note) {

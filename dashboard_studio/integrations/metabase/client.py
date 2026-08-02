@@ -46,6 +46,9 @@ import frappe
 import requests
 
 CARD_PATH = "{base}/api/card/{card_id}"
+# Table plus its fields, which is what turns MBQL's numeric ids into the column
+# names and types Insights needs. One GET per table, still read-only.
+TABLE_METADATA_PATH = "{base}/api/table/{table_id}/query_metadata"
 
 # Long enough for a slow Metabase Cloud response, short enough that a hung
 # request does not hold a Frappe worker open indefinitely.
@@ -69,23 +72,30 @@ def _credentials():
     return base, key
 
 
-def fetch_card(card_id):
-    """GET one card by id and return its decoded JSON.
-
-    ``card_id`` is coerced to an int before it reaches the URL, so nothing a
-    caller supplies can steer the request at a different endpoint.
-    """
+def _positive_int(value, what):
+    """Coerced before it reaches a URL, so nothing a caller supplies can steer
+    the request at a different endpoint."""
     try:
-        card_id = int(card_id)
+        number = int(value)
     except (TypeError, ValueError):
-        frappe.throw("A Metabase card id is a number, like 2774.")
-    if card_id <= 0:
-        frappe.throw("A Metabase card id is a positive number, like 2774.")
+        frappe.throw(f"A Metabase {what} is a number, like 2774.")
+    if number <= 0:
+        frappe.throw(f"A Metabase {what} is a positive number, like 2774.")
+    return number
 
+
+def _get(template, what, **parts):
+    """One GET, decoded. The ONLY function here that touches the network.
+
+    Deliberately not a general request helper: it takes no method, so no later
+    caller can turn it into a POST. Adding one would put ``POST /api/dataset``
+    — which executes SQL against the connected production database — one
+    argument away.
+    """
     base, key = _credentials()
     try:
         response = requests.get(
-            CARD_PATH.format(base=base, card_id=card_id),
+            template.format(base=base, **parts),
             headers={"X-API-Key": key, "Accept": "application/json"},
             timeout=TIMEOUT_SECONDS,
         )
@@ -100,18 +110,31 @@ def fetch_card(card_id):
     if response.status_code in (401, 403):
         frappe.throw(
             "Metabase refused the API key — it is wrong, revoked, or its group "
-            "cannot see this card. Nothing about the key is shown here on purpose."
+            "cannot see this. Nothing about the key is shown here on purpose."
         )
     if response.status_code == 404:
-        frappe.throw(f"Metabase has no card {card_id}, or this key cannot see it.")
+        frappe.throw(f"Metabase has no {what}, or this key cannot see it.")
     if response.status_code != 200:
-        frappe.throw(f"Metabase answered {response.status_code} for card {card_id}.")
+        frappe.throw(f"Metabase answered {response.status_code} for {what}.")
 
     try:
-        card = response.json()
+        payload = response.json()
     except ValueError:
         frappe.throw("Metabase did not answer with JSON. Check that metabase_url "
                      "points at Metabase itself and not at a proxy or login page.")
-    if not isinstance(card, dict):
-        frappe.throw(f"Metabase did not return a card for {card_id}.")
-    return card
+    if not isinstance(payload, dict):
+        frappe.throw(f"Metabase did not return a record for {what}.")
+    return payload
+
+
+def fetch_table_metadata(table_id):
+    """GET one table and its fields — what turns MBQL's numeric ids into the
+    column names and types Insights needs."""
+    table_id = _positive_int(table_id, "table id")
+    return _get(TABLE_METADATA_PATH, f"table {table_id}", table_id=table_id)
+
+
+def fetch_card(card_id):
+    """GET one card by id and return its decoded JSON."""
+    card_id = _positive_int(card_id, "card id")
+    return _get(CARD_PATH, f"card {card_id}", card_id=card_id)
