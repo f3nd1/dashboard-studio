@@ -29,6 +29,10 @@ So: ten framework columns are unconditional (`name`, `owner`, `creation`, `modif
 
 `select_columns` on a join needs no separate validation because it IS that column list — but only while there is no path that builds it from anything else. The `reference/` SQL is a useful sample and **not a schema**: it happens to show a table carrying all four optional columns, which is what made assuming them look safe.
 
+**`tests/test_schema_drift.py` is a standing category, not a bug list.** Both column faults were found by a person opening a query and reading the error, one table at a time. That file builds a table whose schema drifts from its DocType, runs whole queries through the real converter, and asserts *generically* that no column outside the real list appears anywhere in the operations — walking every operation shape rather than naming a column. When a new shape of drift appears, add a **scenario** there; do not add a test for the column that happened to expose it. The walker raises on an operation type it does not recognise, so a new operation cannot slip past it silently.
+
+**One gap remains and it is outside this repo.** The converter validates against the live schema, which closes "Frappe's tables vs our column list". It cannot see whether **Insights** holds its own synced copy that has gone stale — a query would pass here and still fail on open. Where Insights keeps that (if anywhere) has not been read from source, so nothing is built against a guess: `scripts/insights_schema_check.py` is a read-only diagnostic that *discovers* it on the live site and reports any disagreement. Build the real check when its output comes back.
+
 This was once a much larger product (dashboard builder, source mapping, DocType catalogue, validation centre, governance/publishing). All of it is in `archive/` — see `archive/README.md`. **Nothing in `archive/` is imported, tested, linted or shipped.** Don't fix things in there; if something is needed again, move it back and give it tests.
 
 ## Critical environment constraint
@@ -60,7 +64,7 @@ python scripts/validate_repository.py
 
 Do not lint `archive/`, `reference/` or `prototypes/`. The first is dead code by definition; the others are Frappe Server Scripts and UX references where `frappe` is an injected global (ruff reports hundreds of false `F821`).
 
-`scripts/metabase_table_inventory.py` is a **read-only diagnostic that only runs on the live site** — hand it to the user, don't try to run it here. It reports which physical tables the Metabase cards read, for narrowing a database GRANT, and withholds its suggested GRANT block whenever anything is unresolved.
+`scripts/insights_schema_check.py` and `scripts/metabase_table_inventory.py` are **read-only diagnostics that only run on the live site** — hand them to the user, don't try to run them here. The first compares Insights' own idea of a table's columns against the database's; the second reports which physical tables the Metabase cards read, for narrowing a database GRANT, and withholds its suggested GRANT block whenever anything is unresolved.
 
 ## Architecture
 
