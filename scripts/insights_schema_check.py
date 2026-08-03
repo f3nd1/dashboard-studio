@@ -59,18 +59,25 @@ def _check():
     print("2. Which of them look like a per-table column cache, and their shape")
     print("=" * 72)
     holders = [n for n in insights if "table" in n.lower() or "column" in n.lower()]
+    column_lists = []
     for name in holders:
         meta = frappe.get_meta(name)
-        print(f"   {name}  ({frappe.db.count(name)} rows)")
+        rows = frappe.db.count(name)
+        print(f"   {name}  ({rows} rows)")
         for field in meta.fields:
             options = f" -> {field.options}" if field.options else ""
             print(f"      {field.fieldname:<28} {field.fieldtype}{options}")
-    if not holders:
-        print("   none — Insights appears to hold no table/column records,")
-        print("   which would mean it reads the schema live and cannot go stale")
+        if rows and any(f.fieldtype == "Table" for f in meta.fields):
+            column_lists.append(name)
+    if not column_lists:
+        print()
+        print("   FINDING: no populated DocType here holds a per-column child table,")
+        print("   so Insights does not keep its column list in the database. A stale")
+        print("   view therefore lives in the query engine's own connection, not in a")
+        print("   record that could be resynced from here.")
     print()
     print("=" * 72)
-    print("3. Live schema vs anything Insights holds, per table")
+    print("3. Live schema vs what Insights records, per table")
     print("=" * 72)
     for doctype in tables:
         table = "tab" + doctype
@@ -81,34 +88,37 @@ def _check():
             print(f"   live schema UNREADABLE: {type(error).__name__}: {error}")
             continue
         print(f"   live columns ({len(live)}): {', '.join(live)}")
+        # Frappe caches this list in redis. If the cache is stale, everything
+        # reading through frappe.db sees the stale one — including this script,
+        # so the two lines below are printed side by side deliberately.
+        try:
+            cached = frappe.cache.hget("table_columns", table)
+        except Exception:
+            cached = None
+        if cached is None:
+            print("   frappe's redis cache: no entry (read straight from the database)")
+        elif sorted(cached) != live:
+            print(f"   frappe's redis CACHE DISAGREES: {sorted(set(live) ^ set(cached))}")
+        else:
+            print("   frappe's redis cache: agrees")
         found_any = False
         for name in holders:
-            rows = frappe.get_all(name, filters={}, fields=["name"], limit=0)
-            matches = [r["name"] for r in rows
-                       if table.lower() in str(r["name"]).lower()
-                       or doctype.lower() in str(r["name"]).lower()]
-            for match in matches:
+            # Keyed by the `table` FIELD, not the record name — Insights names
+            # these records by hash, and matching on the name reported "no
+            # record found" for tables that plainly had one.
+            fields = [f.fieldname for f in frappe.get_meta(name).fields]
+            if "table" not in fields:
+                continue
+            for row in frappe.get_all(name, filters={"table": table}, fields=["name"]):
                 found_any = True
-                record = frappe.get_doc(name, match)
-                held = []
-                for field in frappe.get_meta(name).fields:
-                    if field.fieldtype != "Table":
-                        continue
-                    for child in (record.get(field.fieldname) or []):
-                        held.append(str(child.get("column") or child.get("column_name")
-                                        or child.get("label") or child.name))
-                print(f"   {name} '{match}' holds {len(held)} columns")
-                if held:
-                    missing = [c for c in held if c not in live]
-                    extra = [c for c in live if c not in held]
-                    print(f"      IN INSIGHTS, NOT IN THE TABLE: {missing or 'none'}")
-                    print(f"      IN THE TABLE, NOT IN INSIGHTS: {extra or 'none'}")
-                    if missing:
-                        print("      ^^ this is the stale-schema case: a query using one of")
-                        print("         these passes the converter and fails when opened")
-                print(f"      last modified: {record.get('modified')}")
+                record = frappe.get_doc(name, row["name"])
+                print(f"   {name} '{row['name']}'")
+                for field in fields:
+                    value = record.get(field)
+                    if value not in (None, "", 0):
+                        print(f"      {field} = {value}")
         if not found_any:
-            print("   no Insights record found for this table")
+            print(f"   no record in any Insights DocType has table = '{table}'")
     print()
     print("=" * 72)
     print("4. Data sources, and whether they record a sync")

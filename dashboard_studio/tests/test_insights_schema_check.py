@@ -37,10 +37,13 @@ def make_frappe():
             names = ["Insights Data Source v3", "Insights Table v3", "Insights Query v3"]
             return names if pluck else [{"name": n} for n in names]
         if doctype == "Insights Table v3":
-            # Named as Insights would name it, for one of the tables the script
-            # asks about — otherwise the comparison never runs and every
-            # assertion below passes without exercising anything.
-            return [{"name": "tabQuality Performance Outcomes Performance Childtable"}]
+            # Insights names these records by HASH and keys them by a `table`
+            # FIELD. Matching on the record name reported "no record found" for
+            # tables that plainly had one, on the live site.
+            wanted = (filters or {}).get("table")
+            if wanted == "tabQuality Performance Outcomes Performance Childtable":
+                return [{"name": "5f3a9c11e2"}]
+            return []
         if doctype == "Insights Data Source v3":
             return [{"name": "Site DB"}]
         return []
@@ -48,11 +51,12 @@ def make_frappe():
     def get_meta(doctype):
         calls.append(("get_meta", doctype))
         if doctype == "Insights Table v3":
+            # The REAL shape, from the live site: sync/import configuration and
+            # no per-column child table at all.
             return types.SimpleNamespace(fields=[
-                types.SimpleNamespace(fieldname="table", fieldtype="Data", options=None),
-                types.SimpleNamespace(fieldname="columns", fieldtype="Table",
-                                      options="Insights Table Column"),
-            ])
+                types.SimpleNamespace(fieldname=name, fieldtype="Data", options=None)
+                for name in ("table", "label", "data_source", "last_synced_on",
+                             "row_limit", "stored", "sync_mode")])
         return types.SimpleNamespace(fields=[
             types.SimpleNamespace(fieldname="status", fieldtype="Data", options=None),
             types.SimpleNamespace(fieldname="last_synced", fieldtype="Datetime",
@@ -64,13 +68,9 @@ def make_frappe():
             self.doctype, self.name = doctype, name
 
         def get(self, key, default=None):
-            if key == "columns":
-                return [types.SimpleNamespace(
-                    name=c, get=lambda k, c=c: c if k == "column" else None)
-                    for c in HELD]
-            if key == "modified":
-                return "2026-01-01 00:00:00"
-            return {"status": "Active", "last_synced": "2026-01-01"}.get(key, default)
+            return {"table": "tabQuality Performance Outcomes Performance Childtable",
+                    "stored": 1, "last_synced_on": "2025-11-02 03:00:00",
+                    "status": "Active", "last_synced": "2026-01-01"}.get(key, default)
 
     def get_doc(doctype, name=None):
         calls.append(("get_doc", doctype))
@@ -83,6 +83,9 @@ def make_frappe():
         count=lambda doctype: 1,
         get_table_columns=lambda doctype: list(LIVE),
     )
+    # Frappe caches the column list in redis; a stale entry there would make
+    # everything reading through frappe.db agree with each other and be wrong.
+    frappe.cache = types.SimpleNamespace(hget=lambda key, table: list(HELD))
     return frappe, calls
 
 
@@ -125,20 +128,29 @@ class TestInsightsSchemaCheck(unittest.TestCase):
                and indented.match(lines[i - 1]) and indented.match(lines[i + 1])]
         self.assertEqual(bad, [], f"blank line inside a block at {bad} breaks piped paste")
 
-    def test_it_reports_a_column_Insights_has_and_the_table_does_not(self):
-        """The whole point: the converter validates against the live schema, so
-        this is the gap it cannot see from there."""
+    def test_a_record_is_found_by_its_table_FIELD_not_its_name(self):
+        """The first version matched on the record name and reported "no
+        Insights record found" for tables that plainly had one — a false
+        negative that reads as a finding."""
         text, _ = self.run_script(True)
-        self.assertIn("IN INSIGHTS, NOT IN THE TABLE: ['corrective_action']", text)
-        self.assertIn("this is the stale-schema case", text)
+        self.assertIn("Insights Table v3 '5f3a9c11e2'", text)
+        self.assertNotIn("no record in any Insights DocType has table = "
+                         "'tabQuality Performance Outcomes Performance Childtable'", text)
+        self.assertIn("last_synced_on = 2025-11-02 03:00:00", text)
 
-    def test_it_names_the_doctypes_and_their_shape(self):
-        """Discovery, not assumption — the output is what a real check would be
-        built against, so the names and field shapes have to be in it."""
+    def test_a_stale_frappe_cache_is_reported(self):
+        """Everything reading through frappe.db shares that cache, so a stale
+        entry makes the converter and the site agree with each other and both
+        be wrong about the table."""
         text, _ = self.run_script(True)
-        self.assertIn("Insights Table v3", text)
-        self.assertIn("columns", text)
-        self.assertIn("Insights Table Column", text)
+        self.assertIn("redis CACHE DISAGREES", text)
+        self.assertIn("corrective_action", text)
+
+    def test_it_says_plainly_when_Insights_holds_no_column_list(self):
+        """The live answer: no populated DocType has a per-column child table,
+        so there is nothing here to resync — which is itself the finding."""
+        text, _ = self.run_script(True)
+        self.assertIn("Insights does not keep its column list in the database", text)
 
     def test_it_writes_nothing(self):
         _, calls = self.run_script(True)

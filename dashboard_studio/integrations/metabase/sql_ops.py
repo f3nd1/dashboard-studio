@@ -17,6 +17,12 @@ and this narrows it further:
              OR, UNION, HAVING, CASE, DISTINCT, window functions, more than one
              aggregate, LIKE and IN
 
+**A join carries the columns the query READS, not the whole table.** Insights'
+``select_columns`` was every column of the joined table, which meant any
+disagreement about any column — even one nothing referenced — broke the report
+when it was opened. Two live failures came in that way. Now it is exactly what
+the filters, groupings, aggregates and join conditions name.
+
 **How a join is translated, and where it stops.** `analyze_sql` reads each ON
 clause into two *named, table-oriented* columns — ``join_column`` always belongs
 to the table being joined and ``source_column`` to one already in scope — which
@@ -201,6 +207,49 @@ def _value(raw, data_type):
         return raw
 
 
+def _referenced_columns(analysis, available):
+    """``{DocType: {column, …}}`` — the columns this query actually uses.
+
+    A join's ``select_columns`` used to be every column of the joined table, and
+    that is what turned an unrelated schema disagreement into a broken report:
+    the Quality Performance query reads three columns from its child table and
+    was carrying all twenty-two, two of which Insights did not think existed.
+    Neither was used by anything. The query failed on open over columns nobody
+    had asked for.
+
+    So a join now carries what the query references and nothing else. That is
+    not a workaround for one stale table — it is the difference between "any
+    column of any joined table disagreeing breaks the report" and "a column
+    this query actually reads disagrees", which is a real error worth refusing
+    on rather than noise to survive.
+
+    Unresolvable references are skipped here; the main pass refuses on them by
+    name, and this must not duplicate that.
+    """
+    used: dict[str, set] = {}
+
+    def note(column, table):
+        column = str(column or "").strip()
+        owners = available.get(column) or {}
+        if table and table in owners:
+            used.setdefault(table, set()).add(column)
+        elif not table and len(owners) == 1:
+            used.setdefault(next(iter(owners)), set()).add(column)
+
+    for rule in analysis.get("filters") or []:
+        note(rule.get("field"), rule.get("table"))
+    for reference in analysis.get("group_by") or []:
+        note(reference.get("field"), reference.get("table"))
+    for aggregation in analysis.get("aggregations") or []:
+        note(aggregation.get("argument"), aggregation.get("table"))
+    # Both sides of every join condition, including a later join attaching to an
+    # earlier joined table — that column has to come across too.
+    for join in analysis.get("joins") or []:
+        used.setdefault(join["doctype"], set()).add(join["join_column"])
+        used.setdefault(join["source_table"], set()).add(join["source_column"])
+    return used
+
+
 def _type_of(reference, available, tables):
     """A column reference -> ``(data_type, reason)``, exactly one of them set.
 
@@ -265,6 +314,7 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
         for column, data_type in (columns.get(doctype) or {}).items():
             available.setdefault(column, {})[doctype] = data_type
 
+    referenced = _referenced_columns(analysis, available)
     operations = [_source("tab" + source, data_source)]
 
     # One Insights join operation per JOIN, in the order they were written: each
@@ -285,9 +335,12 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                                f"column of {doctype}")
         if reasons:
             break
+        # What the query reads from this table, not everything the table has.
+        # Every name here is still one the schema confirmed — `referenced` is
+        # built from `available`, which is built from the validated columns.
         operations.append(_join(join["join_type"], "tab" + join["doctype"], data_source,
                                 join["source_column"], join["join_column"],
-                                sorted(join_columns)))
+                                sorted(referenced.get(join["doctype"], set()))))
 
     for rule in analysis.get("filters") or []:
         operator = OPERATORS.get(str(rule.get("operator") or "").strip())

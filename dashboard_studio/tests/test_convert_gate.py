@@ -147,17 +147,26 @@ class TestSqlConversion(_Base):
         # source table's — a string 100 here matches nothing.
         self.assertEqual(stored[2]["value"], 100.0)
 
-    def test_a_field_the_table_has_no_column_for_never_reaches_select_columns(self):
-        """"Column 'corrective_action' is not found in table" — the join brought
-        a column across that the DocType defines and the table does not."""
+    def test_a_join_carries_only_what_the_query_reads(self):
+        """Two live failures came from carrying every column of the joined
+        table: one the DocType defined and the table did not
+        (`corrective_action`), and one the table had and Insights did not.
+        Neither was referenced by the query that broke."""
         self.api.convert_sql(
             "SELECT COUNT(*) FROM `tabStudent Applicant` a "
             "LEFT JOIN `tabPurchase Order` b ON b.`ref` = a.`po`", workbook="2")
         stored = __import__("json").loads(self.queries()[0]["operations"])
-        selected = [c["column_name"] for c in stored[1]["select_columns"]]
-        self.assertNotIn("corrective_action", selected,
-                         "a column the table does not have went into the query")
-        self.assertEqual(selected, sorted(TABLES["Purchase Order"]))
+        self.assertEqual([c["column_name"] for c in stored[1]["select_columns"]],
+                         ["ref"])
+
+    def test_a_column_the_query_DOES_read_is_carried(self):
+        self.api.convert_sql(
+            "SELECT COUNT(*) FROM `tabStudent Applicant` a "
+            "LEFT JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+            "WHERE b.`amount` >= 100", workbook="2")
+        stored = __import__("json").loads(self.queries()[0]["operations"])
+        self.assertEqual([c["column_name"] for c in stored[1]["select_columns"]],
+                         ["amount", "ref"])
 
     def test_the_conversion_refuses_rather_than_guessing_the_column_list(self):
         """No fallback to DocType fields. A guessed column list is exactly what

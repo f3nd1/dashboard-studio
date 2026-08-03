@@ -112,8 +112,11 @@ class TestJoins(unittest.TestCase):
             {"type": "join", "join_type": "left",
              "table": {"type": "table", "data_source": "Site DB",
                        "table_name": "tabPurchase Order"},
+             # Only what the query reads from Purchase Order: the join key and
+             # the filtered column. `name` and `status` exist on that table and
+             # are not carried, because nothing here asks for them.
              "select_columns": [{"type": "column", "column_name": c}
-                                for c in ["amount", "name", "ref", "status"]],
+                                for c in ["amount", "ref"]],
              "join_condition": {
                  "left_column": {"type": "column", "column_name": "po"},
                  "right_column": {"type": "column", "column_name": "ref"}}},
@@ -125,6 +128,25 @@ class TestJoins(unittest.TestCase):
              "dimensions": [{"dimension_name": "academic_year",
                              "column_name": "academic_year", "data_type": "String"}]},
         ])
+
+    def test_an_UNQUALIFIED_column_is_still_carried_by_the_right_join(self):
+        """`amount` is only on Purchase Order, so the SQL need not qualify it.
+        If it were not attributed to that table it would not be carried, and
+        the filter would reference a column the join never brought across."""
+        result = run("SELECT COUNT(*) FROM `tabStudent Applicant` a "
+                     "JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+                     "WHERE `amount` >= 100")
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual([c["column_name"] for c in result["operations"][1]["select_columns"]],
+                         ["amount", "ref"])
+
+    def test_a_column_used_only_by_the_GROUPING_is_carried(self):
+        result = run("SELECT b.`status`, COUNT(*) FROM `tabStudent Applicant` a "
+                     "JOIN `tabPurchase Order` b ON b.`ref` = a.`po` "
+                     "GROUP BY b.`status`")
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual([c["column_name"] for c in result["operations"][1]["select_columns"]],
+                         ["ref", "status"])
 
     def test_the_left_column_is_the_source_table_whichever_side_it_was_typed(self):
         flipped = run(self.JOIN.replace("ON b.`ref` = a.`po`", "ON a.`po` = b.`ref`"))
