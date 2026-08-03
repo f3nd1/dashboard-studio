@@ -29,12 +29,7 @@
     if (op.type === "summarize") {
       var by = (op.dimensions || []).map(function (d) { return d.column_name; });
       return (op.measures || []).map(function (m) {
-        // coerced_from is set when the SQL cast a non-numeric column to a
-        // number to aggregate it (Metabase's `col * 1`). Said out loud here
-        // because nothing else in the converted query shows that the source
-        // field is text, and every non-numeric row becomes 0.
-        return m.aggregation + "(" + m.column_name + ")" +
-          (m.coerced_from ? " — " + m.coerced_from + " coerced to a number" : "");
+        return m.aggregation + "(" + m.column_name + ")";
       }).join(", ") + (by.length ? " by " + by.join(", ") : "");
     }
     return op.type || "";

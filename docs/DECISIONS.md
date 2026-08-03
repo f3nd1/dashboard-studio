@@ -82,6 +82,12 @@ Scope is a rule table, not a compiler. Compound aggregations, custom columns, li
 
 **The proper fix is not here.** `actual_value` should be a **Float** or **Currency** field in Frappe. Then the coercion disappears from Metabase's SQL, the average is over real numbers, and rows that are currently silently zero become visible as bad data instead.
 
+**AMENDMENT (live testing).** The allowance could not be delivered as written, and is currently **refused**. A measure's `data_type` DESCRIBES the result; it does not ask Insights to convert anything. The converted query reached the engine with the text column untouched and failed at run time with `'StringColumn' object has no attribute 'mean'` — so the conversion looked successful and broke a step later, which is the failure mode this project refuses to ship.
+
+Emitting a real conversion needs Insights' `cast` operation. Its argument shape has **not** been read from `frontend/src2/types/query.types.ts` — only `source`, `filter`, `join` and `summarize` were — and an unrecognised key is dropped silently, so guessing it would fail identically while looking fixed.
+
+Until that shape is read, `AVG(col * 1)` on a text column refuses, and the refusal names the run-time error and the real fix. The decision below stands; only its delivery is deferred.
+
 **This rule exists only because the source field is mistyped.** If `actual_value` (or any other field this applies to) is corrected, revisit this rather than leaving it as permanent behaviour: an allowance for a specific defect should not outlive the defect. The narrow scope is deliberate — an *explicit* `* 1` in the SQL, as an aggregate argument only. Averaging a text column without that cast still refuses by name.
 
 ## Known unsupported — recorded, not scheduled

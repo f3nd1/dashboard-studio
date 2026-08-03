@@ -407,26 +407,34 @@ def _measures(aggregation, available, tables, reasons):
     if problem:
         reasons.append(problem)
         return []
-    # An explicit `* 1` in the SQL is Metabase casting the column to a number
-    # before aggregating it. Where the column really is text that cast is the
-    # only reason the report works at all, so it is honoured rather than refused
-    # — but it is recorded, not waved through: `coerced_from` travels with the
-    # measure and the UI says so, because every row that is not a number becomes
-    # 0 and nothing about the converted query would otherwise show that. The
-    # proper fix is the Frappe field's type; see ADR-009.
-    coerced = bool(aggregation.get("coerced")) and data_type not in MEASURE_DATA_TYPES
     if name in NUMERIC_ONLY_AGGREGATIONS and data_type not in MEASURE_DATA_TYPES:
-        if not coerced:
+        # ADR-009 allowed an explicit `* 1` here, on the grounds that Metabase's
+        # cast is the only reason the live report works. That allowance could
+        # not be delivered: `data_type` on a measure DESCRIBES the result, it
+        # does not ask Insights to convert anything, so ibis reached the column
+        # untouched and died on `'StringColumn' object has no attribute 'mean'`.
+        #
+        # Emitting a real conversion needs Insights' `cast` operation, whose
+        # argument shape has not been read from source — and a shape Insights
+        # does not recognise is dropped silently, which would fail in exactly
+        # the same way while looking fixed. So this refuses, and says which of
+        # the two real fixes to reach for.
+        if aggregation.get("coerced"):
             reasons.append(
-                f"'{argument}' is {data_type}, and only a number can be {function}'d"
+                f"'{argument}' is {data_type}, and the query casts it with `* 1` before "
+                f"{function}. Insights has no conversion step here, so its engine calls "
+                f".mean() on a text column and fails at run time. Retype '{argument}' as "
+                "Float or Currency on its DocType — that is the real fix and it also "
+                "makes the rows that are not numbers visible instead of silently zero"
             )
             return []
-    measure = {
+        reasons.append(
+            f"'{argument}' is {data_type}, and only a number can be {function}'d"
+        )
+        return []
+    return [{
         "measure_name": f"{name}_of_{argument}",
         "column_name": argument,
-        "data_type": "Integer" if name == "count" else ("Decimal" if coerced else data_type),
+        "data_type": "Integer" if name == "count" else data_type,
         "aggregation": name,
-    }
-    if coerced:
-        measure["coerced_from"] = data_type
-    return [measure]
+    }]

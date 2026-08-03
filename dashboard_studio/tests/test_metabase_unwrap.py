@@ -298,15 +298,35 @@ class TestTheRealReportEndToEnd(unittest.TestCase):
         return result["operations"]
 
     def test_the_shape_of_the_whole_conversion(self):
-        self.assertEqual([op["type"] for op in self.operations()],
+        """With actual_value typed as a number, which is what it SHOULD be."""
+        numeric = dict(self.COLUMNS)
+        numeric["Quality Performance Actual Value Parameter Childtable"] = dict(
+            numeric["Quality Performance Actual Value Parameter Childtable"],
+            actual_value="Decimal")
+        result = operations_from_sql(analyze_sql(QPO.read_text()), numeric)
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual([op["type"] for op in result["operations"]],
                          ["source", "join", "join", "filter", "summarize"])
 
-    def test_the_average_of_a_TEXT_column_converts_and_says_so(self):
-        measure = self.operations()[-1]["measures"][0]
-        self.assertEqual(measure["aggregation"], "avg")
-        self.assertEqual(measure["column_name"], "actual_value")
-        self.assertEqual(measure["coerced_from"], "String",
-                         "the conversion hid that the source field is text")
+    def test_a_join_carries_only_the_columns_the_report_reads(self):
+        numeric = dict(self.COLUMNS)
+        numeric["Quality Performance Actual Value Parameter Childtable"] = dict(
+            numeric["Quality Performance Actual Value Parameter Childtable"],
+            actual_value="Decimal")
+        operations = operations_from_sql(analyze_sql(QPO.read_text()),
+                                         numeric)["operations"]
+        self.assertEqual([c["column_name"] for c in operations[1]["select_columns"]],
+                         ["parent"])
+        self.assertEqual([c["column_name"] for c in operations[2]["select_columns"]],
+                         ["actual_value", "metric", "parent", "year"])
+
+    def test_as_the_field_is_typed_TODAY_it_refuses_rather_than_crashing(self):
+        """actual_value is a Frappe Data field. Insights would call .mean() on a
+        text column and die; ADR-009's allowance could not be delivered without
+        an operation this cannot yet emit."""
+        result = operations_from_sql(analyze_sql(QPO.read_text()), self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertIn(".mean() on a text column", " | ".join(result["reasons"]))
 
 
 class TestWhatIsNotLifted(unittest.TestCase):
