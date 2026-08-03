@@ -70,6 +70,20 @@ Scope is a rule table, not a compiler. Compound aggregations, custom columns, li
 
 **If the gate is ever wanted back**, it is intact in `archive/api_convert_verification_gate.py` with its tests in `archive/test_convert_gate_verification.py`. The non-obvious part is `_THOUSANDS`: it stops `"12,34"` being read as 1234, which across most of Europe means 12.34 — a hundredfold disagreement passing silently, inside the one function whose job was catching a disagreement.
 
+## ADR-009 — Allow an explicit `* 1` cast on a text column, because the source field is mistyped
+
+**Decision.** `AVG(`col` * 1)` where `col` is a text column converts, rather than refusing. The measure records `coerced_from: "String"`, and Studio's operations list says *"String coerced to a number"* next to it.
+
+**Why.** Metabase writes `* 1` to cast a column to a number before aggregating it. At UCC it does this to `actual_value` on *Quality Performance Actual Value Parameter Childtable*, which is a Frappe **Data** field — so the live report has been averaging a text column by silent MySQL coercion all along. Refusing it blocks a real, in-use report; the cast is the only reason that report works.
+
+**Why it is recorded rather than waved through.** Every row whose value is not a number coerces to `0` and is averaged in as zero. That behaviour is inherited from Metabase, not introduced here — but nothing else about the converted query would show it, and someone reading the Insights query a year from now would see an average over a field they assume is numeric. So it is stated in the measure and on screen.
+
+**Still refused in a GROUP BY.** Grouping by `col * 1` groups every non-numeric row together under `0`, which is not grouping by the column. That refusal names the coercion explicitly rather than falling back to a generic "subquery".
+
+**The proper fix is not here.** `actual_value` should be a **Float** or **Currency** field in Frappe. Then the coercion disappears from Metabase's SQL, the average is over real numbers, and rows that are currently silently zero become visible as bad data instead.
+
+**This rule exists only because the source field is mistyped.** If `actual_value` (or any other field this applies to) is corrected, revisit this rather than leaving it as permanent behaviour: an allowance for a specific defect should not outlive the defect. The narrow scope is deliberate — an *explicit* `* 1` in the SQL, as an aggregate argument only. Averaging a text column without that cast still refuses by name.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

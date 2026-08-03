@@ -327,6 +327,58 @@ class TestParentWithChildTables(unittest.TestCase):
         self.assertIn("more than once", " | ".join(result["reasons"]))
 
 
+class TestACoercedTextColumn(unittest.TestCase):
+    """`AVG(`col` * 1)` where `col` is TEXT.
+
+    Metabase writes the `* 1` to cast the column before averaging it, and at UCC
+    the column it does this to is a Frappe Data field — so the report has been
+    averaging text by silent coercion all along. Refusing it blocks a live
+    report; honouring it silently would hide that the source field is mistyped.
+    So it converts, and says so. See ADR-009.
+    """
+
+    SQL = ("SELECT `c`.`metric` AS `m`, AVG(`c`.`actual_value` * 1) AS `avg` "
+           "FROM `tabQPO` LEFT JOIN `tabQPO Child` c "
+           "ON `tabQPO`.`name` = c.`parent` GROUP BY `c`.`metric`")
+    # actual_value is a Data field: String, not a number.
+    COLUMNS = {"QPO": {"name": "String"},
+               "QPO Child": {"parent": "String", "metric": "String",
+                             "actual_value": "String"}}
+
+    def measure(self):
+        result = run(self.SQL, columns=self.COLUMNS)
+        self.assertTrue(result["supported"], result["reasons"])
+        return result["operations"][-1]["measures"][0]
+
+    def test_it_converts_rather_than_refusing(self):
+        self.assertEqual(self.measure()["aggregation"], "avg")
+        self.assertEqual(self.measure()["column_name"], "actual_value")
+
+    def test_the_measure_records_what_it_was_coerced_from(self):
+        """Nothing else in the converted query shows that the source field is
+        text, and every row that is not a number becomes 0."""
+        self.assertEqual(self.measure()["coerced_from"], "String")
+
+    def test_the_measure_is_typed_as_the_number_it_produces(self):
+        self.assertEqual(self.measure()["data_type"], "Decimal")
+
+    def test_the_SAME_column_without_the_cast_still_refuses(self):
+        """The allowance is for an EXPLICIT `* 1`, not for averaging text."""
+        result = run(self.SQL.replace("`c`.`actual_value` * 1", "`c`.`actual_value`"),
+                     columns=self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertIn("only a number can be AVG'd", " | ".join(result["reasons"]))
+
+    def test_a_cast_on_a_column_that_is_already_numeric_is_not_flagged(self):
+        """`x * 1` on a number is a no-op. There is nothing to tell anyone."""
+        columns = {"QPO": {"name": "String"},
+                   "QPO Child": {"parent": "String", "metric": "String",
+                                 "actual_value": "Decimal"}}
+        measure = run(self.SQL, columns=columns)["operations"][-1]["measures"][0]
+        self.assertNotIn("coerced_from", measure)
+        self.assertEqual(measure["data_type"], "Decimal")
+
+
 class TestJoinRefusals(unittest.TestCase):
     def assert_refused(self, result, fragment):
         self.assertFalse(result["supported"], "expected a refusal")

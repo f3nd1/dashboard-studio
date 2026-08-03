@@ -111,7 +111,7 @@ class TestJoin(unittest.TestCase):
                              "JOIN `tabPurchase Order` b ON b.`ref` = a.`po`")
         self.assertEqual(result["aggregations"],
                          [{"function": "SUM", "argument": "amount",
-                           "table": "Purchase Order"}])
+                           "table": "Purchase Order", "coerced": False}])
 
 
 class TestJoinRefusals(unittest.TestCase):

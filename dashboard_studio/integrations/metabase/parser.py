@@ -318,10 +318,13 @@ _FROM_PAREN = re.compile(r"\bFROM\s*\(", re.IGNORECASE)
 _WRAPPER_ALIAS = re.compile(r"\s*(?:AS\s+)?(?:`([^`]+)`|(\w+))", re.IGNORECASE)
 # One item of the wrapper's SELECT list: a qualified column, renamed.
 #
-# `* 1` is allowed because Metabase writes it for a custom numeric field and
-# `x * 1` IS `x` for a number — but only outside a GROUP BY, see below: on a
-# text column MySQL coerces `'abc' * 1` to 0, and grouping by that is not
-# grouping by the column.
+# `* 1` is Metabase's cast: it writes it to coerce a column to a number before
+# aggregating. At UCC the column it does this to (`actual_value`) is a Frappe
+# Data field, so Metabase has been averaging a TEXT column by silent coercion
+# all along — see ADR-009. The `* 1` is carried through the rewrite rather than
+# dropped, so the coercion stays visible to the type check and to the person
+# reading the converted query. Refused in a GROUP BY, where grouping by a
+# coerced value is not grouping by the column.
 _WRAPPER_ITEM = re.compile(
     r"^(?P<expr>(?:`[^`]+`|\w+)\.(?:`[^`]+`|\w+))(?P<arith>\s*\*\s*1)?"
     r"\s+AS\s+(?:`(?P<alias_q>[^`]+)`|(?P<alias>\w+))$", re.IGNORECASE)
@@ -330,27 +333,29 @@ _WRAPPER_ITEM = re.compile(
 _WRAPPER_BLOCKS = re.compile(r"\b(GROUP\s+BY|HAVING|DISTINCT|UNION|LIMIT)\b", re.IGNORECASE)
 
 
-def lift_renaming_wrapper(sql: str) -> str:
-    """Fold a renaming wrapper into the query it wraps, or return sql unchanged.
+def lift_renaming_wrapper(sql: str) -> tuple[str, list[str]]:
+    """Fold a renaming wrapper into the query it wraps.
 
-    Every bail-out is a refusal in disguise: the statement comes back as it was
-    and the subquery check downstream turns it into a named reason. Nothing is
-    half-rewritten.
+    Returns ``(statement, reasons)``. Every bail-out returns the statement as it
+    was, so the subquery check downstream turns it into a named reason; the
+    reasons list is for the one case where a generic "subquery" would hide
+    something specific worth reading.
     """
     if not isinstance(sql, str):
         raise TypeError("sql must be a string")
+    reasons: list[str] = []
     match = _FROM_PAREN.search(sql)
     if not match:
-        return sql
+        return sql, reasons
     opened = match.end() - 1
     closed = _matching_paren(sql, opened)
     if closed < 0:
-        return sql
+        return sql, reasons
     head, inner, after = sql[:match.start()], sql[opened + 1:closed], sql[closed + 1:]
 
     named = _WRAPPER_ALIAS.match(after)
     if not named:
-        return sql
+        return sql, reasons
     wrapper = named.group(1) or named.group(2)
     tail = after[named.end():]
 
@@ -358,32 +363,36 @@ def lift_renaming_wrapper(sql: str) -> str:
     # to be ANDed with the inner one, and a second derived table is a different
     # shape entirely.
     if re.search(r"\bWHERE\b", tail, re.IGNORECASE) or "(" in tail:
-        return sql
+        return sql, reasons
     if len(re.findall(r"\bSELECT\b", head, re.IGNORECASE)) != 1:
-        return sql
+        return sql, reasons
     # Exactly one SELECT inside: a second means a per-table wrapper this pass
     # could not flatten, so the joins are not readable and there is nothing to
     # lift onto. (A bare "( in source" check was written alongside this and
     # removed — it caught nothing this did not, and a stray parenthesis in an
     # ON clause fails the join parse downstream anyway, which is a refusal.)
     if len(re.findall(r"\bSELECT\b", inner, re.IGNORECASE)) != 1:
-        return sql
+        return sql, reasons
     if _WRAPPER_BLOCKS.search(inner):
-        return sql
+        return sql, reasons
 
     inner_from = re.search(r"\bFROM\b", inner, re.IGNORECASE)
     if not inner_from:
-        return sql
+        return sql, reasons
     items, source = inner[:inner_from.start()], inner[inner_from.start():]
     if not re.match(r"\s*SELECT\b", items, re.IGNORECASE):
-        return sql
+        return sql, reasons
     renames = {}
     for item in _split_items(items.strip()[len("SELECT"):]):
         parsed = _WRAPPER_ITEM.match(" ".join(item.split()))
         if not parsed:
-            return sql
+            return sql, reasons
         alias = parsed.group("alias_q") or parsed.group("alias")
-        renames[alias] = (parsed.group("expr"), bool(parsed.group("arith")))
+        # The `* 1` is kept in the mapped text: dropping it here would hide a
+        # cast the query asked for, and the aggregate would then be typed as
+        # though the column were numeric.
+        renames[alias] = (parsed.group("expr") + (parsed.group("arith") or ""),
+                          bool(parsed.group("arith")))
 
     reference = re.compile(
         r"(?:`" + re.escape(wrapper) + r"`|\b" + re.escape(wrapper) + r"\b)"
@@ -395,9 +404,16 @@ def lift_renaming_wrapper(sql: str) -> str:
                          tail, re.IGNORECASE | re.DOTALL)
     if grouping:
         for found in reference.finditer(grouping.group(1)):
-            entry = renames.get(found.group("quoted") or found.group("bare"))
+            name = found.group("quoted") or found.group("bare")
+            entry = renames.get(name)
             if entry and entry[1]:
-                return sql
+                reasons.append(
+                    f"the query groups by '{name}', which is {entry[0]} — a value "
+                    "coerced to a number, not the column itself. Aggregating a "
+                    "coerced column is translated; grouping by one is not, because "
+                    "every row that is not a number coerces to the same 0"
+                )
+                return sql, reasons
 
     unmapped = []
 
@@ -412,9 +428,9 @@ def lift_renaming_wrapper(sql: str) -> str:
     rewritten_head = reference.sub(swap, head)
     rewritten_tail = reference.sub(swap, tail)
     if unmapped:
-        return sql
+        return sql, reasons
     return (rewritten_head.rstrip() + " " + source.strip() + " "
-            + rewritten_tail.strip()).strip()
+            + rewritten_tail.strip()).strip(), reasons
 
 
 def _select_problems(statement: str) -> list[str]:
@@ -603,16 +619,27 @@ def _parse_group_by(sql: str, aliases: dict, reasons: list) -> list[dict]:
     return out
 
 
+# ``AVG(`x`.`col` * 1)`` — Metabase's cast to a number. Recognised so the
+# coercion travels with the aggregate instead of being silently unwound into a
+# plain column reference, which would type it as whatever the column is.
+_TIMES_ONE = re.compile(r"^(?P<expr>.+?)\s*\*\s*1$")
+
+
 def _parse_aggregations(sql: str, aliases: dict, reasons: list) -> list[dict]:
     out = []
     for function, argument in _AGG_PATTERN.findall(sql):
         argument = argument.strip()
         if not argument or argument == "*":
-            out.append({"function": function.upper(), "argument": "*", "table": None})
+            out.append({"function": function.upper(), "argument": "*", "table": None,
+                        "coerced": False})
             continue
+        coerced = _TIMES_ONE.match(argument)
+        if coerced:
+            argument = coerced.group("expr").strip()
         qualifier, column = _split_ref(argument)
         out.append({"function": function.upper(), "argument": column or argument,
-                    "table": _resolve(qualifier, aliases, reasons)})
+                    "table": _resolve(qualifier, aliases, reasons),
+                    "coerced": bool(coerced)})
     return out
 
 
@@ -645,7 +672,9 @@ def analyze_sql(sql: str) -> dict:
     # table; lift_ folds away a wrapper that only RENAMES the query inside it.
     # The second needs the first to have run, because a wrapper whose joins are
     # still wrapped has nothing readable to lift onto.
-    statement = lift_renaming_wrapper(unwrap_derived_tables(sql.strip().rstrip(";")))
+    statement, lift_reasons = lift_renaming_wrapper(
+        unwrap_derived_tables(sql.strip().rstrip(";")))
+    reasons.extend(lift_reasons)
 
     # Subquery / nested SELECT: more than one SELECT keyword.
     subquery = len(re.findall(r"\bSELECT\b", statement, re.IGNORECASE)) > 1

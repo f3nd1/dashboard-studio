@@ -25,6 +25,13 @@ assert.strictEqual(core.describeOperation({ type: "summarize",
 assert.strictEqual(core.describeOperation({ type: "summarize",
   measures: [{ aggregation: "sum", column_name: "fee" }], dimensions: [] }),
   "sum(fee)");
+// A cast the SQL asked for has to be visible: nothing else in the converted
+// query says the source field is text, and every non-numeric row becomes 0.
+assert.strictEqual(core.describeOperation({ type: "summarize",
+  measures: [{ aggregation: "avg", column_name: "actual_value",
+               coerced_from: "String" }],
+  dimensions: [{ column_name: "metric" }] }),
+  "avg(actual_value) — String coerced to a number by metric");
 // Junk must not throw — this renders inside a panel that is already reporting
 // something the person needs to read.
 assert.strictEqual(core.describeOperation(null), "");

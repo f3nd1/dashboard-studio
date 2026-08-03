@@ -354,14 +354,26 @@ def _measures(aggregation, available, tables, reasons):
     if problem:
         reasons.append(problem)
         return []
+    # An explicit `* 1` in the SQL is Metabase casting the column to a number
+    # before aggregating it. Where the column really is text that cast is the
+    # only reason the report works at all, so it is honoured rather than refused
+    # — but it is recorded, not waved through: `coerced_from` travels with the
+    # measure and the UI says so, because every row that is not a number becomes
+    # 0 and nothing about the converted query would otherwise show that. The
+    # proper fix is the Frappe field's type; see ADR-009.
+    coerced = bool(aggregation.get("coerced")) and data_type not in MEASURE_DATA_TYPES
     if name in NUMERIC_ONLY_AGGREGATIONS and data_type not in MEASURE_DATA_TYPES:
-        reasons.append(
-            f"'{argument}' is {data_type}, and only a number can be {function}'d"
-        )
-        return []
-    return [{
+        if not coerced:
+            reasons.append(
+                f"'{argument}' is {data_type}, and only a number can be {function}'d"
+            )
+            return []
+    measure = {
         "measure_name": f"{name}_of_{argument}",
         "column_name": argument,
-        "data_type": "Integer" if name == "count" else data_type,
+        "data_type": "Integer" if name == "count" else ("Decimal" if coerced else data_type),
         "aggregation": name,
-    }]
+    }
+    if coerced:
+        measure["coerced_from"] = data_type
+    return [measure]

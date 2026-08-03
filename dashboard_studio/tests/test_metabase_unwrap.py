@@ -23,6 +23,7 @@ from dashboard_studio.integrations.metabase.parser import (
     lift_renaming_wrapper,
     unwrap_derived_tables,
 )
+from dashboard_studio.integrations.metabase.sql_ops import operations_from_sql
 
 REAL = (pathlib.Path(__file__).resolve().parents[2]
         / "reference" / "metabase" / "duration_from_counselling_to_admission.sql")
@@ -269,10 +270,43 @@ class TestLiftingARenamingWrapper(unittest.TestCase):
 
     def test_the_aggregate_maps_back_through_the_rename_AND_the_times_one(self):
         """`AVG(`__mb_source`.`Observe Value`)` where the wrapper defines
-        `Observe Value` as `actual_value * 1`. For a number that is the column."""
+        `Observe Value` as `actual_value * 1` — Metabase casting a text column
+        to a number. The cast is carried through, not dropped: it is what makes
+        the aggregate legal, and it is what a reader needs told (ADR-009)."""
         self.assertEqual(self.result["aggregations"],
                          [{"function": "AVG", "argument": "actual_value",
-                           "table": "Quality Performance Actual Value Parameter Childtable"}])
+                           "table": "Quality Performance Actual Value Parameter Childtable",
+                           "coerced": True}])
+
+
+class TestTheRealReportEndToEnd(unittest.TestCase):
+    """The whole thing, with `actual_value` typed as it really is on the site:
+    a Frappe Data field, i.e. text."""
+
+    COLUMNS = {
+        "Quality Performance Outcomes": {"name": "String", "parent": "String"},
+        "Quality Performance Outcomes Performance Childtable":
+            {"name": "String", "parent": "String", "year": "String", "trend": "String"},
+        "Quality Performance Actual Value Parameter Childtable":
+            {"name": "String", "parent": "String", "year": "String",
+             "metric": "String", "actual_value": "String"},
+    }
+
+    def operations(self):
+        result = operations_from_sql(analyze_sql(QPO.read_text()), self.COLUMNS)
+        self.assertTrue(result["supported"], result["reasons"])
+        return result["operations"]
+
+    def test_the_shape_of_the_whole_conversion(self):
+        self.assertEqual([op["type"] for op in self.operations()],
+                         ["source", "join", "join", "filter", "summarize"])
+
+    def test_the_average_of_a_TEXT_column_converts_and_says_so(self):
+        measure = self.operations()[-1]["measures"][0]
+        self.assertEqual(measure["aggregation"], "avg")
+        self.assertEqual(measure["column_name"], "actual_value")
+        self.assertEqual(measure["coerced_from"], "String",
+                         "the conversion hid that the source field is text")
 
 
 class TestWhatIsNotLifted(unittest.TestCase):
@@ -285,7 +319,8 @@ class TestWhatIsNotLifted(unittest.TestCase):
                "{extra}) AS `w` GROUP BY `w`.`m`")
 
     def assert_not_lifted(self, sql):
-        self.assertEqual(lift_renaming_wrapper(sql), sql)
+        self.assertEqual(lift_renaming_wrapper(sql)[0], sql,
+                         "the statement was rewritten when it should not have been")
         result = analyze_sql(sql)
         self.assertFalse(result["supported"])
         self.assertIn("subquery", " | ".join(result["reasons"]))
@@ -294,7 +329,7 @@ class TestWhatIsNotLifted(unittest.TestCase):
         """A guard on the guard: if this stopped lifting, every case below would
         pass for the wrong reason."""
         sql = self.WRAPPED.format(extra="")
-        self.assertNotEqual(lift_renaming_wrapper(sql), sql)
+        self.assertNotEqual(lift_renaming_wrapper(sql)[0], sql)
         self.assertTrue(analyze_sql(sql)["supported"], analyze_sql(sql)["reasons"])
 
     def test_a_wrapper_that_aggregates_is_not_lifted(self):
@@ -325,13 +360,18 @@ class TestWhatIsNotLifted(unittest.TestCase):
             "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` ) AS `w`")
 
     def test_grouping_by_a_times_one_alias_is_not_lifted(self):
-        """`x * 1` is `x` for a number, but MySQL coerces `'abc' * 1` to 0, and
-        the types are not known here. Aggregating it is fine; grouping by it is
-        not grouping by the column."""
-        self.assert_not_lifted(
-            "SELECT `w`.`v` FROM ( SELECT `c`.`actual_value` * 1 AS `v` FROM `tabQPO` "
-            "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` ) AS `w` "
-            "GROUP BY `w`.`v`")
+        """Aggregating a coerced column is translated — see ADR-009 — because at
+        UCC the cast is the only reason the report works. Grouping by one is
+        not: every row that is not a number coerces to the same 0."""
+        sql = ("SELECT `w`.`v` FROM ( SELECT `c`.`actual_value` * 1 AS `v` FROM `tabQPO` "
+               "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` ) AS `w` "
+               "GROUP BY `w`.`v`")
+        self.assert_not_lifted(sql)
+        # And it says WHY, rather than leaving a bare "subquery" to explain a
+        # refusal that has nothing to do with nesting.
+        reasons = " | ".join(analyze_sql(sql)["reasons"])
+        self.assertIn("coerced to a number, not the column itself", reasons)
+        self.assertIn("every row that is not a number coerces to the same 0", reasons)
 
     def test_a_wrapper_whose_joins_are_still_wrapped_is_not_lifted(self):
         """Nothing readable to lift onto: the joins are still subqueries."""
