@@ -43,11 +43,17 @@ def _table_columns(doctype):
     which is why pasted SQL can reach structured output without anybody
     guessing, and why a join's column names can be checked rather than trusted.
 
-    The table's REAL column list comes from the database, not from the DocType:
-    Frappe's `_user_tags`, `_comments`, `_assign` and `_liked_by` are optional
-    and are NOT on every table. Assuming them produced a query that converted
-    here and then failed in Insights with "Column '_comments' is not found in
-    table" — the schema is the only thing that knows, so the schema is asked.
+    The table's REAL column list comes from the database, NEVER from the DocType.
+    A DocType's fields and its table's columns drift apart — Frappe's
+    `_user_tags`/`_comments`/`_assign`/`_liked_by` are optional and not on every
+    table, and a field can outlive the column it used to have. Both directions
+    have already shipped a query that converted cleanly and then failed on open:
+    "Column '_comments' is not found in table", then "Column 'corrective_action'
+    is not found in table".
+
+    So there is NO fallback to DocType fields. If the schema cannot be read the
+    conversion refuses, because a guessed column list is precisely what produces
+    a query that fails the moment somebody opens it.
     """
     if not frappe.db.exists("DocType", doctype):
         frappe.throw(
@@ -56,20 +62,24 @@ def _table_columns(doctype):
         )
     meta = frappe.get_meta(doctype)
     fields = [(f.fieldname, f.fieldtype) for f in meta.fields]
-    # getattr rather than a version check: older Frappe has no get_table_columns,
-    # and falling back to the unconditional columns is the safe direction.
-    read_columns = getattr(frappe.db, "get_table_columns", None)
-    if not read_columns:
-        return columns_from_meta(fields)
-    try:
-        return columns_from_meta(fields, read_columns(doctype))
-    except Exception:
-        # A DocType with no table of its own — a Single, most likely. Named,
-        # rather than surfacing a raw traceback from the schema layer.
-        frappe.throw(
-            f"'{doctype}' has no table on this site, so its columns cannot be "
-            "read. A Single DocType has no rows to query."
-        )
+    # Two APIs, because the name has moved between Frappe versions and losing the
+    # schema read must not quietly downgrade to guessing.
+    for read, argument in ((getattr(frappe.db, "get_table_columns", None), doctype),
+                           (getattr(frappe.db, "get_db_table_columns", None), "tab" + doctype)):
+        if not read:
+            continue
+        try:
+            valid = read(argument)
+        except Exception:
+            continue
+        if valid:
+            return columns_from_meta(fields, list(valid))
+    frappe.throw(
+        f"The columns of '{doctype}' could not be read from the database on this "
+        "site, so this query cannot be converted. Its DocType fields are not a "
+        "safe substitute — they drift from the real table, and a query built "
+        "from them fails the moment it is opened in Insights."
+    )
 
 
 @frappe.whitelist()

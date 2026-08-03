@@ -159,5 +159,12 @@ def _make_fake_frappe(store, roles, doctypes=("Insights Query v3",), sources=("S
             raise _ValidationError(f"Table for {doctype} does not exist")
         return list(frappe._table_columns[doctype])
 
-    frappe.db = types.SimpleNamespace(exists=exists, get_table_columns=get_table_columns)
+    # The older name for the same thing, taking the TABLE rather than the
+    # DocType. Modelled so a test can drop one API and prove the other is used
+    # rather than the conversion quietly falling back to guessing.
+    def get_db_table_columns(table):
+        return get_table_columns(table[3:] if table.startswith("tab") else table)
+
+    frappe.db = types.SimpleNamespace(exists=exists, get_table_columns=get_table_columns,
+                                      get_db_table_columns=get_db_table_columns)
     return frappe

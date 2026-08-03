@@ -25,7 +25,11 @@ META = {
     "Student Applicant": [("status", "Select"), ("academic_year", "Data"),
                           ("fee", "Currency"), ("po", "Data"),
                           ("layout", "Section Break")],
-    "Purchase Order": [("ref", "Data"), ("amount", "Currency")],
+    # `corrective_action` is DEFINED on the DocType and is NOT a column of the
+    # table any more. That drift is what put a non-existent column into a join's
+    # select_columns and failed the query the moment it was opened.
+    "Purchase Order": [("ref", "Data"), ("amount", "Currency"),
+                       ("corrective_action", "Text")],
 }
 
 # The columns the TABLES actually have. The two differ on purpose: Frappe's
@@ -142,6 +146,36 @@ class TestSqlConversion(_Base):
         # `amount` is Purchase Order's, and typed from ITS metadata, not the
         # source table's — a string 100 here matches nothing.
         self.assertEqual(stored[2]["value"], 100.0)
+
+    def test_a_field_the_table_has_no_column_for_never_reaches_select_columns(self):
+        """"Column 'corrective_action' is not found in table" — the join brought
+        a column across that the DocType defines and the table does not."""
+        self.api.convert_sql(
+            "SELECT COUNT(*) FROM `tabStudent Applicant` a "
+            "LEFT JOIN `tabPurchase Order` b ON b.`ref` = a.`po`", workbook="2")
+        stored = __import__("json").loads(self.queries()[0]["operations"])
+        selected = [c["column_name"] for c in stored[1]["select_columns"]]
+        self.assertNotIn("corrective_action", selected,
+                         "a column the table does not have went into the query")
+        self.assertEqual(selected, sorted(TABLES["Purchase Order"]))
+
+    def test_the_conversion_refuses_rather_than_guessing_the_column_list(self):
+        """No fallback to DocType fields. A guessed column list is exactly what
+        produces a query that converts cleanly and fails on open."""
+        self.frappe.db.get_table_columns = None
+        self.frappe.db.get_db_table_columns = None
+        message = self.refusal(self.api.convert_sql, SQL, workbook="2")
+        self.assertIn("could not be read from the database", message)
+        self.assertIn("not a safe substitute", message)
+        self.assertEqual(self.queries(), [])
+
+    def test_the_second_schema_API_is_used_when_the_first_is_missing(self):
+        """The name has moved between Frappe versions; losing one must not
+        downgrade to guessing."""
+        self.frappe.db.get_table_columns = None
+        self.api.convert_sql(SQL, workbook="2")
+        stored = __import__("json").loads(self.queries()[0]["operations"])
+        self.assertEqual(stored[0]["table"]["table_name"], "tabStudent Applicant")
 
     def test_an_optional_column_the_table_lacks_is_refused_here_not_in_insights(self):
         """Purchase Order has none of the underscore columns. Assuming it did
