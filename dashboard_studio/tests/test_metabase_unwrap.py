@@ -320,13 +320,23 @@ class TestTheRealReportEndToEnd(unittest.TestCase):
         self.assertEqual([c["column_name"] for c in operations[2]["select_columns"]],
                          ["actual_value", "metric", "parent", "year"])
 
-    def test_as_the_field_is_typed_TODAY_it_refuses_rather_than_crashing(self):
-        """actual_value is a Frappe Data field. Insights would call .mean() on a
-        text column and die; ADR-009's allowance could not be delivered without
-        an operation this cannot yet emit."""
-        result = operations_from_sql(analyze_sql(QPO.read_text()), self.COLUMNS)
-        self.assertFalse(result["supported"])
-        self.assertIn(".mean() on a text column", " | ".join(result["reasons"]))
+    def test_as_the_field_is_typed_TODAY_the_conversion_casts_it(self):
+        """actual_value is a Frappe Data field, i.e. text. Insights called
+        .mean() on it and died; the `* 1` Metabase wrote becomes a real `cast`
+        operation, and it lands between the filter and the summarize that reads
+        the column. This is the whole real report, not an approximation of it."""
+        operations = self.operations()
+        self.assertEqual([op["type"] for op in operations],
+                         ["source", "join", "join", "filter", "cast", "summarize"])
+        self.assertEqual(operations[4], {
+            "type": "cast",
+            "column": {"type": "column", "column_name": "actual_value"},
+            "data_type": "Decimal",
+        })
+        measure = operations[5]["measures"][0]
+        self.assertEqual(measure["column_name"], "actual_value")
+        self.assertEqual(measure["aggregation"], "avg")
+        self.assertEqual(measure["coerced_from"], "String")
 
 
 class TestWhatIsNotLifted(unittest.TestCase):

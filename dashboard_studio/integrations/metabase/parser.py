@@ -604,19 +604,31 @@ def _parse_filters(sql: str, aliases: dict, reasons: list) -> tuple[list[dict], 
     return filters, problems
 
 
-def _parse_group_by(sql: str, aliases: dict, reasons: list) -> list[dict]:
+def _parse_group_by(sql: str, aliases: dict, reasons: list) -> tuple[list[dict], list[str]]:
     m = re.search(r"\bGROUP\s+BY\b(.+?)(?=\bORDER\s+BY\b|\bLIMIT\b|$)", sql, re.IGNORECASE | re.DOTALL)
     if not m:
-        return []
-    out = []
+        return [], []
+    out: list[dict] = []
+    problems: list[str] = []
     for part in _split_items(_clause_text(m.group(1))):
-        if not part.strip():
+        item = part.strip().rstrip(",").strip()
+        if not item:
             continue
-        qualifier, field = _split_ref(part)
+        qualifier, field = _split_ref(item)
+        # An item that is not exactly one column is REFUSED, not skipped.
+        # `_QUALIFIED` is anchored, so ``col * 1`` reads as nothing at all — and
+        # it used to be dropped in silence, which turned a grouping by a coerced
+        # value (0 for every row that is not a number) into a grouping by the
+        # raw column: a different question, answered without a word.
         if not field:
+            problems.append(
+                f"the query groups by '{item}', which is not a plain column — this "
+                "converter groups by columns only, and dropping the rest of an "
+                "expression would answer a different question"
+            )
             continue
         out.append({"field": field, "table": _resolve(qualifier, aliases, reasons)})
-    return out
+    return out, problems
 
 
 # ``AVG(`x`.`col` * 1)`` — Metabase's cast to a number. Recognised so the
@@ -748,7 +760,8 @@ def analyze_sql(sql: str) -> dict:
     filters, filter_problems = _parse_filters(statement, aliases, alias_reasons)
     reasons.extend(filter_problems)
     aggregations = _parse_aggregations(statement, aliases, alias_reasons)
-    group_by = _parse_group_by(statement, aliases, alias_reasons)
+    group_by, group_problems = _parse_group_by(statement, aliases, alias_reasons)
+    reasons.extend(group_problems)
     if not subquery:
         reasons.extend(alias_reasons)
 

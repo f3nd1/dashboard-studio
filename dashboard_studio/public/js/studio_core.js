@@ -26,10 +26,19 @@
         " on " + ((on.left_column || {}).column_name || "?") + " = " +
         ((on.right_column || {}).column_name || "?");
     }
+    if (op.type === "cast") {
+      return "cast " + ((op.column || {}).column_name || "?") + " to " +
+        (op.data_type || "?");
+    }
     if (op.type === "summarize") {
       var by = (op.dimensions || []).map(function (d) { return d.column_name; });
       return (op.measures || []).map(function (m) {
-        return m.aggregation + "(" + m.column_name + ")";
+        // coerced_from is set when the SQL cast a non-numeric column to a
+        // number to aggregate it (Metabase's `col * 1`). Said out loud because
+        // nothing else shows that the source field is text, and every row that
+        // is not a number casts to 0 and is averaged in as zero.
+        return m.aggregation + "(" + m.column_name + ")" +
+          (m.coerced_from ? " — " + m.coerced_from + " cast to a number" : "");
       }).join(", ") + (by.length ? " by " + by.join(", ") : "");
     }
     return op.type || "";

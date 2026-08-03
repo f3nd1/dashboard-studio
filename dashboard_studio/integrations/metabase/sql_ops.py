@@ -110,6 +110,19 @@ def _join(join_type, table_name, data_source, left, right, select_columns):
     }
 
 
+def _cast(column, data_type):
+    """``Cast = { type: 'cast' } & CastArgs``, ``CastArgs = {column, data_type}``.
+
+    Read from `query.types.ts` at v3.12.2 — exactly these two keys and nothing
+    else. `cast` is its own OPERATION; a measure's `data_type` describes the
+    result of an aggregate and converts nothing, which is why labelling the
+    measure "Decimal" produced `'StringColumn' object has no attribute 'mean'`.
+    """
+    return {"type": "cast",
+            "column": {"type": "column", "column_name": column},
+            "data_type": data_type}
+
+
 def _summarize(measures, dimensions):
     return {"type": "summarize", "measures": measures, "dimensions": dimensions}
 
@@ -381,6 +394,13 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
             dimensions.append({"dimension_name": column, "column_name": column,
                                "data_type": data_type})
         if measures:
+            # The cast goes AFTER the filters and immediately before the
+            # summarize, which is where `* 1` sat in the original SQL: scoped to
+            # the aggregate, not to the WHERE. Casting earlier would retype the
+            # column the filters were already compared against as text.
+            for measure in measures:
+                if measure.get("coerced_from"):
+                    operations.append(_cast(measure["column_name"], measure["data_type"]))
             operations.append(_summarize(measures, dimensions))
     elif group_by:
         reasons.append("this query groups without aggregating, which has no chart to draw")
@@ -407,34 +427,35 @@ def _measures(aggregation, available, tables, reasons):
     if problem:
         reasons.append(problem)
         return []
+    # An explicit `* 1` in the SQL is Metabase casting the column to a number
+    # before aggregating. Where the column really is text, that cast is the only
+    # reason the report works — so it is honoured, and honoured PROPERLY: the
+    # caller emits a real `cast` operation for any measure carrying
+    # `coerced_from`. ADR-009 first tried to do it by labelling the measure's
+    # data_type, which describes the result and converts nothing; Insights then
+    # died on `'StringColumn' object has no attribute 'mean'`.
+    # Only where the aggregate actually needs a number: `COUNT(`col` * 1)` counts
+    # text rows perfectly well, and casting them to a number first would change
+    # what is counted for no reason.
+    coerced = (bool(aggregation.get("coerced"))
+               and data_type not in MEASURE_DATA_TYPES
+               and name in NUMERIC_ONLY_AGGREGATIONS)
     if name in NUMERIC_ONLY_AGGREGATIONS and data_type not in MEASURE_DATA_TYPES:
-        # ADR-009 allowed an explicit `* 1` here, on the grounds that Metabase's
-        # cast is the only reason the live report works. That allowance could
-        # not be delivered: `data_type` on a measure DESCRIBES the result, it
-        # does not ask Insights to convert anything, so ibis reached the column
-        # untouched and died on `'StringColumn' object has no attribute 'mean'`.
-        #
-        # Emitting a real conversion needs Insights' `cast` operation, whose
-        # argument shape has not been read from source — and a shape Insights
-        # does not recognise is dropped silently, which would fail in exactly
-        # the same way while looking fixed. So this refuses, and says which of
-        # the two real fixes to reach for.
-        if aggregation.get("coerced"):
+        if not coerced:
             reasons.append(
-                f"'{argument}' is {data_type}, and the query casts it with `* 1` before "
-                f"{function}. Insights has no conversion step here, so its engine calls "
-                f".mean() on a text column and fails at run time. Retype '{argument}' as "
-                "Float or Currency on its DocType — that is the real fix and it also "
-                "makes the rows that are not numbers visible instead of silently zero"
+                f"'{argument}' is {data_type}, and only a number can be {function}'d"
             )
             return []
-        reasons.append(
-            f"'{argument}' is {data_type}, and only a number can be {function}'d"
-        )
-        return []
-    return [{
+    measure = {
         "measure_name": f"{name}_of_{argument}",
         "column_name": argument,
-        "data_type": "Integer" if name == "count" else data_type,
+        "data_type": "Integer" if name == "count" else ("Decimal" if coerced else data_type),
         "aggregation": name,
-    }]
+    }
+    if coerced:
+        # Not part of Insights' ColumnMeasure — it is dropped there, and is here
+        # so the operations list can say the source field is text. Every row
+        # that is not a number casts to 0 and is averaged in as zero, and
+        # nothing else about the converted query shows that.
+        measure["coerced_from"] = data_type
+    return [measure]

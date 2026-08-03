@@ -82,11 +82,23 @@ Scope is a rule table, not a compiler. Compound aggregations, custom columns, li
 
 **The proper fix is not here.** `actual_value` should be a **Float** or **Currency** field in Frappe. Then the coercion disappears from Metabase's SQL, the average is over real numbers, and rows that are currently silently zero become visible as bad data instead.
 
-**AMENDMENT (live testing).** The allowance could not be delivered as written, and is currently **refused**. A measure's `data_type` DESCRIBES the result; it does not ask Insights to convert anything. The converted query reached the engine with the text column untouched and failed at run time with `'StringColumn' object has no attribute 'mean'` — so the conversion looked successful and broke a step later, which is the failure mode this project refuses to ship.
+**AMENDMENT 1 (live testing).** The allowance could not be delivered as first written. A measure's `data_type` DESCRIBES the result; it does not ask Insights to convert anything. The converted query reached the engine with the text column untouched and failed at run time with `'StringColumn' object has no attribute 'mean'` — the conversion looked successful and broke a step later, which is the failure mode this project refuses to ship. It was made to refuse by name rather than guess `CastArgs`, since an unrecognised key is dropped silently and a guess would fail identically while looking fixed.
 
-Emitting a real conversion needs Insights' `cast` operation. Its argument shape has **not** been read from `frontend/src2/types/query.types.ts` — only `source`, `filter`, `join` and `summarize` were — and an unrecognised key is dropped silently, so guessing it would fail identically while looking fixed.
+**AMENDMENT 2 (the shape, read from source).** `query.types.ts` at v3.12.2 gives `Cast = { type: 'cast' } & CastArgs` and `CastArgs = { column: Column; data_type: ColumnDataType }`, with `ColumnDataType` including `'Decimal'`. So the conversion is an **operation of its own**, not an attribute of the measure. The converter now emits
 
-Until that shape is read, `AVG(col * 1)` on a text column refuses, and the refusal names the run-time error and the real fix. The decision below stands; only its delivery is deferred.
+```json
+{"type": "cast", "column": {"type": "column", "column_name": "actual_value"}, "data_type": "Decimal"}
+```
+
+**after the filters and immediately before the `summarize` that reads the column** — which is where `* 1` sat in the original SQL: scoped to the aggregate, not to the WHERE. Casting earlier would retype the column the filters were already compared against as text. `coerced_from` is back on the measure and back on screen; it is not part of Insights' `ColumnMeasure` and is dropped there, and it exists so the operations list can say the source field is text.
+
+The emitted dict is asserted **in full** — exactly `type`, `column`, `data_type` — in `test_sql_to_operations.TestACoercedTextColumn` and end to end over the real report fixture in `test_metabase_unwrap.TestTheRealReportEndToEnd`, because an extra key Insights drops in silence fails at run time in exactly the way the cast was added to prevent.
+
+Two narrowings that came out of it: `COUNT(col * 1)` emits **no** cast (counting text is fine, and converting first would change what is counted), and `GROUP BY col * 1` is refused generically now — a grouping item that is not exactly one column is refused rather than skipped, because `_QUALIFIED` is anchored and the item was previously dropped in silence.
+
+**Fixture-tested, not live-verified.** Running the cast in Insights is a step only the user can take from the live site.
+
+**How big is the problem before anyone retypes anything.** `actual_value` was found by one report failing. `scripts/numeric_fields_typed_as_text.py` reports every text field on the site holding numbers, judged by its **values** and not its name, and separates the wholly-numeric fields (retype cleanly) from the mostly-numeric ones (retyping surfaces rows that coerce to 0 today — a content decision, not a schema one). Read-only, hand-run on the live site. Retyping is a decision to take with that list in hand, not one field at a time as reports break.
 
 **This rule exists only because the source field is mistyped.** If `actual_value` (or any other field this applies to) is corrected, revisit this rather than leaving it as permanent behaviour: an allowance for a specific defect should not outlive the defect. The narrow scope is deliberate — an *explicit* `* 1` in the SQL, as an aggregate argument only. Averaging a text column without that cast still refuses by name.
 

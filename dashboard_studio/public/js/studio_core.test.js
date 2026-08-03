@@ -25,6 +25,18 @@ assert.strictEqual(core.describeOperation({ type: "summarize",
 assert.strictEqual(core.describeOperation({ type: "summarize",
   measures: [{ aggregation: "sum", column_name: "fee" }], dimensions: [] }),
   "sum(fee)");
+// A cast is its own operation now, and has to read as one.
+assert.strictEqual(core.describeOperation(
+  { type: "cast", column: { column_name: "actual_value" }, data_type: "Decimal" }),
+  "cast actual_value to Decimal");
+// And the measure says WHY the cast is there: nothing else in the converted
+// query shows the source field is text, and non-numeric rows become 0.
+assert.strictEqual(core.describeOperation({ type: "summarize",
+  measures: [{ aggregation: "avg", column_name: "actual_value",
+               coerced_from: "String" }],
+  dimensions: [{ column_name: "metric" }] }),
+  "avg(actual_value) — String cast to a number by metric");
+
 // Junk must not throw — this renders inside a panel that is already reporting
 // something the person needs to read.
 assert.strictEqual(core.describeOperation(null), "");

@@ -353,15 +353,17 @@ class TestACoercedTextColumn(unittest.TestCase):
     """`AVG(`col` * 1)` where `col` is TEXT.
 
     ADR-009 allowed this, because Metabase's `* 1` is the only reason the live
-    report works. The allowance could not be DELIVERED: a measure's `data_type`
-    describes the result, it does not ask Insights to convert anything, so its
-    engine reached the text column untouched and died on
+    report works. The first delivery attempt set the MEASURE's `data_type` to
+    Decimal, which describes the result of the aggregate and converts nothing —
+    Insights' engine reached the text column untouched and died on
     `'StringColumn' object has no attribute 'mean'`.
 
-    Emitting a real conversion needs Insights' `cast` operation, whose argument
-    shape has not been read from source — and an unrecognised shape is dropped
-    silently, which would fail identically while looking fixed. So it refuses,
-    and the refusal names the run-time error and the real fix.
+    The conversion is an OPERATION of its own, `{type: 'cast', column,
+    data_type}`, read from `query.types.ts` at v3.12.2. These tests assert the
+    emitted dict EXACTLY and assert where in the list it sits, because Insights
+    drops a key it does not recognise silently: a wrong shape fails at run time
+    in exactly the way the right shape was meant to prevent, while the
+    operations list still reads as if it were fixed.
     """
 
     SQL = ("SELECT `c`.`metric` AS `m`, AVG(`c`.`actual_value` * 1) AS `avg` "
@@ -372,46 +374,81 @@ class TestACoercedTextColumn(unittest.TestCase):
                "QPO Child": {"parent": "String", "metric": "String",
                              "actual_value": "String"}}
 
-    def reasons(self, sql=None, columns=None):
+    def operations(self, sql=None, columns=None):
         result = run(sql or self.SQL, columns=columns or self.COLUMNS)
-        self.assertFalse(result["supported"], "a query that crashes Insights was written")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def test_a_real_cast_operation_is_emitted(self):
+        """Asserted in FULL. An extra key is dropped by Insights without a
+        word, so "the right keys are present" would prove nothing."""
+        cast = [op for op in self.operations() if op["type"] == "cast"]
+        self.assertEqual(cast, [{
+            "type": "cast",
+            "column": {"type": "column", "column_name": "actual_value"},
+            "data_type": "Decimal",
+        }])
+
+    def test_the_cast_comes_before_the_summarize_that_reads_the_column(self):
+        """Order is the whole point: a cast after the aggregate is the state
+        that crashed. It sits after the filters too — `* 1` was scoped to the
+        aggregate in the SQL, not to the WHERE."""
+        self.assertEqual([op["type"] for op in self.operations()],
+                         ["source", "join", "cast", "summarize"])
+
+    def test_the_measure_no_longer_claims_the_conversion_by_itself(self):
+        """`data_type` on a measure describes the result. It reads Decimal
+        because the cast made it one — and `coerced_from` records that the
+        source field is text, which is the only place that is visible."""
+        measure = self.operations()[-1]["measures"][0]
+        self.assertEqual(measure["data_type"], "Decimal")
+        self.assertEqual(measure["coerced_from"], "String")
+
+    def test_the_SAME_column_without_the_cast_still_refuses(self):
+        """Nothing in the SQL asked for a conversion, so inventing one would
+        answer a different question — text rows would average in as zero."""
+        result = run(self.SQL.replace("`c`.`actual_value` * 1", "`c`.`actual_value`"),
+                     columns=self.COLUMNS)
+        self.assertFalse(result["supported"])
         self.assertEqual(result["operations"], [])
-        return " | ".join(result["reasons"])
+        self.assertIn("only a number can be AVG'd", " | ".join(result["reasons"]))
 
-    def test_it_refuses_rather_than_writing_a_query_that_crashes_on_open(self):
-        self.assertIn("only a number can be", self.reasons().replace(
-            "and the query casts it with", "and only a number can be"))
-
-    def test_the_refusal_names_the_run_time_error(self):
-        """A crash inside Insights does not point back here. The refusal has to
-        say what would happen and why."""
-        reasons = self.reasons()
-        self.assertIn(".mean() on a text column", reasons)
-        self.assertIn("`* 1`", reasons)
-
-    def test_the_refusal_names_the_real_fix(self):
-        reasons = self.reasons()
-        self.assertIn("Retype 'actual_value' as Float or Currency", reasons)
-        self.assertIn("silently zero", reasons)
-
-    def test_the_SAME_column_without_the_cast_refuses_differently(self):
-        """Two distinct situations: one is "you cannot average text", the other
-        is "you asked to cast and this cannot emit the cast yet"."""
-        reasons = self.reasons(self.SQL.replace("`c`.`actual_value` * 1",
-                                                "`c`.`actual_value`"))
-        self.assertIn("only a number can be AVG'd", reasons)
-        self.assertNotIn(".mean()", reasons)
-
-    def test_a_cast_on_a_column_that_is_already_numeric_still_converts(self):
-        """`x * 1` on a number is a no-op, and nothing here needs a cast."""
+    def test_a_cast_on_a_column_that_is_already_numeric_emits_no_cast(self):
+        """`x * 1` on a number is a no-op, and nothing here needs converting."""
         columns = {"QPO": {"name": "String"},
                    "QPO Child": {"parent": "String", "metric": "String",
                                  "actual_value": "Decimal"}}
-        result = run(self.SQL, columns=columns)
-        self.assertTrue(result["supported"], result["reasons"])
-        measure = result["operations"][-1]["measures"][0]
-        self.assertEqual(measure["data_type"], "Decimal")
-        self.assertNotIn("coerced_from", measure)
+        operations = self.operations(columns=columns)
+        self.assertEqual([op["type"] for op in operations],
+                         ["source", "join", "summarize"])
+        self.assertNotIn("coerced_from", operations[-1]["measures"][0])
+
+    def test_counting_a_coerced_text_column_emits_no_cast(self):
+        """COUNT works on text. Converting first would change what is counted,
+        and `cast` to Integer on a non-numeric row is a run-time failure for a
+        conversion nothing needed."""
+        operations = self.operations(
+            self.SQL.replace("AVG(`c`.`actual_value` * 1)",
+                             "COUNT(`c`.`actual_value` * 1)"))
+        self.assertEqual([op["type"] for op in operations],
+                         ["source", "join", "summarize"])
+        self.assertNotIn("coerced_from", operations[-1]["measures"][0])
+
+    def test_a_coerced_column_in_a_GROUP_BY_is_still_refused(self):
+        """ADR-009 allowed the cast for an AGGREGATE only. Grouping by
+        `col * 1` buckets by a value MySQL computes as 0 for every non-numeric
+        row, silently merging them."""
+        result = run(self.SQL.replace("GROUP BY `c`.`metric`",
+                                      "GROUP BY `c`.`actual_value` * 1"),
+                     columns=self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+        # The `* 1` used to be read off the front and the rest dropped, so this
+        # converted cleanly into a grouping by the raw column — a different
+        # question, answered without a word.
+        reasons = " | ".join(result["reasons"])
+        self.assertIn("* 1", reasons)
+        self.assertIn("not a plain column", reasons)
 
 
 class TestJoinRefusals(unittest.TestCase):
