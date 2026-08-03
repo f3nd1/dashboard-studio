@@ -102,6 +102,25 @@ Two narrowings that came out of it: `COUNT(col * 1)` emits **no** cast (counting
 
 **This rule exists only because the source field is mistyped.** If `actual_value` (or any other field this applies to) is corrected, revisit this rather than leaving it as permanent behaviour: an allowance for a specific defect should not outlive the defect. The narrow scope is deliberate — an *explicit* `* 1` in the SQL, as an aggregate argument only. Averaging a text column without that cast still refuses by name.
 
+## ADR-010 — Use `POST /api/dataset/native` to export GUI-built cards, and only that
+
+**Decision.** `scripts/metabase_export_sql.py` asks Metabase to compile a GUI-built card's MBQL to SQL, so all ~200 reports can be exported in one run instead of copied one at a time out of the View-SQL panel. Every other Metabase call in this project stays a GET.
+
+**This is ADR-006's own route, not a new one.** ADR-006 decided that a GUI card is handled *"by taking SQL that Metabase itself produced — a human copying it from the View-SQL panel today, or `POST /api/dataset/native` if that permission is ever granted"*. The reason it gave still holds and is the reason to prefer this over translating MBQL ourselves: taking Metabase's own compiled SQL keeps **Metabase** the authority on what a question computes. The alternative — skipping GUI cards — would export almost nothing, since every capture UCC has produced so far is compiled MBQL.
+
+**What the endpoint does and does not do.** It compiles and returns text. It does not execute, so no rows are read from the production database and no load is put on it, and it writes nothing to Metabase.
+
+**The risk is not the endpoint, it is its neighbours.** `POST /api/dataset` and `POST /api/card/:id/query` differ by one word and both EXECUTE against production. So the protection is structural rather than careful:
+
+- one `requests.post` in the file, asserted by count in the test;
+- its path checked **at the call site**, not merely stored in a variable, so redirecting it means deleting a line that says what it protects — a mutation that changes the constant makes the run refuse rather than post;
+- the test greps the source for the executing spellings and asserts the recorded calls are exactly one, to `/api/dataset/native`;
+- `compile_gui_cards = False` gives a GET-only run, tested, in which GUI cards are listed by name for manual export and nothing is POSTed at all.
+
+**A 403 is an answer, not a failure.** Metabase has no read-only key flag; whether the key's group may compile is a fact about the key. If it answers 403 the cards are listed under PERMISSION and the rest of the run still exports. The durable control on the Metabase side remains a SELECT-only database login, which is unaffected by any of this.
+
+**Not verified live from here.** This container has no route to Metabase, so the endpoint's behaviour is asserted against a recording stub and taken from Metabase's documented contract and ADR-006's reading of it. `card_limit` exists so the first real run can be a handful of cards rather than 200.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

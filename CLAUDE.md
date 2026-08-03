@@ -80,6 +80,8 @@ Do not lint `archive/`, `reference/` or `prototypes/`. The first is dead code by
 
 **`scripts/bulk_dry_run.py` answers "what should we fix first" and is the one diagnostic that also runs here.** Point it at a directory of exported `.sql` files, one per report; it runs each through `analyze_sql` (+ `operations_from_sql` on a site), creates nothing, and prints refusals **grouped by reason** with example report names. Two numbers per group: how many reports it blocks, and how many it is the *sole* blocker for — the second is the one to steer by, since a blocker that stops 40 reports but is never the only one unblocks nothing on its own. A refusal message it does not recognise is printed **verbatim under "matched no group"**, never filed under the nearest match; add new messages to the `groups` table in the script. Off a Bench it says "no SHAPE blocker" rather than "converts cleanly" and names what it could not check — the operator, type and column checks all need a site, so a shape-only pass overcounts, and the overcount looks like good news.
 
+**`scripts/metabase_export_sql.py` fills the folder the dry run reads.** One `.sql` per card, named `<card name>--<id>.sql` so a refusal leads back to the card; native cards verbatim, GUI-built cards compiled by Metabase (ADR-010). Archived cards skipped, template-tag cards counted so their refusals are expected, a 403 listed as a permission fact rather than failing the run. Live-site only, and `card_limit` is there so the first run can be five cards rather than 200.
+
 `scripts/insights_schema_check.py`, `scripts/metabase_table_inventory.py` and `scripts/numeric_fields_typed_as_text.py` are **read-only diagnostics that only run on the live site** — hand them to the user, don't try to run them here. The first compares Insights' own idea of a table's columns against the database's; the second reports which physical tables the Metabase cards read, for narrowing a database GRANT, and withholds its suggested GRANT block whenever anything is unresolved; the third sizes the `actual_value` problem across every DocType before anyone retypes a field, and **judges a field by the values it holds, never by its name** — `reference_no` is full of digits and holds no numbers, and `actual_value` is on no name list anyone would write. It separates wholly-numeric fields (retype cleanly) from mostly-numeric ones, which are the ones that matter: retyping those does not create the bad rows, it makes rows that silently coerce to 0 today visible.
 
 ## Architecture
@@ -131,9 +133,11 @@ What the converter needs and no more: the v3 DocType names, `clamp_title`, `_req
 
 `title` is a Frappe `Data` field — varchar(140) — and Frappe **aborts the insert** rather than trimming. `clamp_title` runs on the resolved name, so a caller-supplied title is clamped too.
 
-### Nothing here calls Metabase
+### The app calls Metabase nowhere; two hand-run scripts do
 
-The read-only HTTP client went to `archive/metabase_client_card_path.py` with the card path. If a Metabase call is ever needed again, read ADR-006/007 first: `POST /api/card/:id/query` and `POST /api/dataset` execute SQL against the connected production database and must never be added, and `POST /api/dataset/native` compiles MBQL to SQL without executing — real, and tempting.
+The read-only HTTP client went to `archive/metabase_client_card_path.py` with the card path, and nothing in `dashboard_studio/` makes an HTTP call at all. `scripts/metabase_table_inventory.py` (GET only) and `scripts/metabase_export_sql.py` are the only things that reach Metabase, both hand-run on the live site.
+
+**`POST /api/card/:id/query` and `POST /api/dataset` execute SQL against the connected production database and must never be added.** `POST /api/dataset/native` compiles MBQL to SQL *without* executing, and it is now used — by `metabase_export_sql.py` and nowhere else, which is what ADR-006 named as the route for a GUI-built card (*"or `POST /api/dataset/native` if that permission is ever granted"*) and what ADR-010 records. The two dangerous endpoints are one word from the safe one, so the protection is structural rather than careful: one `requests.post` in the file, its path checked at the call site, and a test that greps the source for the executing spellings and asserts the recorded calls. Reuse that shape or don't add the call.
 
 `integrations/metabase/card.py` stays, unused by the app: `scripts/metabase_table_inventory.py` imports `referenced_tables` from it, and it in turn imports `TABLE_PATTERN` from `parser.py`.
 
@@ -157,8 +161,8 @@ The read-only HTTP client went to `archive/metabase_client_card_path.py` with th
 
 ## Security boundaries
 
-- Nothing in the app talks to Metabase at all. `scripts/metabase_table_inventory.py` is the only thing that does, it is hand-run on the live site, and it is GETs only.
-- **The Metabase key lives in `site_config.json`** (`metabase_url`, `metabase_api_key`) — per-site, outside this repo. Only `scripts/metabase_table_inventory.py` reads it now, server-side. Never return it to the browser, never log it, never echo it in a refusal — including the 401 path, where "helpful" context puts it into `_server_messages` and into a user's browser. If a Metabase call is ever added back to the app, that rule comes with it.
+- Nothing in the app talks to Metabase at all. Two hand-run scripts do: `scripts/metabase_table_inventory.py` (GET only) and `scripts/metabase_export_sql.py` (GET, plus `POST /api/dataset/native`, which compiles and does not execute — ADR-010). Neither writes anything to Metabase.
+- **The Metabase key lives in `site_config.json`** (`metabase_url`, `metabase_api_key`) — per-site, outside this repo. Only those two scripts read it, server-side. Never return it to the browser, never log it, never echo it in a refusal — including the 401 path, where "helpful" context puts it into `_server_messages` and into a user's browser. If a Metabase call is ever added back to the app, that rule comes with it.
 - **A key's group is a requirement someone has to meet, not a fact you can assert.** Metabase has no read-only key flag; only the group restricts it. A key in Administrators — or any group with `create-queries: query-builder-and-native` — is unrestricted on the Metabase side, making our GET-only client the *only* protection. Metabase's permission UI has been observed **not** to gate `/api/dataset/native` on this instance, so the durable control is a SELECT-only database login.
 - `fixtures/role.json` creates `Dashboard Studio Editor` — every `frappe.only_for` depends on it. Don't remove it.
 - No personal student data in fixtures or tests.
