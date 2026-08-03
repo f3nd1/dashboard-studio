@@ -112,4 +112,12 @@ Two narrowings that came out of it: `COUNT(col * 1)` emits **no** cast (counting
 
 One judgement call worth naming: Metabase writes `` `col` * 1 `` for a custom numeric field, and the lift treats that as the column. `x * 1` IS `x` for a number, but MySQL coerces `'abc' * 1` to 0, and the column's type is not known at that point — so it is allowed as an aggregate argument and **refused in a GROUP BY**, where grouping by a coerced zero would not be grouping by the column.
 
-Still unsupported, unchanged: a wrapper that filters or aggregates, an outer WHERE alongside an inner one, the same DocType joined twice, computed columns in the SELECT list, and a row limit other than Metabase's own cap.
+Still unsupported, unchanged: a wrapper that filters, an outer WHERE alongside an inner one, the same DocType joined twice, computed columns in the SELECT list, and a row limit other than Metabase's own cap.
+
+**A third wrapper rule (2026-08-03): the same question compiled the other way up.** Metabase also emits an already-complete aggregating query wrapped in an outer projection that only re-selects its output columns by name. `lift_renaming_wrapper` correctly declines it — the inner GROUP BY stops the lift, and there is no outer aggregate to fold down — so it refused as a subquery. `drop_passthrough_wrapper` removes it on a proof of its own: the outer carries no clause at all, renames nothing, and its column set equals the set the inner produces, so it returns exactly the inner's rows and exactly its columns. Reported capture at `dashboard_studio/tests/fixtures/aggregated_then_reselected.sql`.
+
+The rewrite is textual and does **not** require the inner query to convert first. That is deliberate: the removal is provable on its own, and a query whose inner half is unsupported then refuses naming *that*, rather than naming `__mb_source`.
+
+It also unblocked a case the suite had written down as unsupported — `SELECT `w`.`n` FROM ( SELECT COUNT(*) AS `n` FROM `tabX` ) AS `w`` used to refuse. Refusing it was the conservative answer, not the correct one.
+
+**Known and not fixed: nothing strips SQL comments.** A comment line inside the outer SELECT list stops the wrapper being read, and a comment mentioning a clause name is read as that clause. It refuses rather than converting wrongly, and Metabase's compiled SQL carries no comments, so the cost of leaving it is a puzzling refusal on hand-annotated SQL — not a chart with the wrong number in it. `TestACommentIsNotStripped` records it where it will be found again.

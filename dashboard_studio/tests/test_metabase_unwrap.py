@@ -19,7 +19,9 @@ import pathlib
 import unittest
 
 from dashboard_studio.integrations.metabase.parser import (
+    _produced_columns,
     analyze_sql,
+    drop_passthrough_wrapper,
     lift_renaming_wrapper,
     unwrap_derived_tables,
 )
@@ -30,6 +32,17 @@ REAL = (pathlib.Path(__file__).resolve().parents[2]
 # The second real capture: an AGGREGATING Metabase question, which wraps its
 # joins instead of leaving them at the top level.
 QPO = pathlib.Path(__file__).resolve().parent / "fixtures" / "quality_performance_outcomes.sql"
+# The third: the same question compiled the other way up — the inner query is
+# complete and the outer wrapper only re-selects its output columns. Reported
+# 2026-08-03; the joined derived table was elided as `( ... )` in the report and
+# is filled in from QPO above, which attaches the same child table under the
+# same alias on the same condition.
+#
+# That file carries NO comment header, unlike its siblings, and deliberately:
+# nothing strips SQL comments, so a comment line lands in the outer SELECT list
+# and stops this rule reading it. See TestACommentIsNotStripped below.
+RESELECTED = (pathlib.Path(__file__).resolve().parent / "fixtures"
+              / "aggregated_then_reselected.sql")
 
 # The inner wrapper, exactly as Metabase writes it.
 INNER = "( select * from `tabStudent Applicant` ) AS `__mb_source`"
@@ -340,8 +353,14 @@ class TestTheRealReportEndToEnd(unittest.TestCase):
 
 
 class TestWhatIsNotLifted(unittest.TestCase):
-    """Every bail-out leaves the statement exactly as it was, so the subquery
-    check downstream turns it into a named refusal. Nothing is half-rewritten."""
+    """Every bail-out leaves the statement exactly as it was. Nothing is
+    half-rewritten.
+
+    What happens NEXT is a separate claim, and since drop_passthrough_wrapper
+    arrived it is not always "refused as a subquery": a wrapper lift declines
+    may still be removable by that other rule, when the outer does nothing at
+    all. The two cases where that is so say so by name below.
+    """
 
     WRAPPED = ("SELECT `w`.`m` AS `m`, COUNT(*) AS `n` FROM ( "
                "SELECT `c`.`metric` AS `m` FROM `tabQPO` "
@@ -362,9 +381,16 @@ class TestWhatIsNotLifted(unittest.TestCase):
         self.assertNotEqual(lift_renaming_wrapper(sql)[0], sql)
         self.assertTrue(analyze_sql(sql)["supported"], analyze_sql(sql)["reasons"])
 
-    def test_a_wrapper_that_aggregates_is_not_lifted(self):
-        self.assert_not_lifted(
-            "SELECT `w`.`n` FROM ( SELECT COUNT(*) AS `n` FROM `tabQPO` ) AS `w`")
+    def test_a_wrapper_that_aggregates_is_not_lifted_but_IS_dropped(self):
+        """There is nothing to lift — the inner already aggregates. The outer
+        does nothing at all, though, so the other rule removes it and the query
+        converts. This used to refuse, and refusing it was the conservative
+        answer rather than the correct one."""
+        sql = "SELECT `w`.`n` FROM ( SELECT COUNT(*) AS `n` FROM `tabQPO` ) AS `w`"
+        self.assertEqual(lift_renaming_wrapper(sql)[0], sql)
+        self.assertEqual(drop_passthrough_wrapper(sql).split(),
+                         "SELECT COUNT(*) AS `n` FROM `tabQPO`".split())
+        self.assertTrue(analyze_sql(sql)["supported"], analyze_sql(sql)["reasons"])
 
     def test_a_wrapper_that_groups_is_not_lifted(self):
         self.assert_not_lifted(self.WRAPPED.format(extra="GROUP BY `c`.`metric` "))
@@ -379,10 +405,18 @@ class TestWhatIsNotLifted(unittest.TestCase):
             "GROUP BY `w`.`m`", "WHERE `w`.`m` = 'x' GROUP BY `w`.`m`"))
 
     def test_a_computed_item_in_the_wrapper_is_not_lifted(self):
-        """`a - b AS x` is not a rename. Its value is not any column's."""
-        self.assert_not_lifted(
-            "SELECT `w`.`d` FROM ( SELECT `c`.`a` - `c`.`b` AS `d` FROM `tabQPO` "
-            "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` ) AS `w`")
+        """`a - b AS x` is not a rename. Its value is not any column's.
+
+        The outer here does nothing, so the wrapper does come off — and the
+        flattened query then refuses NAMING the computed column, which is the
+        better refusal of the two. What must not happen is the computed column
+        being carried through in silence."""
+        sql = ("SELECT `w`.`d` FROM ( SELECT `c`.`a` - `c`.`b` AS `d` FROM `tabQPO` "
+               "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` ) AS `w`")
+        self.assertEqual(lift_renaming_wrapper(sql)[0], sql)
+        result = analyze_sql(sql)
+        self.assertFalse(result["supported"])
+        self.assertIn("the SELECT list computes 'd'", " | ".join(result["reasons"]))
 
     def test_an_outer_reference_the_wrapper_does_not_define_is_not_lifted(self):
         self.assert_not_lifted(
@@ -528,6 +562,196 @@ class TestComputedSelectColumns(unittest.TestCase):
     def test_select_star_is_fine(self):
         result = analyze_sql("SELECT * FROM `tabStudent Applicant`")
         self.assertTrue(result["supported"], result["reasons"])
+
+
+class TestDropPassthroughWrapper(unittest.TestCase):
+    """The third rewrite: an outer wrapper that re-selects a finished query.
+
+    Its proof is that the outer changes nothing — no clause of its own, no
+    rename, no column dropped — so it returns exactly the inner query's rows and
+    exactly its columns. Every test below removes one part of that proof and
+    checks the wrapper survives, because a wrapper removed on a proof that does
+    not hold is a query that answers something else and still runs.
+    """
+
+    # The shape, minus Metabase's verbosity: the inner is a complete query.
+    INNER = ("SELECT `c`.`year` AS `y`, AVG(`c`.`value`) AS `avg` "
+             "FROM `tabQPO` LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` "
+             "WHERE `tabQPO`.`name` = 'Index' GROUP BY `c`.`year`")
+    WRAPPED = ("SELECT `w`.`y` AS `y`, `w`.`avg` AS `avg` FROM ( {inner} ) AS `w`{tail}")
+
+    def wrap(self, inner=None, tail="", head=None):
+        sql = self.WRAPPED.format(inner=inner or self.INNER, tail=tail)
+        return sql if head is None else head + " FROM ( " + (inner or self.INNER) + " ) AS `w`"
+
+    def assert_dropped(self, sql):
+        self.assertEqual(drop_passthrough_wrapper(sql).split(),
+                         self.INNER.split(),
+                         "the wrapper was not removed, or something else was")
+
+    def assert_kept(self, sql):
+        self.assertEqual(drop_passthrough_wrapper(sql), sql,
+                         "the wrapper was removed on a proof that does not hold")
+        result = analyze_sql(sql)
+        self.assertFalse(result["supported"], "an unprovable wrapper converted")
+        self.assertIn("subquery", " | ".join(result["reasons"]))
+
+    def test_the_shape_it_IS_meant_to_drop(self):
+        """A guard on the guard: if this stopped dropping, every test below
+        would pass for the wrong reason."""
+        self.assert_dropped(self.wrap())
+        self.assertTrue(analyze_sql(self.wrap())["supported"],
+                        analyze_sql(self.wrap())["reasons"])
+
+    def test_an_outer_WHERE_keeps_the_wrapper(self):
+        """It would have to be ANDed with the inner one, over columns the
+        wrapper renamed."""
+        self.assert_kept(self.wrap(tail=" WHERE `w`.`avg` > 5"))
+
+    def test_an_outer_LIMIT_keeps_the_wrapper(self):
+        """Dropping it would count every row instead of that many — the fault a
+        silently dropped LIMIT already was."""
+        self.assert_kept(self.wrap(tail=" LIMIT 10"))
+
+    def test_an_outer_GROUP_BY_keeps_the_wrapper(self):
+        """That is a second aggregation over an aggregate."""
+        self.assert_kept(self.wrap(tail=" GROUP BY `w`.`y`"))
+
+    def test_an_outer_ORDER_BY_keeps_the_wrapper(self):
+        """Ordering changes nothing about which rows come back, so this one is
+        conservative rather than necessary — but the rule is "the outer does
+        nothing at all", and a rule with an exception in it is not that rule.
+        Metabase writes its ORDER BY inside the wrapper anyway."""
+        self.assert_kept(self.wrap(tail=" ORDER BY `w`.`y` ASC"))
+
+    def test_a_renaming_outer_keeps_the_wrapper(self):
+        """`w`.`y` AS `year` is a rename. Nothing downstream reads these labels
+        today, but this rule's claim is that the outer does nothing, and a
+        rename is something."""
+        self.assert_kept("SELECT `w`.`y` AS `year`, `w`.`avg` AS `avg` "
+                         "FROM ( " + self.INNER + " ) AS `w`")
+
+    def test_an_outer_that_drops_a_column_keeps_the_wrapper(self):
+        """A narrowing projection answers a smaller question. Removing it would
+        put a column back into the result, silently."""
+        self.assert_kept("SELECT `w`.`avg` AS `avg` FROM ( " + self.INNER + " ) AS `w`")
+
+    def test_an_outer_that_aggregates_is_not_this_rule(self):
+        """That is lift_renaming_wrapper's shape, and the two must not overlap:
+        this one leaves it alone entirely."""
+        sql = ("SELECT `w`.`y` AS `y`, AVG(`w`.`v`) AS `avg` FROM ( "
+               "SELECT `c`.`year` AS `y`, `c`.`value` AS `v` FROM `tabQPO` "
+               "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` "
+               ") AS `w` GROUP BY `w`.`y`")
+        self.assertEqual(drop_passthrough_wrapper(sql), sql)
+        # …and the query still converts, through the OTHER rule.
+        self.assertTrue(analyze_sql(sql)["supported"], analyze_sql(sql)["reasons"])
+
+    def test_an_item_qualified_by_something_else_keeps_the_wrapper(self):
+        """A column from anywhere but the wrapper is one this rule has proved
+        nothing about."""
+        self.assert_kept("SELECT `w`.`y` AS `y`, `other`.`avg` AS `avg` "
+                         "FROM ( " + self.INNER + " ) AS `w`")
+
+    def test_an_inner_item_with_no_readable_name_keeps_the_wrapper(self):
+        """`COUNT(*)` with no AS: what the database calls that column is not
+        something to guess, so the two lists cannot be compared."""
+        inner = ("SELECT `c`.`year` AS `y`, COUNT(*) FROM `tabQPO` "
+                 "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` "
+                 "GROUP BY `c`.`year`")
+        self.assert_kept("SELECT `w`.`y` AS `y`, `w`.`n` AS `n` FROM ( "
+                         + inner + " ) AS `w`")
+        # Asserted on the helper directly, because today the comparison above
+        # would reject this case anyway: an outer item may only be spelled
+        # [A-Za-z_][\w ]*, so it can never name a column called `COUNT(*)`.
+        # The contract is what matters — the helper must say "I do not know"
+        # rather than invent a name — and it is what a later rule reading this
+        # function, or a looser outer-item pattern, would rely on.
+        self.assertIsNone(_produced_columns(inner))
+        self.assertEqual(_produced_columns(self.INNER), ["y", "avg"])
+
+    def test_a_bare_column_names_itself(self):
+        """`SELECT `c`.`year`` with no AS produces a column called `year`, and
+        that IS readable — so a wrapper re-selecting it drops."""
+        inner = ("SELECT `c`.`year`, COUNT(*) AS `n` FROM `tabQPO` "
+                 "LEFT JOIN `tabQPO Child` c ON `tabQPO`.`name` = c.`parent` "
+                 "GROUP BY `c`.`year`")
+        sql = "SELECT `w`.`year` AS `year`, `w`.`n` AS `n` FROM ( " + inner + " ) AS `w`"
+        self.assertEqual(drop_passthrough_wrapper(sql).split(), inner.split())
+
+    def test_an_item_without_AS_at_all_is_still_a_passthrough(self):
+        """`SELECT `w`.`y`` is the same thing as `SELECT `w`.`y` AS `y``."""
+        self.assert_dropped("SELECT `w`.`y`, `w`.`avg` FROM ( " + self.INNER + " ) AS `w`")
+
+    def test_junk_is_not_rewritten(self):
+        for sql in ("", "SELECT 1", "SELECT `w`.`y` FROM ( SELECT", "not sql at all"):
+            self.assertEqual(drop_passthrough_wrapper(sql), sql)
+        with self.assertRaises(TypeError):
+            drop_passthrough_wrapper(None)
+
+
+class TestTheReselectedReportEndToEnd(unittest.TestCase):
+    """The real reported query, whole: an outer passthrough over an inner that
+    joins, filters, groups and averages on its own."""
+
+    COLUMNS = {
+        "Quality Performance Outcomes": {"name": "String"},
+        "Quality Performance Outcomes Performance Childtable":
+            {"name": "String", "parent": "String", "year": "String", "value": "Decimal"},
+    }
+
+    def test_it_converts_in_full(self):
+        result = operations_from_sql(analyze_sql(RESELECTED.read_text()), self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["operations"], [
+            {"type": "source",
+             "table": {"type": "table", "data_source": "Site DB",
+                       "table_name": "tabQuality Performance Outcomes"}},
+            {"type": "join", "join_type": "left",
+             "table": {"type": "table", "data_source": "Site DB",
+                       "table_name": "tabQuality Performance Outcomes Performance Childtable"},
+             "select_columns": [{"type": "column", "column_name": "parent"},
+                                {"type": "column", "column_name": "value"},
+                                {"type": "column", "column_name": "year"}],
+             "join_condition": {"left_column": {"type": "column", "column_name": "name"},
+                                "right_column": {"type": "column", "column_name": "parent"}}},
+            {"type": "filter", "column": {"type": "column", "column_name": "name"},
+             "operator": "=", "value": "Student Academic Performance Index (Overall)"},
+            {"type": "summarize",
+             "measures": [{"measure_name": "avg_of_value", "column_name": "value",
+                           "data_type": "Decimal", "aggregation": "avg"}],
+             "dimensions": [{"dimension_name": "year", "column_name": "year",
+                             "data_type": "String"}]},
+        ])
+
+    def test_the_wrappers_alias_reaches_nothing(self):
+        """`__mb_source` and the humanized `TabQuality …` alias are Metabase's
+        own names. Either one arriving in an operation is a wrapper that was
+        removed on paper and not in fact."""
+        text = repr(operations_from_sql(analyze_sql(RESELECTED.read_text()),
+                                        self.COLUMNS)["operations"])
+        self.assertNotIn("__mb_source", text)
+        self.assertNotIn("d700d9c7", text)
+        self.assertNotIn("70767e69", text)
+
+
+class TestACommentIsNotStripped(unittest.TestCase):
+    """Known limitation, recorded where it will be found again.
+
+    Nothing strips SQL comments. A comment line inside the outer SELECT list is
+    read as part of an item, so a query that would otherwise convert refuses
+    instead. It REFUSES — it does not convert wrongly — which is why this is
+    recorded rather than fixed: Metabase's compiled SQL carries no comments, and
+    the cost of being wrong here is a person seeing a puzzling refusal, not a
+    chart with the wrong number in it.
+    """
+
+    def test_a_comment_makes_the_reselected_shape_refuse(self):
+        commented = "-- a note somebody typed\n" + RESELECTED.read_text()
+        self.assertFalse(analyze_sql(commented)["supported"])
+
+    def test_and_the_same_query_without_it_converts(self):
+        self.assertTrue(analyze_sql(RESELECTED.read_text())["supported"])
 
 
 if __name__ == "__main__":

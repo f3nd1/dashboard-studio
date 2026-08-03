@@ -130,7 +130,8 @@ _PROJECTED = re.compile(
     r"^(?:(?:`[^`]+`|\w+)\.)?`?([A-Za-z_][\w ]*?)`?(?:\s+AS\s+`?([A-Za-z_][\w ]*?)`?)?$",
     re.IGNORECASE)
 _AGGREGATE_ITEM = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\(.*\)$", re.IGNORECASE | re.DOTALL)
-_TRAILING_ALIAS = re.compile(r"\s+AS\s+(?:`[^`]+`|\w+)$", re.IGNORECASE)
+_TRAILING_ALIAS = re.compile(r"\s+AS\s+(?:`(?P<alias_q>[^`]+)`|(?P<alias>\w+))$",
+                             re.IGNORECASE)
 
 # Metabase appends its own absolute row cap to every question it compiles — the
 # real sample carries LIMIT 1048575 on a report nobody limited. That exact value
@@ -289,6 +290,113 @@ def unwrap_derived_tables(sql: str) -> str:
             break
         sql = rewritten
     return sql
+
+
+# --------------------------------------------------------------------------
+# Metabase's OTHER outer wrapper: "re-select a question that is already finished"
+#
+# When the question aggregates and Metabase does not need to add anything, it
+# still wraps the compiled query and re-selects its columns by name:
+#
+#   SELECT `__mb_source`.`Child_d700d9c7` AS `Child_d700d9c7`,
+#          `__mb_source`.`avg`            AS `avg`
+#   FROM ( SELECT `Child_70767e69`.`year` AS `Child_d700d9c7`,
+#                 AVG(`Child_70767e69`.`value`) AS `avg`
+#          FROM `tabParent` LEFT JOIN … WHERE … GROUP BY … ORDER BY … )
+#        AS `__mb_source`
+#
+# This is the MIRROR of lift_renaming_wrapper, not the same rule. There the
+# outer aggregates and the inner does not, so the aggregate is folded down onto
+# the inner. Here the inner is a complete query — its own join, WHERE, GROUP BY
+# and aggregate — and the outer does nothing at all, so it is REMOVED rather
+# than lifted. Neither rule can fire on the other's shape: an aggregate is not
+# a projection item, and an inner GROUP BY stops the lift.
+#
+# What makes the removal provable, and each part is checked below:
+#   - the outer has no WHERE, GROUP BY, ORDER BY, LIMIT or second table (there
+#     is nothing after the wrapper's alias at all), so it changes no rows;
+#   - every item is one of the wrapper's own columns under its own name, so it
+#     renames nothing;
+#   - the set of items equals the set of columns the inner produces, so it
+#     drops no column — a narrowing projection would answer a smaller question,
+#     which is the fault a dropped computed column and a dropped LIMIT were.
+# Together: the outer returns exactly the inner's rows and exactly its columns.
+# --------------------------------------------------------------------------
+
+
+def drop_passthrough_wrapper(sql: str) -> str:
+    """Remove an outer wrapper that only re-selects the finished query inside it.
+
+    Returns the statement unchanged when any part of the proof above fails, so
+    the subquery check downstream turns it into a named refusal.
+    """
+    if not isinstance(sql, str):
+        raise TypeError("sql must be a string")
+    match = _FROM_PAREN.search(sql)
+    if not match:
+        return sql
+    opened = match.end() - 1
+    closed = _matching_paren(sql, opened)
+    if closed < 0:
+        return sql
+    head, inner, after = sql[:match.start()], sql[opened + 1:closed], sql[closed + 1:]
+    named = _WRAPPER_ALIAS.match(after)
+    if not named:
+        return sql
+    wrapper = named.group(1) or named.group(2)
+    # Nothing may follow the wrapper. A WHERE, GROUP BY, ORDER BY or LIMIT out
+    # here is the outer query doing something, and this rule holds only while it
+    # does nothing whatsoever.
+    if after[named.end():].strip():
+        return sql
+    selected = re.match(r"\s*SELECT\b(.+)$", head, re.IGNORECASE | re.DOTALL)
+    if not selected:
+        return sql
+    # `<wrapper>`.`col` [AS `col`] and nothing else. Qualified by THIS wrapper:
+    # an item qualified by anything else is a column from somewhere this rule
+    # has not proved anything about.
+    item_pattern = re.compile(
+        r"^(?:`" + re.escape(wrapper) + r"`|" + re.escape(wrapper) + r")\."
+        r"`?(?P<column>[A-Za-z_][\w ]*?)`?"
+        r"(?:\s+AS\s+`?(?P<alias>[A-Za-z_][\w ]*?)`?)?$", re.IGNORECASE)
+    taken = []
+    for item in _split_items(selected.group(1)):
+        found = item_pattern.match(" ".join(item.split()))
+        if not found:
+            return sql
+        alias = (found.group("alias") or "").strip()
+        if alias and alias != found.group("column").strip():
+            return sql
+        taken.append(found.group("column").strip())
+    produced = _produced_columns(inner)
+    if produced is None or sorted(taken) != sorted(produced):
+        return sql
+    return inner.strip()
+
+
+def _produced_columns(inner: str) -> list[str] | None:
+    """The names a query's SELECT list hands out, or None if one cannot be read.
+
+    None is not "no columns" — it means the caller has not proved what comes
+    back and must leave the statement alone.
+    """
+    match = _SELECT_FROM.match(" ".join(inner.split()))
+    if not match:
+        return None
+    names = []
+    for item in _split_items(match.group(1)):
+        text = " ".join(item.split())
+        aliased = _TRAILING_ALIAS.search(text)
+        if aliased:
+            names.append((aliased.group("alias_q") or aliased.group("alias")).strip())
+            continue
+        # No AS: only a bare column names itself. An expression does not, and
+        # guessing what the database would call it is how a column goes missing.
+        plain = _QUALIFIED.match(text)
+        if not plain:
+            return None
+        names.append(plain.group("column").strip())
+    return names
 
 
 # --------------------------------------------------------------------------
@@ -680,12 +788,17 @@ def analyze_sql(sql: str) -> dict:
     # reads the query somebody actually asked for rather than the scaffolding
     # Metabase compiled around it. Only provable identities are removed; a
     # wrapper that filters or aggregates survives and is refused as a subquery.
-    # Two rewrites, in order. unwrap_ replaces a derived table that IS its
-    # table; lift_ folds away a wrapper that only RENAMES the query inside it.
-    # The second needs the first to have run, because a wrapper whose joins are
-    # still wrapped has nothing readable to lift onto.
+    # Three rewrites, in order, and each proves a different identity.
+    # unwrap_ replaces a derived table that IS its table. drop_ removes an outer
+    # wrapper that does nothing but re-select the finished query inside it.
+    # lift_ folds an outer AGGREGATE onto the query a wrapper only renames.
+    # Both of the last two need unwrap_ to have run, because a wrapper whose
+    # joins are still wrapped has nothing readable inside it; and drop_ runs
+    # before lift_ so that a wrapper it removes cannot be mistaken for one to
+    # lift onto. They cannot both fire on the same statement: drop_ requires an
+    # outer that does nothing, lift_ an outer that aggregates.
     statement, lift_reasons = lift_renaming_wrapper(
-        unwrap_derived_tables(sql.strip().rstrip(";")))
+        drop_passthrough_wrapper(unwrap_derived_tables(sql.strip().rstrip(";"))))
     reasons.extend(lift_reasons)
 
     # Subquery / nested SELECT: more than one SELECT keyword.
