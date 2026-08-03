@@ -70,9 +70,15 @@ ruff check dashboard_studio scripts
 
 # Repo checks (required files, JSON/Python syntax, secret scan) — also: make validate
 python scripts/validate_repository.py
+
+# Where is the effort worth spending? Every exported report's SQL, refusals
+# grouped by reason. Creates nothing. Deeper on a site (see below).
+python scripts/bulk_dry_run.py path/to/exported_sql/
 ```
 
 Do not lint `archive/`, `reference/` or `prototypes/`. The first is dead code by definition; the others are Frappe Server Scripts and UX references where `frappe` is an injected global (ruff reports hundreds of false `F821`).
+
+**`scripts/bulk_dry_run.py` answers "what should we fix first" and is the one diagnostic that also runs here.** Point it at a directory of exported `.sql` files, one per report; it runs each through `analyze_sql` (+ `operations_from_sql` on a site), creates nothing, and prints refusals **grouped by reason** with example report names. Two numbers per group: how many reports it blocks, and how many it is the *sole* blocker for — the second is the one to steer by, since a blocker that stops 40 reports but is never the only one unblocks nothing on its own. A refusal message it does not recognise is printed **verbatim under "matched no group"**, never filed under the nearest match; add new messages to the `groups` table in the script. Off a Bench it says "no SHAPE blocker" rather than "converts cleanly" and names what it could not check — the operator, type and column checks all need a site, so a shape-only pass overcounts, and the overcount looks like good news.
 
 `scripts/insights_schema_check.py`, `scripts/metabase_table_inventory.py` and `scripts/numeric_fields_typed_as_text.py` are **read-only diagnostics that only run on the live site** — hand them to the user, don't try to run them here. The first compares Insights' own idea of a table's columns against the database's; the second reports which physical tables the Metabase cards read, for narrowing a database GRANT, and withholds its suggested GRANT block whenever anything is unresolved; the third sizes the `actual_value` problem across every DocType before anyone retypes a field, and **judges a field by the values it holds, never by its name** — `reference_no` is full of digits and holds no numbers, and `actual_value` is on no name list anyone would write. It separates wholly-numeric fields (retype cleanly) from mostly-numeric ones, which are the ones that matter: retyping those does not create the bad rows, it makes rows that silently coerce to 0 today visible.
 
