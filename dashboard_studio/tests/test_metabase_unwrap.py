@@ -133,6 +133,58 @@ class TestWhatIsNotUnwrapped(unittest.TestCase):
             "SELECT * FROM `tabStudent Applicant` UNION SELECT * FROM `tabPurchase Order`")
 
 
+class TestOnlyWhereATableBelongs(unittest.TestCase):
+    """A derived table may be swapped for its table only after FROM or JOIN.
+
+    "This subquery returns exactly the rows of `tabX`" is a fact about a ROW
+    SOURCE. Parentheses elsewhere mean something else, and the swap produced
+    SQL that looked fine and answered a different question — the fault this
+    project exists to refuse rather than ship.
+    """
+
+    SCALAR = ("SELECT COUNT(*) AS `n` FROM `tabQPO` "
+              "WHERE `tabQPO`.`name` = ( SELECT `name` FROM `tabQPO Child` )")
+
+    def test_a_scalar_subquery_in_a_WHERE_is_not_a_table(self):
+        """The one that made this a bug rather than an oddity: this converted
+        CLEANLY into a filter comparing `name` against the literal text
+        "`tabQPO Child`", so the report returned no rows and said nothing."""
+        self.assertEqual(unwrap_derived_tables(self.SCALAR), self.SCALAR)
+        result = analyze_sql(self.SCALAR)
+        self.assertFalse(result["supported"], "a query that returns no rows converted")
+        self.assertIn("subquery", " | ".join(result["reasons"]))
+
+    def test_the_filter_never_reaches_the_operations(self):
+        """Asserted separately from the refusal: what mattered was not that a
+        reason was missing, it was that a filter carrying a table name as its
+        VALUE was written into a query somebody would then open."""
+        columns = {"QPO": {"name": "String"}, "QPO Child": {"name": "String"}}
+        result = operations_from_sql(analyze_sql(self.SCALAR), columns)
+        self.assertEqual(result["operations"], [])
+
+    def test_an_IN_subquery_is_not_a_table_either(self):
+        sql = ("SELECT COUNT(*) AS `n` FROM `tabQPO` "
+               "WHERE `tabQPO`.`name` IN ( SELECT `parent` FROM `tabQPO Child` )")
+        self.assertEqual(unwrap_derived_tables(sql), sql)
+        self.assertFalse(analyze_sql(sql)["supported"])
+
+    def test_a_subquery_in_the_SELECT_list_is_not_a_table(self):
+        sql = ("SELECT ( SELECT `name` FROM `tabQPO Child` ) AS `first`, COUNT(*) AS `n` "
+               "FROM `tabQPO`")
+        self.assertEqual(unwrap_derived_tables(sql), sql)
+        self.assertFalse(analyze_sql(sql)["supported"])
+
+    def test_after_FROM_and_after_JOIN_it_still_flattens(self):
+        """A guard on the guard: if the position check were too strict, every
+        test above would pass while the rule did nothing at all."""
+        self.assertEqual(
+            unwrap_derived_tables("FROM ( select * from `tabStudent Applicant` ) AS `w`"),
+            "FROM `tabStudent Applicant` AS `w`")
+        self.assertEqual(
+            unwrap_derived_tables("LEFT JOIN ( select * from `tabPurchase Order` ) AS `p`"),
+            "LEFT JOIN `tabPurchase Order` AS `p`")
+
+
 class TestTheRealMetabaseQuery(unittest.TestCase):
     """The file in reference/ — Metabase's compiled output for a real report."""
 

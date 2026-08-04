@@ -227,6 +227,11 @@ def _split_items(text: str) -> list[str]:
     return [item.strip() for item in items if item.strip()]
 
 
+# A derived table may only be unwrapped where a table is what the syntax
+# expects. See the note in _unwrap_once for what happens otherwise.
+_TABLE_POSITION = re.compile(r"\b(?:FROM|JOIN)\s*$", re.IGNORECASE)
+
+
 def _passthrough_table(inner: str) -> str | None:
     """The single table a pure-projection subquery reads, or None.
 
@@ -259,7 +264,20 @@ def _unwrap_once(sql: str) -> str:
         if char in "`'\"":
             i = _skip_quoted(sql, i)
             continue
-        if char != "(":
+        # Only where a TABLE belongs. "This derived table returns exactly the
+        # rows of `tabX`" is a fact about a row source, and substituting the
+        # table name is only meaningful after FROM or JOIN. Anywhere else the
+        # parentheses mean something different, and the swap is a category
+        # error that produces valid-looking SQL:
+        #
+        #   WHERE `name` = ( SELECT `name` FROM `tabChild` )
+        #     ->  WHERE `name` = `tabChild`
+        #
+        # which converted CLEANLY into a filter comparing a column against the
+        # literal text "`tabChild`" — a report that returns no rows instead of
+        # refusing. Every check downstream was happy, because by then the
+        # subquery was gone.
+        if char != "(" or not _TABLE_POSITION.search(sql[:i]):
             i += 1
             continue
         close = _matching_paren(sql, i)
