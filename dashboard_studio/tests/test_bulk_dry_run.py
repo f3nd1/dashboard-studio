@@ -11,6 +11,7 @@ reporting reports as converting when the column and operator checks never ran.
 
 import contextlib
 import io
+import os
 import pathlib
 import re
 import sys
@@ -43,14 +44,26 @@ TABLES = {"Student Applicant": UNCONDITIONAL + ["status", "academic_year"]}
 
 
 class _Base(unittest.TestCase):
-    def run_script(self, files, namespace_split=True, frappe=None, argv=None):
+    def run_script(self, files, namespace_split=True, frappe=None, argv=None,
+                   raw_argv=None, env=None, extra_dirs=()):
         """Write `files` to a temp directory and run the real script over it."""
         saved_modules = {k: v for k, v in sys.modules.items()
                          if k == "frappe" or k.startswith("dashboard_studio.")}
         saved_argv = list(sys.argv)
-        with tempfile.TemporaryDirectory() as directory:
+        saved_env = dict(os.environ)
+        with tempfile.TemporaryDirectory() as root:
+            # The layout of a real bench: the sites directory holds BOTH the
+            # export folder and the site folders, one of which is named in
+            # bench's own argv.
+            directory = str(pathlib.Path(root) / "sql")
+            pathlib.Path(directory).mkdir()
             for name, sql in files.items():
                 (pathlib.Path(directory) / f"{name}.sql").write_text(sql)
+            for name in extra_dirs:
+                (pathlib.Path(root) / name).mkdir()
+                (pathlib.Path(root) / name / "stray.sql").write_text(CLEAN)
+            os.environ.update({k: v.replace("<DIR>", directory)
+                               for k, v in (env or {}).items()})
             if frappe is not None:
                 for key in list(sys.modules):
                     if key == "frappe" or key.startswith("dashboard_studio."):
@@ -61,7 +74,13 @@ class _Base(unittest.TestCase):
                 # frappe has to be absent rather than left over from another test.
                 sys.modules.pop("frappe", None)
                 sys.modules.pop("dashboard_studio.api.convert", None)
-            sys.argv = ["bulk_dry_run.py"] + (argv if argv is not None else [directory])
+            sys.argv = (raw_argv if raw_argv is not None
+                        else ["bulk_dry_run.py"] + (argv if argv is not None else [directory]))
+            here = pathlib.Path.cwd()
+            if raw_argv is not None:
+                # bench console runs from the sites directory, which is why a
+                # site folder named in argv resolves as a relative path at all.
+                os.chdir(root)
             out = io.StringIO()
             try:
                 source = SCRIPT.read_text()
@@ -72,6 +91,10 @@ class _Base(unittest.TestCase):
                     else:
                         exec(compile(source, str(SCRIPT), "exec"), {})
             finally:
+                if raw_argv is not None:
+                    os.chdir(here)
+                os.environ.clear()
+                os.environ.update(saved_env)
                 sys.argv = saved_argv
                 for key in list(sys.modules):
                     if key == "frappe" or key.startswith("dashboard_studio."):
@@ -109,7 +132,60 @@ class TestItRuns(_Base):
 
     def test_no_directory_says_so_rather_than_crashing(self):
         text = self.run_script({"a": CLEAN}, argv=[])
-        self.assertIn("Give me a directory of .sql files", text)
+        self.assertIn("I do not know which directory to read", text)
+
+
+class TestItReadsTheDirectoryItWasGiven(_Base):
+    """Two real bugs, reported twice from the live site, both here.
+
+    `bench --site grc console` puts "grc" in sys.argv, and under the sites
+    directory that IS a folder — so scanning argv for "anything that is a
+    directory" found the site folder and reported confidently on the two files
+    in it. And the function declares its own `directory`, so the documented
+    "set it before exec()" was impossible: the local always shadowed it.
+    """
+
+    BENCH_ARGV = ["/home/x/ucc-sms-v2/env/bin/bench", "--site", "grc", "console"]
+
+    def test_bench_consoles_own_argv_is_not_scavenged_for_a_directory(self):
+        text = self.run_script({"a": CLEAN}, raw_argv=self.BENCH_ARGV,
+                               extra_dirs=("grc",))
+        self.assertIn("I do not know which directory to read", text)
+        self.assertNotIn("report files under", text)
+
+    def test_the_environment_variable_is_read_under_bench_console(self):
+        """The one mechanism that works in all three run modes."""
+        text = self.run_script({"a": CLEAN, "b": LIMIT_TEN},
+                               raw_argv=self.BENCH_ARGV, extra_dirs=("grc",),
+                               env={"DASHBOARD_STUDIO_SQL_DIR": "<DIR>"})
+        self.assertIn("2 report files under", text)
+        self.assertIn("directory came from $DASHBOARD_STUDIO_SQL_DIR", text)
+
+    def test_the_environment_variable_beats_a_stray_site_folder(self):
+        """The exact live failure: both are present, and the site folder must
+        lose. It holds one .sql file, so picking it would report "1"."""
+        text = self.run_script({"a": CLEAN, "b": LIMIT_TEN, "c": TWO_FAULTS},
+                               raw_argv=self.BENCH_ARGV, extra_dirs=("grc",),
+                               env={"DASHBOARD_STUDIO_SQL_DIR": "<DIR>"})
+        self.assertIn("3 report files under", text)
+
+    def test_it_prints_where_the_directory_came_from(self):
+        """A silently wrong folder reports a real number for the wrong set.
+        The source is printed so the next misfire is visible on line one."""
+        text = self.run_script({"a": CLEAN})
+        self.assertIn("directory came from the command line", text)
+
+    def test_the_usage_says_that_presetting_the_variable_does_not_work(self):
+        """It cannot: the function declares its own. Saying so is the fix for
+        the instruction that wasted two attempts."""
+        text = self.run_script({"a": CLEAN}, argv=[])
+        self.assertIn("does NOT work", text)
+        self.assertIn("DASHBOARD_STUDIO_SQL_DIR", text)
+
+    def test_a_path_that_is_not_a_directory_says_which_source_gave_it(self):
+        text = self.run_script({"a": CLEAN}, argv=["/no/such/place"])
+        self.assertIn("Not a directory: /no/such/place", text)
+        self.assertIn("from the command line", text)
 
     def test_an_empty_directory_says_so(self):
         self.assertIn("No .sql files under", self.run_script({}))

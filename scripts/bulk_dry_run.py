@@ -2,6 +2,20 @@
 
     python scripts/bulk_dry_run.py path/to/exported_sql/
 
+Under ``bench console`` there is no argv to pass, so set an environment
+variable — do NOT set a `directory` variable before exec(), which cannot work
+because the function declares its own and shadows it:
+
+    import os
+    os.environ['DASHBOARD_STUDIO_SQL_DIR'] = '/full/path/to/exported_sql'
+    exec(open('apps/dashboard_studio/scripts/bulk_dry_run.py').read())
+
+argv is read ONLY when this file is run as a script. `bench --site grc console`
+puts "grc" in sys.argv, and under the sites directory that IS a folder, so
+scanning argv for "anything that is a directory" silently read the site folder
+and reported a real number for the wrong two files. The resolved path and where
+it came from are printed on every run.
+
 Also runs under ``bench --site <site> console`` — pasted, piped, or exec'd —
 where it additionally checks every column against the real schema (see "Two
 depths" below). Point it at a directory of ``.sql`` files, one per report; the
@@ -41,6 +55,7 @@ def _dry_run():
     # INSIDE the function on purpose — see the note above about bench console's
     # split namespaces. Edit this when running somewhere argv cannot be passed.
     directory = ""
+    script_name = "bulk_dry_run.py"
     # How many report names to show per group. Two is enough to look at a
     # representative case and a second one to check it is representative.
     examples_per_group = 2
@@ -104,15 +119,39 @@ def _dry_run():
         # No Bench here. Shape only, and the output says so — never let a
         # shape-only pass read as "these convert".
         _table_columns, typed = None, False
-    directory = directory or next((a for a in sys.argv[1:] if os.path.isdir(a)), "")
+    # Where the .sql files are. Resolved in ONE place and PRINTED, because
+    # getting it wrong silently reads a different folder and reports a real
+    # number for it. Three sources, most deliberate first.
+    chosen_from = ""
+    if directory:
+        chosen_from = "the `directory` variable inside this function"
+    elif os.environ.get("DASHBOARD_STUDIO_SQL_DIR"):
+        directory = os.environ["DASHBOARD_STUDIO_SQL_DIR"]
+        chosen_from = "$DASHBOARD_STUDIO_SQL_DIR"
+    elif os.path.basename(sys.argv[0] or "") == script_name and len(sys.argv) > 1:
+        directory = sys.argv[1]
+        chosen_from = "the command line"
+    # argv is read ONLY when this file was run AS a script. Under `bench
+    # console` sys.argv belongs to bench — `bench --site grc console` — and
+    # scanning it for anything that happens to be a directory found the site
+    # folder `grc` and confidently reported on the two files in it.
     if not directory:
-        print("Give me a directory of .sql files: one per report, named after it.")
-        print("  python scripts/bulk_dry_run.py path/to/exported_sql/")
-        print("Under bench console, set `directory` inside the function instead.")
+        print("I do not know which directory to read. Either:")
+        print(f"   python scripts/{script_name} path/to/exported_sql/")
+        print("or, under `bench console`, set the environment variable first:")
+        print("   import os")
+        print("   os.environ['DASHBOARD_STUDIO_SQL_DIR'] = '/full/path/to/exported_sql'")
+        print(f"   exec(open('apps/dashboard_studio/scripts/{script_name}').read())")
+        print("Setting a `directory` variable before exec() does NOT work: this")
+        print("function declares its own, which would shadow it.")
         return
-    files = sorted(pathlib.Path(directory).rglob("*.sql"))
+    folder = pathlib.Path(directory).expanduser()
+    if not folder.is_dir():
+        print(f"Not a directory: {folder}   (from {chosen_from})")
+        return
+    files = sorted(folder.rglob("*.sql"))
     if not files:
-        print(f"No .sql files under {directory}")
+        print(f"No .sql files under {folder.resolve()}   (from {chosen_from})")
         return
     clean, blocked, ungrouped = [], {}, {}
     per_report = {}
@@ -150,7 +189,8 @@ def _dry_run():
     print("=" * 78)
     print("Bulk dry run — READ ONLY. No Insights query was created.")
     print("=" * 78)
-    print(f"{len(files)} report files under {directory}")
+    print(f"{len(files)} report files under {folder.resolve()}")
+    print(f"   directory came from {chosen_from}")
     if typed:
         print(f"   {len(clean)} convert cleanly")
         print(f"   {len(files) - len(clean)} refuse")

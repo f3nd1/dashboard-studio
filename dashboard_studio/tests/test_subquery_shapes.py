@@ -39,12 +39,13 @@ CLEAN = ("SELECT `academic_year`, COUNT(*) AS `n` FROM `tabStudent Applicant` "
 
 
 class _Base(unittest.TestCase):
-    def run_script(self, files, namespace_split=True, argv=None):
+    def run_script(self, files, namespace_split=True, argv=None, raw_argv=None):
         saved_argv = list(sys.argv)
         with tempfile.TemporaryDirectory() as directory:
             for name, sql in files.items():
                 (pathlib.Path(directory) / f"{name}.sql").write_text(sql)
-            sys.argv = ["subquery_shapes.py"] + (argv if argv is not None else [directory])
+            sys.argv = (raw_argv if raw_argv is not None else
+                        ["subquery_shapes.py"] + (argv if argv is not None else [directory]))
             out = io.StringIO()
             try:
                 with contextlib.redirect_stdout(out):
@@ -79,7 +80,16 @@ class TestItRuns(_Base):
         self.assertEqual(bad, [], f"blank line inside a block at {bad} breaks piped paste")
 
     def test_no_directory_says_so(self):
-        self.assertIn("Give me the same directory", self.run_script({}, argv=[]))
+        self.assertIn("I do not know which directory to read",
+                      self.run_script({}, argv=[]))
+
+    def test_bench_consoles_own_argv_is_not_scavenged_for_a_directory(self):
+        """Same bug as bulk_dry_run's, same fix, asserted here too: these two
+        scripts are handed over together and read the same folder."""
+        text = self.run_script({"a": OUTER_WHERE_A},
+                               argv=None, raw_argv=["/x/bench", "--site", "grc",
+                                                    "console"])
+        self.assertIn("I do not know which directory to read", text)
 
 
 class TestTheGrouping(_Base):
@@ -121,6 +131,59 @@ class TestTheGrouping(_Base):
         text = self.run_script({"a": OUTER_WHERE_A, "b": OUTER_WHERE_B, "c": OUTER_LIMIT})
         self.assertIn("Send this one back", text)
         self.assertRegex(text, r"Send this one back[\s\S]*?\n   \S+/b\.sql")
+
+
+class TestTheExpressionVocabulary(_Base):
+    """The outer SELECT is the part no wrapper rule can remove. Whether ONE
+    expression capability clears a group, or twenty are needed, is a question
+    about what those expressions are BUILT FROM — so it is counted, not
+    assumed."""
+
+    # The reported capture, reduced. The inner `* 5` is what stops the lift —
+    # _WRAPPER_ITEM allows `* 1` and nothing else — so it stays a subquery and
+    # lands in this script's population, which is the point of the fixture.
+    COMPOSITE = ("SELECT CAST( AVG(`w`.`Q1`) + AVG(`w`.`Q5`) AS double ) / 2.0 "
+                 "AS `Actual No` FROM ( "
+                 "SELECT `c`.`qn_1` * 5 AS `Q1`, `c`.`qn_5` * 5 AS `Q5` "
+                 "FROM `tabSurvey` LEFT JOIN `tabEntry` c "
+                 "ON `tabSurvey`.`name` = c.`parent` WHERE `x` > 1 ) AS `w`")
+    DATE_PART = COMPOSITE.replace("CAST( AVG(`w`.`Q1`) + AVG(`w`.`Q5`) AS double ) / 2.0",
+                                  "YEAR(`w`.`Q1`)")
+
+    def vocabulary_lines(self, text):
+        section = text.split("has to be TRANSLATED rather than dropped", 1)[-1]
+        section = section.split("use nothing but", 1)[0]
+        return {token: int(count) for count, token in
+                re.findall(r"^\s+(\d+)\s+(\S+)$", section, re.MULTILINE)}
+
+    def test_the_functions_and_operators_are_counted(self):
+        text = self.run_script({"a": self.COMPOSITE})
+        self.assertEqual(self.vocabulary_lines(text),
+                         {"CAST": 1, "AVG": 1, "+": 1, "/": 1})
+
+    def test_arithmetic_over_aggregates_is_counted_as_one_capability(self):
+        text = self.run_script({"a": self.COMPOSITE})
+        self.assertIn("1 of 1 use nothing but arithmetic over", text)
+
+    def test_anything_else_is_counted_apart(self):
+        """A date part is not arithmetic over aggregates. Folding it in would
+        promise that one capability covers reports it does not."""
+        text = self.run_script({"a": self.COMPOSITE, "b": self.DATE_PART})
+        self.assertIn("YEAR", text)
+        self.assertIn("1 of 2 use nothing but arithmetic over", text)
+
+    def test_a_column_name_in_backticks_is_not_read_as_an_operator(self):
+        """`Total - Net` is a column, not a subtraction."""
+        text = self.run_script({"a": self.COMPOSITE.replace("`w`.`Q1`", "`w`.`Total - Net`")})
+        self.assertIn("1 of 1 use nothing but arithmetic over", text)
+
+    def test_count_star_does_not_read_as_a_multiplication(self):
+        sql = ("SELECT COUNT(*) AS `n` FROM ( SELECT `c`.`x` * 5 AS `x` FROM `tabSurvey` "
+               "LEFT JOIN `tabEntry` c ON `tabSurvey`.`name` = c.`parent` "
+               "WHERE `x` > 1 ) AS `w`")
+        text = self.run_script({"a": sql})
+        self.assertIn("1 of 1 use nothing but arithmetic over", text)
+        self.assertNotIn("*", self.vocabulary_lines(text))
 
 
 class TestItSaysWhatItDoesNotKnow(_Base):

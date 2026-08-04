@@ -2,6 +2,20 @@
 
     python scripts/subquery_shapes.py path/to/exported_sql/
 
+Under ``bench console`` there is no argv to pass, so set an environment
+variable — do NOT set a `directory` variable before exec(), which cannot work
+because the function declares its own and shadows it:
+
+    import os
+    os.environ['DASHBOARD_STUDIO_SQL_DIR'] = '/full/path/to/exported_sql'
+    exec(open('apps/dashboard_studio/scripts/subquery_shapes.py').read())
+
+argv is read ONLY when this file is run as a script. `bench --site grc console`
+puts "grc" in sys.argv, and under the sites directory that IS a folder, so
+scanning argv for "anything that is a directory" silently read the site folder
+and reported a real number for the wrong two files. The resolved path and where
+it came from are printed on every run.
+
 `bulk_dry_run.py` says how many reports each blocker stops. When the answer is
 "one blocker stops hundreds", this says **what those hundreds actually look
 like**, so the next wrapper rule is written against a counted shape rather than
@@ -39,6 +53,7 @@ def _shapes():
     # INSIDE the function on purpose — see the note above about bench console's
     # split namespaces.
     directory = ""
+    script_name = "subquery_shapes.py"
     examples_per_group = 3
     try:
         from dashboard_studio.integrations.metabase import parser
@@ -77,6 +92,18 @@ def _shapes():
         if parser._QUALIFIED.match(parser._TRAILING_ALIAS.sub("", text).strip()):
             return "other_table"
         return "computed"
+    basic = {"AVG", "SUM", "COUNT", "MIN", "MAX", "CAST", "+", "-", "*", "/"}
+    def vocabulary(head):
+        """Which functions and operators the OUTER select list uses.
+        This is the part a wrapper rule cannot remove — it has to be
+        TRANSLATED into an Insights expression — so what it is built from
+        decides whether one capability covers a group or twenty do.
+        """
+        text = re.sub(r"`[^`]*`", "", head)
+        text = re.sub(r"\(\s*\*\s*\)", "()", text)
+        found = {name.upper() for name in re.findall(r"\b([A-Za-z_]\w*)\s*\(", text)}
+        found |= {op for op in "+-*/" if op in text}
+        return found
     def describe(sql):
         """A factual signature for the outermost surviving FROM-subquery."""
         match = parser._FROM_PAREN.search(sql)
@@ -101,13 +128,39 @@ def _shapes():
                 f"inner[{'+'.join(clauses(inner)) or 'nothing'}] "
                 f"selects_inside={depth}"
                 f"{'' if wrapper else ' (wrapper has no alias)'}")
-    directory = directory or next((a for a in sys.argv[1:] if os.path.isdir(a)), "")
+    # Where the .sql files are. Resolved in ONE place and PRINTED, because
+    # getting it wrong silently reads a different folder and reports a real
+    # number for it. Three sources, most deliberate first.
+    chosen_from = ""
+    if directory:
+        chosen_from = "the `directory` variable inside this function"
+    elif os.environ.get("DASHBOARD_STUDIO_SQL_DIR"):
+        directory = os.environ["DASHBOARD_STUDIO_SQL_DIR"]
+        chosen_from = "$DASHBOARD_STUDIO_SQL_DIR"
+    elif os.path.basename(sys.argv[0] or "") == script_name and len(sys.argv) > 1:
+        directory = sys.argv[1]
+        chosen_from = "the command line"
+    # argv is read ONLY when this file was run AS a script. Under `bench
+    # console` sys.argv belongs to bench — `bench --site grc console` — and
+    # scanning it for anything that happens to be a directory found the site
+    # folder `grc` and confidently reported on the two files in it.
     if not directory:
-        print("Give me the same directory bulk_dry_run.py reads:")
-        print("  python scripts/subquery_shapes.py path/to/exported_sql/")
+        print("I do not know which directory to read. Either:")
+        print(f"   python scripts/{script_name} path/to/exported_sql/")
+        print("or, under `bench console`, set the environment variable first:")
+        print("   import os")
+        print("   os.environ['DASHBOARD_STUDIO_SQL_DIR'] = '/full/path/to/exported_sql'")
+        print(f"   exec(open('apps/dashboard_studio/scripts/{script_name}').read())")
+        print("Setting a `directory` variable before exec() does NOT work: this")
+        print("function declares its own, which would shadow it.")
         return
-    files = sorted(pathlib.Path(directory).rglob("*.sql"))
+    folder = pathlib.Path(directory).expanduser()
+    if not folder.is_dir():
+        print(f"Not a directory: {folder}   (from {chosen_from})")
+        return
+    files = sorted(folder.rglob("*.sql"))
     groups, failed = {}, []
+    vocab, arithmetic_only = {}, []
     for path in files:
         try:
             text = path.read_text()
@@ -118,14 +171,23 @@ def _shapes():
         if not any("subquery / nested SELECT" in reason for reason in reasons):
             continue
         try:
-            signature = describe(rewritten(text))
+            residue = rewritten(text)
+            signature = describe(residue)
+            head = re.split(r"\bFROM\b", residue, maxsplit=1, flags=re.IGNORECASE)[0]
+            words = vocabulary(head)
         except Exception as error:  # noqa: BLE001
-            signature = f"could not be described: {type(error).__name__}: {error}"
+            signature, words = (f"could not be described: "
+                                f"{type(error).__name__}: {error}"), set()
         groups.setdefault(signature, []).append((len(text), path))
+        for word in words:
+            vocab[word] = vocab.get(word, 0) + 1
+        if words and words <= basic:
+            arithmetic_only.append(path.name)
     total = sum(len(rows) for rows in groups.values())
     print("=" * 78)
     print(f"{total} of {len(files)} reports refuse on a subquery, in "
           f"{len(groups)} distinct shapes")
+    print(f"reading {folder.resolve()}   (from {chosen_from})")
     print("=" * 78)
     print("Each line is what is FACTUALLY in the wrapper the existing rules left")
     print("behind. Grouped by that, largest first. A big group says where to")
@@ -138,6 +200,20 @@ def _shapes():
             print(f"         {path.name}  ({size} bytes)")
         if len(rows) > examples_per_group:
             print(f"         ...and {len(rows) - examples_per_group} more")
+        print()
+    if vocab:
+        print("=" * 78)
+        print("What the OUTER SELECT is built from — the part no wrapper rule can")
+        print("remove, because it has to be TRANSLATED rather than dropped")
+        print("=" * 78)
+        for word in sorted(vocab, key=lambda key: -vocab[key]):
+            print(f"   {vocab[word]:>5}  {word}")
+        print()
+        print(f"   {len(arithmetic_only)} of {total} use nothing but arithmetic over")
+        print("   aggregates (AVG/SUM/COUNT/MIN/MAX, + - * /, CAST). If that number")
+        print("   is most of them, ONE expression capability is what they are")
+        print("   waiting on. If it is not, the rest of this list is what else")
+        print("   would have to be understood — count them before promising any.")
         print()
     if groups:
         biggest = max(groups, key=lambda key: len(groups[key]))
