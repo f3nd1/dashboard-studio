@@ -95,7 +95,6 @@ def _dry_run():
         ("is not a table or alias", "qualifier names no table or alias"),
         ("unparsed WHERE condition", "WHERE condition could not be read"),
         ("is not one this converter translates", "filter operator (LIKE, IN, …)"),
-        ("only one is translated", "more than one aggregate"),
         ("is not translated", "aggregation this converter does not translate"),
         ("only a number can be", "aggregate over a non-numeric column"),
         ("Insights groups only by", "GROUP BY a numeric column"),
@@ -161,6 +160,7 @@ def _dry_run():
         print(f"No .sql files under {folder.resolve()}   (from {chosen_from})")
         return
     clean, blocked, ungrouped = [], {}, {}
+    unreadable_tables = {}
     per_report = {}
     for path in files:
         report = path.stem
@@ -174,6 +174,11 @@ def _dry_run():
                         columns[doctype] = _table_columns(doctype)
                     except Exception as error:
                         unreadable.append(f"{doctype}: {error}")
+                        # Tallied by TABLE as well as by report: the group line
+                        # says how many reports are blocked, and this says WHICH
+                        # tables to go and look at, which is the actionable half.
+                        unreadable_tables.setdefault(
+                            f"{doctype}: {error}", set()).add(report)
                 reasons = ([f"the columns of {', '.join(unreadable)} are not known here"]
                            if unreadable
                            else operations_from_sql(analysis, columns)["reasons"])
@@ -234,6 +239,18 @@ def _dry_run():
     print("   fix it and that many convert. A blocker with a high count and a low")
     print("   sole count unblocks nothing by itself. A report with three blockers")
     print("   is counted once in each group, so the counts do not sum to the total.")
+    if unreadable_tables:
+        print()
+        print("=" * 78)
+        print(f"Tables whose columns could not be read ({len(unreadable_tables)})")
+        print("=" * 78)
+        print("   Each line is one table and the error it gave. This is where that")
+        print("   group's reports actually go wrong — a DocType that is not on this")
+        print("   site, or a table the schema read cannot see.")
+        for detail in sorted(unreadable_tables, key=lambda key: -len(unreadable_tables[key])):
+            reports = sorted(unreadable_tables[detail])
+            print(f"   {len(reports):>5}  {detail}")
+            print(f"          e.g. {', '.join(reports[:examples_per_group])}")
     if ungrouped:
         print()
         print("=" * 78)

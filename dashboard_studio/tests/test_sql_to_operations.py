@@ -452,6 +452,100 @@ class TestACoercedTextColumn(unittest.TestCase):
         self.assertIn("not a plain column", reasons)
 
 
+class TestSeveralAggregates(unittest.TestCase):
+    """N aggregates are N measures in ONE summarize.
+
+    `measures` is a list in Insights' SummarizeArgs, and the expression path
+    already fills it with two, so the old "only one is translated" refusal was
+    this converter's own cap from the single-metric era. It had no test at all,
+    which is why it survived so long.
+    """
+
+    SQL = ("SELECT `academic_year`, COUNT(*), AVG(`fee`) FROM `tabStudent Applicant` "
+           "GROUP BY `academic_year`")
+
+    def test_two_aggregates_become_two_measures_in_one_summarize(self):
+        result = run(self.SQL)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "summarize"])
+        self.assertEqual(result["operations"][-1]["measures"], [
+            {"measure_name": "count", "column_name": "count",
+             "data_type": "Integer", "aggregation": "count"},
+            {"measure_name": "avg_of_fee", "column_name": "fee",
+             "data_type": "Decimal", "aggregation": "avg"},
+        ])
+
+    def test_the_grouping_is_kept_alongside_them(self):
+        measures = run(self.SQL)["operations"][-1]
+        self.assertEqual(measures["dimensions"], [
+            {"dimension_name": "academic_year", "column_name": "academic_year",
+             "data_type": "String"}])
+
+    def test_the_same_aggregate_written_twice_is_one_measure(self):
+        """A summarize defining the same measure_name twice is not a summarize."""
+        result = run("SELECT COUNT(*) AS `a`, COUNT(*) AS `b` "
+                     "FROM `tabStudent Applicant`")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(len(result["operations"][-1]["measures"]), 1)
+
+    def test_one_bad_aggregate_still_refuses_the_whole_query(self):
+        """Per-aggregate checks are not weakened by there being several: a
+        partial summarize answers a different question."""
+        result = run("SELECT COUNT(*), AVG(`status`) FROM `tabStudent Applicant`")
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+        self.assertIn("only a number can be AVG'd", " | ".join(result["reasons"]))
+
+    def test_a_join_carries_the_columns_of_every_aggregate(self):
+        result = run("SELECT COUNT(*), AVG(b.`amount`), SUM(a.`fee`) "
+                     "FROM `tabStudent Applicant` a "
+                     "JOIN `tabPurchase Order` b ON b.`ref` = a.`po`")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([c["column_name"] for c in result["operations"][1]["select_columns"]],
+                         ["amount", "ref"])
+
+
+class TestFrappesNumericFieldtypes(unittest.TestCase):
+    """A field Frappe stores as a number must type as one.
+
+    `Rating` and `Duration` were missing from the fieldtype map, so they fell
+    through to String and an average over them refused as "only a number can be
+    AVG'd" — over a column that is one. A rating is a fraction and a duration is
+    a count of seconds; both are numeric in the database.
+    """
+
+    META = [("feedback_rating", "Rating"), ("time_taken", "Duration"),
+            ("estimated_cost", "Currency"), ("notes", "Small Text")]
+
+    def columns(self):
+        return {"Training": columns_from_meta(
+            self.META, valid_columns=["name", "feedback_rating", "time_taken",
+                                      "estimated_cost", "notes"])}
+
+    def test_a_rating_is_a_number(self):
+        self.assertEqual(self.columns()["Training"]["feedback_rating"], "Decimal")
+
+    def test_a_duration_is_a_number(self):
+        self.assertEqual(self.columns()["Training"]["time_taken"], "Decimal")
+
+    def test_averaging_a_rating_converts(self):
+        result = run("SELECT AVG(`feedback_rating`) FROM `tabTraining`",
+                     columns=self.columns())
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["operations"][-1]["measures"][0],
+                         {"measure_name": "avg_of_feedback_rating",
+                          "column_name": "feedback_rating",
+                          "data_type": "Decimal", "aggregation": "avg"})
+
+    def test_averaging_real_text_still_refuses(self):
+        """The guard on the guard: widening the map must not make every column
+        averageable. `notes` is text and stays text."""
+        result = run("SELECT AVG(`notes`) FROM `tabTraining`", columns=self.columns())
+        self.assertFalse(result["supported"])
+        self.assertIn("only a number can be AVG'd", " | ".join(result["reasons"]))
+
+
 class TestArithmeticOverAggregates(unittest.TestCase):
     """`( AVG(a) + AVG(b) ) / 2` -> a summarize plus a `mutate`.
 

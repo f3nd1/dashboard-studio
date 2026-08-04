@@ -10,12 +10,11 @@ with its client and tests.
 and this narrows it further:
 
   works      one table, or any number joined each on a single `a.col = b.col`
-             equality; WHERE with AND-ed comparisons, GROUP BY, one COUNT/SUM/AVG
-             aggregate
+             equality; WHERE with AND-ed comparisons, GROUP BY, any number of
+             COUNT/SUM/AVG/MIN/MAX aggregates, and arithmetic over them
   refused    subqueries, CROSS joins, the same table joined twice, an ON clause
              that is anything but a single equality of two qualified columns,
-             OR, UNION, HAVING, CASE, DISTINCT, window functions, more than one
-             aggregate, LIKE and IN
+             OR, UNION, HAVING, CASE, DISTINCT, window functions, LIKE and IN
 
 **A join carries the columns the query READS, not the whole table.** Insights'
 ``select_columns`` was every column of the joined table, which meant any
@@ -155,6 +154,12 @@ FIELDTYPE_TO_DATA_TYPE = {
     "Float": "Decimal",
     "Currency": "Decimal",
     "Percent": "Decimal",
+    # Rating and Duration are stored as NUMBERS by Frappe — a rating is a
+    # fraction, a duration is a count of seconds — and were missing here, so
+    # they fell through to String and `AVG(rating)` refused as "only a number
+    # can be AVG'd" over a column that is one.
+    "Rating": "Decimal",
+    "Duration": "Decimal",
     "Date": "Date",
     "Datetime": "Datetime",
     "Time": "Time",
@@ -409,12 +414,15 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
         )
     elif expressions:
         measures, mutates = _expression_measures(expressions, available, tables, reasons)
-    elif len(aggregations) > 1:
-        reasons.append(
-            f"this query has {len(aggregations)} aggregates — only one is translated"
-        )
     elif aggregations:
-        measures = _measures(aggregations[0], available, tables, reasons)
+        # N aggregates are N measures in ONE summarize. `measures` is a list in
+        # Insights' SummarizeArgs — the same list ADR-011's expression path
+        # already fills with two — so the old "only one is translated" cap was
+        # this converter's own conservatism from the single-metric era, not
+        # anything Insights required.
+        for aggregation in aggregations:
+            for measure in _measures(aggregation, available, tables, reasons):
+                _add_measure(measures, measure)
     if measures:
         dimensions = []
         for reference in group_by:
@@ -451,6 +459,17 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     return {"supported": True, "operations": operations, "reasons": []}
 
 
+def _add_measure(measures, measure):
+    """Append unless that measure_name is already there.
+
+    The same aggregate written twice — in one expression, or twice in a SELECT
+    list — is one measure named once. Two entries with the same measure_name
+    would be a summarize defining a name twice.
+    """
+    if measure["measure_name"] not in {m["measure_name"] for m in measures}:
+        measures.append(measure)
+
+
 def _expression_measures(expressions, available, tables, reasons):
     """``(measures, mutates)`` for SELECT items that compute over aggregates.
 
@@ -460,7 +479,7 @@ def _expression_measures(expressions, available, tables, reasons):
     expression referencing a column that does not exist — which Insights would
     meet at run time, not here.
     """
-    measures, by_name, mutates = [], {}, []
+    measures, mutates = [], []
     for expression in expressions:
         text = expression["template"]
         for index, aggregation in enumerate(expression["aggregates"]):
@@ -470,9 +489,7 @@ def _expression_measures(expressions, available, tables, reasons):
             measure = built[0]
             # The same aggregate twice in one expression is one measure, named
             # once and referenced twice.
-            if measure["measure_name"] not in by_name:
-                by_name[measure["measure_name"]] = measure
-                measures.append(measure)
+            _add_measure(measures, measure)
             text = text.replace(f"@@{index}@@", measure["measure_name"])
         mutates.append(_mutate(str(expression["label"]), text))
     return measures, mutates

@@ -248,6 +248,16 @@ class TestItDoesNotOverstateWhatItChecked(_Base):
         self.assertIn("filter operator (LIKE, IN, …)", text)
         self.assertIn("1 refuse", text)
 
+    def test_it_names_WHICH_tables_could_not_be_read(self):
+        """The group line says how many reports are blocked; this says which
+        tables to go and look at, which is the half you can act on."""
+        frappe, _ = self.with_frappe()
+        frappe._table_columns = {}          # no table's schema can be read
+        text = self.run_script({"a": CLEAN}, frappe=frappe)
+        self.assertIn("Tables whose columns could not be read", text)
+        self.assertIn("Student Applicant:", text)
+        self.assertIn("e.g. a", text)
+
     def test_with_a_bench_a_column_the_table_lacks_is_counted(self):
         """Column drift is half the real failures and is invisible off-site."""
         frappe, _ = self.with_frappe()
