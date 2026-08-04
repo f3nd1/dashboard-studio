@@ -121,6 +121,40 @@ Two narrowings that came out of it: `COUNT(col * 1)` emits **no** cast (counting
 
 **Not verified live from here.** This container has no route to Metabase, so the endpoint's behaviour is asserted against a recording stub and taken from Metabase's documented contract and ADR-006's reading of it. `card_limit` exists so the first real run can be a handful of cards rather than 200.
 
+## ADR-011 — Translate arithmetic over aggregates into a `summarize` + a `mutate`
+
+**Decision.** A SELECT item that computes over aggregates — `( AVG(a) + AVG(b) ) / 2`, `SUM(x) * 100 / COUNT(*)` — is translated. Its aggregates become the measures of one `summarize`, and the item itself becomes a `mutate` after it. Everything else in a computed item still refuses **by name**.
+
+**The shape was read, not guessed**, out of a hand-built Insights query's own Operations JSON at v3.12.2:
+
+```json
+{"type": "mutate", "new_name": "combined_avg", "data_type": "Auto",
+ "expression": {"type": "expression",
+                "expression": "(avg_of_idx + avg_of_docstatus) / 2"}}
+```
+
+The finding that makes this tractable at all: `expression.expression` is **plain text maths referencing the `measure_name`s the preceding `summarize` defines** — not a nested AST, not a special function syntax. So the translation is: build the measures, then write their names into the string.
+
+**The names are taken from the measures, never rebuilt.** The parser leaves numbered slots where the aggregate calls were, and `_expression_measures` fills them with the `measure_name` the summarize actually emitted. Rebuilding `avg_of_x` in a second place is how the two drift, and the drift only shows up as a run-time error in Insights.
+
+**`data_type` is `"Auto"`**, which is what Insights itself stored. Naming a type there would claim a conversion this does not perform — ADR-009 is the scar.
+
+**What is allowed is an ALLOWLIST, because the output is text Insights evaluates.** With the aggregate calls removed, what remains may be only `+ - * / ( )`, numbers and whitespace. A token nobody has read the meaning of must not travel into a string a query engine will execute. `CAST`, `YEAR`, `CONCAT`, a bare column, a string literal — each refuses naming the token that stopped it.
+
+**CAST: asked directly, and the answer is that it needs its own evidence.** `CAST( AVG(a) + AVG(b) AS double ) / 2.0` is the common Metabase spelling and it refuses. Three routes were considered and none is provable today:
+
+- *Put `cast(...)` in the expression string.* Whether Insights' expression language has a cast function, and what it is called, has not been read. A wrong guess is silently dropped and fails at run time while looking fixed — exactly ADR-009's first delivery.
+- *Use the existing `cast` OPERATION.* It is not interchangeable: `CastArgs` is `{column, data_type}`, so it converts a **named column**. `CAST(<expression> AS double)` converts the result of an expression, which is not a column at any point in the pipeline.
+- *Cast each measure first, then add.* Arithmetically equivalent for numeric aggregate outputs, and it would need one fact nobody has: that a `cast` operation applies to a **measure** column after a `summarize`. That has never been observed; every cast this project has emitted sits before one.
+
+So CAST refuses, and the refusal says outright that the cast operation is not the answer, because that is the first thing a reader will reach for. **One live check settles it**: build a calculated column in the Insights UI that casts, and read back what it stores — the same loop that produced the chart config, the `cast` shape and this expression dialect.
+
+**Dropping the CAST was rejected.** In MySQL `CAST(x AS double)` before a `/` is defensive rather than semantic, so dropping it would *probably* return the same number. "Probably the same number" is the thing this project refuses to ship: a translation that disagrees does not fail, it disagrees.
+
+**Narrower than it looks, and the flagship capture still refuses.** `Staff Onboarding Survey … --1680.sql` has an arithmetic-only outer SELECT and is still blocked, because its inner wrapper renames with `qn_1 * 5` and `_WRAPPER_ITEM` allows `* 1` only. A scale factor inside an aggregate's argument is a *different* capability — Insights' measure is `{column_name, aggregation}` with nowhere to put `* 5` — and it would need a `mutate` BEFORE the `summarize`, whose ordering is likewise unobserved. So "703 reports have an arithmetic-only outer SELECT" is not "703 reports now convert"; re-running the dry run is what says how many do.
+
+Also refused, deliberately: an aggregate inside a computed column *and* another standing alone (two questions in one query), and arithmetic with no aggregate in it (a per-row computed column, which is not a measure).
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

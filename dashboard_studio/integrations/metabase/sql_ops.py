@@ -123,6 +123,24 @@ def _cast(column, data_type):
             "data_type": data_type}
 
 
+def _mutate(new_name, expression):
+    """``Mutate = { type: 'mutate' } & MutateArgs``, and MutateArgs is
+    ``{ new_name; data_type; expression }`` where expression is
+    ``{ type: 'expression', expression: <plain text> }``.
+
+    Read out of a hand-built Insights query's own Operations JSON at v3.12.2.
+    The expression is a STRING of ordinary maths referencing the measure names
+    the preceding `summarize` defines — not a nested AST and not a special
+    function syntax, which is what makes this translatable at all.
+
+    `data_type` is "Auto", which is what Insights itself stored. Naming a type
+    here would CLAIM a conversion this does not perform: a data_type on a
+    result describes it, exactly as ADR-009 found out the expensive way.
+    """
+    return {"type": "mutate", "new_name": new_name, "data_type": "Auto",
+            "expression": {"type": "expression", "expression": expression}}
+
+
 def _summarize(measures, dimensions):
     return {"type": "summarize", "measures": measures, "dimensions": dimensions}
 
@@ -255,6 +273,13 @@ def _referenced_columns(analysis, available):
         note(reference.get("field"), reference.get("table"))
     for aggregation in analysis.get("aggregations") or []:
         note(aggregation.get("argument"), aggregation.get("table"))
+    # The aggregates inside a computed column read columns too, and they are
+    # kept apart from `aggregations` so the one-aggregate rule keeps counting
+    # the query's own. A join that did not carry them would be missing exactly
+    # the columns the chart is built from.
+    for expression in analysis.get("expressions") or []:
+        for aggregation in expression.get("aggregates") or []:
+            note(aggregation.get("argument"), aggregation.get("table"))
     # Both sides of every join condition, including a later join attaching to an
     # earlier joined table — that column has to come across too.
     for join in analysis.get("joins") or []:
@@ -371,13 +396,26 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                                   _value(rule.get("value"), data_type)))
 
     aggregations = analysis.get("aggregations") or []
+    expressions = analysis.get("expressions") or []
     group_by = [g for g in (analysis.get("group_by") or []) if g.get("field")]
-    if len(aggregations) > 1:
+    measures, mutates = [], []
+    if expressions and aggregations:
+        # One aggregate feeding a computed column and another standing alone is
+        # two questions in one, and which measure the chart draws would be a
+        # guess.
+        reasons.append(
+            "this query aggregates both inside a computed column and outside one, "
+            "which is two questions in one query"
+        )
+    elif expressions:
+        measures, mutates = _expression_measures(expressions, available, tables, reasons)
+    elif len(aggregations) > 1:
         reasons.append(
             f"this query has {len(aggregations)} aggregates — only one is translated"
         )
     elif aggregations:
         measures = _measures(aggregations[0], available, tables, reasons)
+    if measures:
         dimensions = []
         for reference in group_by:
             data_type, problem = _type_of(reference, available, tables)
@@ -393,21 +431,51 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                 continue
             dimensions.append({"dimension_name": column, "column_name": column,
                                "data_type": data_type})
-        if measures:
-            # The cast goes AFTER the filters and immediately before the
-            # summarize, which is where `* 1` sat in the original SQL: scoped to
-            # the aggregate, not to the WHERE. Casting earlier would retype the
-            # column the filters were already compared against as text.
-            for measure in measures:
-                if measure.get("coerced_from"):
-                    operations.append(_cast(measure["column_name"], measure["data_type"]))
-            operations.append(_summarize(measures, dimensions))
-    elif group_by:
+        # The cast goes AFTER the filters and immediately before the
+        # summarize, which is where `* 1` sat in the original SQL: scoped to
+        # the aggregate, not to the WHERE. Casting earlier would retype the
+        # column the filters were already compared against as text.
+        for measure in measures:
+            if measure.get("coerced_from"):
+                operations.append(_cast(measure["column_name"], measure["data_type"]))
+        operations.append(_summarize(measures, dimensions))
+        # …and the mutate AFTER the summarize, because its expression refers to
+        # the measure names by the names that step defines. Before it, they do
+        # not exist.
+        operations.extend(mutates)
+    elif group_by and not (aggregations or expressions):
         reasons.append("this query groups without aggregating, which has no chart to draw")
 
     if reasons:
         return {"supported": False, "operations": [], "reasons": reasons}
     return {"supported": True, "operations": operations, "reasons": []}
+
+
+def _expression_measures(expressions, available, tables, reasons):
+    """``(measures, mutates)`` for SELECT items that compute over aggregates.
+
+    Each expression carries numbered slots where its aggregate calls were. They
+    are filled with the measure_name the summarize actually defines rather than
+    a name rebuilt here, because the two drifting apart would produce an
+    expression referencing a column that does not exist — which Insights would
+    meet at run time, not here.
+    """
+    measures, by_name, mutates = [], {}, []
+    for expression in expressions:
+        text = expression["template"]
+        for index, aggregation in enumerate(expression["aggregates"]):
+            built = _measures(aggregation, available, tables, reasons)
+            if not built:
+                return [], []
+            measure = built[0]
+            # The same aggregate twice in one expression is one measure, named
+            # once and referenced twice.
+            if measure["measure_name"] not in by_name:
+                by_name[measure["measure_name"]] = measure
+                measures.append(measure)
+            text = text.replace(f"@@{index}@@", measure["measure_name"])
+        mutates.append(_mutate(str(expression["label"]), text))
+    return measures, mutates
 
 
 def _measures(aggregation, available, tables, reasons):

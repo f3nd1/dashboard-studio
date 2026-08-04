@@ -129,7 +129,14 @@ _ONLY_TABLE = re.compile(r"^`" + _TAB + r"([^`]+)`(?:\s+(?:AS\s+)?(?:`[^`]+`|\w+
 _PROJECTED = re.compile(
     r"^(?:(?:`[^`]+`|\w+)\.)?`?([A-Za-z_][\w ]*?)`?(?:\s+AS\s+`?([A-Za-z_][\w ]*?)`?)?$",
     re.IGNORECASE)
-_AGGREGATE_ITEM = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\(.*\)$", re.IGNORECASE | re.DOTALL)
+# ONE aggregate call and nothing else. `.*` between the parentheses matched
+# `SUM(a) * 100 / COUNT(*)` — it starts with an aggregate name and ends with
+# a bracket — so a whole expression read as a plain aggregate and its
+# arithmetic was skipped in silence. No nested parentheses either: an
+# aggregate over something this cannot read must reach the expression
+# check, which refuses by name.
+_AGGREGATE_ITEM = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\([^()]*\)$",
+                             re.IGNORECASE | re.DOTALL)
 _TRAILING_ALIAS = re.compile(r"\s+AS\s+(?:`(?P<alias_q>[^`]+)`|(?P<alias>\w+))$",
                              re.IGNORECASE)
 
@@ -559,29 +566,92 @@ def lift_renaming_wrapper(sql: str) -> tuple[str, list[str]]:
             + rewritten_tail.strip()).strip(), reasons
 
 
-def _select_problems(statement: str) -> list[str]:
-    """Items in the SELECT list this converter would silently drop.
+# A SELECT item that computes over aggregates — `( AVG(a) + AVG(b) ) / 2.0`.
+#
+# Insights stores one of these as a `mutate`, and its expression is a PLAIN TEXT
+# math string referencing the measure names the preceding `summarize` defines:
+#
+#   {"type": "mutate", "new_name": "combined_avg", "data_type": "Auto",
+#    "expression": {"type": "expression",
+#                   "expression": "(avg_of_idx + avg_of_docstatus) / 2"}}
+#
+# read out of a hand-built query's own Operations JSON at v3.12.2, not guessed.
+#
+# The aggregate calls are replaced by numbered slots and what REMAINS must be
+# arithmetic and nothing else. That is an allowlist, deliberately: this builds a
+# string Insights will evaluate, so a token nobody has read the meaning of must
+# not travel into it. CAST, YEAR, CONCAT, a bare column, a string literal — all
+# refuse BY NAME, and the name is the token that stopped it.
+_SLOT = "@@{}@@"
+_SLOT_ANY = re.compile(r"@@\d+@@")
+_ARITHMETIC_ONLY = re.compile(r"^[\s0-9.+\-*/()]*$")
 
-    The SELECT list is not otherwise read — operations come from the FROM, the
-    WHERE, the GROUP BY and the aggregate. So a computed column used to vanish
-    without a word, and the converted query answered a smaller question than the
-    report it came from.
+
+def _expression_from_item(text: str, aliases: dict, reasons: list):
+    """``(expression, offending_tokens)`` — exactly one of them is truthy."""
+    template, aggregates = text, []
+    for index, match in enumerate(list(_AGG_PATTERN.finditer(text))):
+        aggregates.append(_aggregation_from(match.group(1), match.group(2),
+                                            aliases, reasons))
+        template = template.replace(match.group(0), _SLOT.format(index), 1)
+    residue = _SLOT_ANY.sub("", template)
+    if not aggregates:
+        # Arithmetic on literals alone is not something to build a summarize
+        # around, and without an aggregate there are no measure names to
+        # reference.
+        return None, ["no aggregate"]
+    if not _ARITHMETIC_ONLY.match(residue):
+        return None, sorted(set(re.findall(r"[A-Za-z_]\w*", residue))) or ["?"]
+    return {"template": template, "aggregates": aggregates}, []
+
+
+def _parse_select_list(statement: str, aliases: dict,
+                       reasons: list) -> tuple[list[dict], list[str]]:
+    """``(expressions, problems)`` for the SELECT list.
+
+    The rest of the SELECT list is not otherwise read — operations come from
+    the FROM, the WHERE, the GROUP BY and the aggregate — so a computed column
+    used to vanish without a word, and the converted query answered a smaller
+    question than the report it came from. Now it is either translated into a
+    `mutate` or refused, never dropped.
     """
     match = re.search(r"\bSELECT\b(.+?)\bFROM\b", statement, re.IGNORECASE | re.DOTALL)
     if not match:
-        return []
-    problems = []
+        return [], []
+    expressions, problems = [], []
     for item in _split_items(match.group(1)):
         text = " ".join(item.split())
         named = _TRAILING_ALIAS.sub("", text).strip()
         if text == "*" or _AGGREGATE_ITEM.match(named) or _QUALIFIED.match(named):
             continue
         label = text[len(named):].strip()[3:].strip().strip("`") or named
-        problems.append(
-            f"the SELECT list computes '{label}', which this converter does not "
-            "translate — Insights would get the query without that column"
+        expression, offending = _expression_from_item(named, aliases, reasons)
+        if expression:
+            expressions.append(dict(expression, label=label))
+            continue
+        if offending == ["no aggregate"]:
+            problems.append(
+                f"the SELECT list computes '{label}', which has no aggregate in it — "
+                "this converter translates arithmetic OVER aggregates, so there is "
+                "nothing here for a summarize to produce"
+            )
+            continue
+        message = (
+            f"the SELECT list computes '{label}' using {', '.join(offending)}, which "
+            "this converter does not translate — arithmetic over aggregates is "
+            "translated (+ - * / and numbers), and nothing else is, because the "
+            "expression becomes text that Insights evaluates"
         )
-    return problems
+        if "CAST" in offending:
+            # Worth saying, because the obvious next thought is "there is a cast
+            # operation already". There is, and it converts a COLUMN; there is
+            # no operation that casts the result of an expression.
+            message += (
+                ". A `cast` operation converts a column, not the result of an "
+                "expression, so the two are not interchangeable here"
+            )
+        problems.append(message)
+    return expressions, problems
 
 
 def discover_frappe_doctypes(sql: str) -> list[str]:
@@ -763,22 +833,30 @@ def _parse_group_by(sql: str, aliases: dict, reasons: list) -> tuple[list[dict],
 _TIMES_ONE = re.compile(r"^(?P<expr>.+?)\s*\*\s*1$")
 
 
+def _aggregation_from(function: str, argument: str, aliases: dict, reasons: list) -> dict:
+    """One ``COUNT|SUM|AVG(...)`` call -> the dict the translator reads.
+
+    One function, because the same call is read twice — once as the query's
+    aggregate and once inside a computed SELECT item — and the two descriptions
+    have to be identical or the expression's slots would not line up with the
+    measures the summarize defines.
+    """
+    argument = argument.strip()
+    if not argument or argument == "*":
+        return {"function": function.upper(), "argument": "*", "table": None,
+                "coerced": False}
+    coerced = _TIMES_ONE.match(argument)
+    if coerced:
+        argument = coerced.group("expr").strip()
+    qualifier, column = _split_ref(argument)
+    return {"function": function.upper(), "argument": column or argument,
+            "table": _resolve(qualifier, aliases, reasons),
+            "coerced": bool(coerced)}
+
+
 def _parse_aggregations(sql: str, aliases: dict, reasons: list) -> list[dict]:
-    out = []
-    for function, argument in _AGG_PATTERN.findall(sql):
-        argument = argument.strip()
-        if not argument or argument == "*":
-            out.append({"function": function.upper(), "argument": "*", "table": None,
-                        "coerced": False})
-            continue
-        coerced = _TIMES_ONE.match(argument)
-        if coerced:
-            argument = coerced.group("expr").strip()
-        qualifier, column = _split_ref(argument)
-        out.append({"function": function.upper(), "argument": column or argument,
-                    "table": _resolve(qualifier, aliases, reasons),
-                    "coerced": bool(coerced)})
-    return out
+    return [_aggregation_from(function, argument, aliases, reasons)
+            for function, argument in _AGG_PATTERN.findall(sql)]
 
 
 def analyze_sql(sql: str) -> dict:
@@ -830,9 +908,9 @@ def analyze_sql(sql: str) -> dict:
             "plain projection of one table; this one filters, aggregates or joins, so "
             "removing it would change which rows are counted"
         )
-    else:
-        # Only meaningful once there is one SELECT list to read.
-        reasons.extend(_select_problems(statement))
+    # The SELECT list is read further down, once the aliases exist: a computed
+    # item may be an expression over aggregates, and reading its aggregates
+    # needs to know which table each column belongs to.
 
     for value in _LIMIT.findall(statement):
         if int(value) != METABASE_ROW_CAP:
@@ -893,6 +971,19 @@ def analyze_sql(sql: str) -> dict:
     aggregations = _parse_aggregations(statement, aliases, alias_reasons)
     group_by, group_problems = _parse_group_by(statement, aliases, alias_reasons)
     reasons.extend(group_problems)
+    expressions: list[dict] = []
+    if not subquery:
+        # Only meaningful once there is one SELECT list to read.
+        expressions, select_problems = _parse_select_list(statement, aliases,
+                                                          alias_reasons)
+        reasons.extend(select_problems)
+        # An aggregate inside a computed item is not ALSO a standalone
+        # aggregate. Removed one-for-one so the "only one aggregate" rule keeps
+        # counting the query's own aggregates and nothing else.
+        for expression in expressions:
+            for aggregate in expression["aggregates"]:
+                if aggregate in aggregations:
+                    aggregations.remove(aggregate)
     if not subquery:
         reasons.extend(alias_reasons)
 
@@ -905,6 +996,7 @@ def analyze_sql(sql: str) -> dict:
         "doctypes": doctypes,
         "source_doctype": source_doctype,
         "aggregations": aggregations,
+        "expressions": expressions,
         "filters": filters,
         "group_by": group_by,
         "joins": joins,

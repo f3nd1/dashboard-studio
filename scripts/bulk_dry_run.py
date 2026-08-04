@@ -75,6 +75,13 @@ def _dry_run():
         ("HAVING clause", "HAVING clause"),
         ("DISTINCT", "DISTINCT"),
         ("UNION", "UNION"),
+        # The specific ones first: "first match wins", and a CAST inside a
+        # computed column is the blocker worth counting on its own now that the
+        # arithmetic around it translates.
+        ("converts a column, not the result of an expression",
+         "computed column using CAST"),
+        ("which has no aggregate in it", "computed column with no aggregate"),
+        ("two questions in one query", "aggregate inside AND outside a computed column"),
         ("the SELECT list computes", "computed column in the SELECT list"),
         ("is not a column of", "join names a column the table does not have"),
         ("are not known here", "table's columns could not be read"),

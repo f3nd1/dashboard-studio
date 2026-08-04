@@ -37,6 +37,12 @@ assert.strictEqual(core.describeOperation({ type: "summarize",
   dimensions: [{ column_name: "metric" }] }),
   "avg(actual_value) — String cast to a number by metric");
 
+// A computed column reads back as the maths it is.
+assert.strictEqual(core.describeOperation({ type: "mutate", new_name: "Actual No",
+  data_type: "Auto",
+  expression: { type: "expression", expression: "(avg_of_q1 + avg_of_q5) / 2" } }),
+  "Actual No = (avg_of_q1 + avg_of_q5) / 2");
+
 // Junk must not throw — this renders inside a panel that is already reporting
 // something the person needs to read.
 assert.strictEqual(core.describeOperation(null), "");

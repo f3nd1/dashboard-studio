@@ -30,6 +30,12 @@
       return "cast " + ((op.column || {}).column_name || "?") + " to " +
         (op.data_type || "?");
     }
+    if (op.type === "mutate") {
+      // The expression is a plain text math string over the measure names the
+      // summarize just defined, so it reads back as itself.
+      return (op.new_name || "?") + " = " +
+        ((op.expression || {}).expression || "?");
+    }
     if (op.type === "summarize") {
       var by = (op.dimensions || []).map(function (d) { return d.column_name; });
       return (op.measures || []).map(function (m) {

@@ -8,6 +8,7 @@ mode here is a query that runs fine and answers something else, so "the right
 keys are present" proves nothing.
 """
 
+import re
 import unittest
 
 from dashboard_studio.integrations.metabase.parser import analyze_sql
@@ -449,6 +450,146 @@ class TestACoercedTextColumn(unittest.TestCase):
         reasons = " | ".join(result["reasons"])
         self.assertIn("* 1", reasons)
         self.assertIn("not a plain column", reasons)
+
+
+class TestArithmeticOverAggregates(unittest.TestCase):
+    """`( AVG(a) + AVG(b) ) / 2` -> a summarize plus a `mutate`.
+
+    The mutate's expression is a PLAIN TEXT math string referencing the measure
+    names the summarize defines — read out of a hand-built Insights query's own
+    Operations JSON at v3.12.2, not guessed. That is why it is asserted in full
+    AND cross-checked against the summarize: a literal that drifted alongside
+    the code would still pass, but an expression naming a measure the summarize
+    does not define is a query that fails when somebody opens it.
+    """
+
+    SQL = ("SELECT ( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) ) / 2 AS `Actual No` "
+           "FROM `tabSurvey` LEFT JOIN `tabEntry` c "
+           "ON `tabSurvey`.`name` = c.`parent` "
+           "WHERE `tabSurvey`.`survey_name` = 'Staff Onboarding'")
+    COLUMNS = {"Survey": {"name": "String", "survey_name": "String"},
+               "Entry": {"name": "String", "parent": "String",
+                         "qn_1": "Integer", "qn_5": "Integer"}}
+
+    def operations(self, sql=None, columns=None):
+        result = run(sql or self.SQL, columns=columns or self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def refusal(self, sql, columns=None):
+        result = run(sql, columns=columns or self.COLUMNS)
+        self.assertFalse(result["supported"], "an untranslatable expression converted")
+        self.assertEqual(result["operations"], [])
+        return " | ".join(result["reasons"])
+
+    def test_the_mutate_is_emitted_in_full(self):
+        """Asserted whole. An unrecognised key is dropped by Insights without a
+        word, so "the right keys are present" would prove nothing."""
+        self.assertEqual(self.operations()[-1], {
+            "type": "mutate",
+            "new_name": "Actual No",
+            "data_type": "Auto",
+            "expression": {"type": "expression",
+                           "expression": "( avg_of_qn_1 + avg_of_qn_5 ) / 2"},
+        })
+
+    def test_it_comes_after_the_summarize_that_defines_its_names(self):
+        """Order is the whole point: before the summarize those measure names
+        do not exist."""
+        self.assertEqual([op["type"] for op in self.operations()],
+                         ["source", "join", "filter", "summarize", "mutate"])
+
+    def test_every_name_in_the_expression_is_a_measure_the_summarize_defines(self):
+        """The cross-check the literal above cannot make. A measure_name rebuilt
+        in two places drifts, and the drift only shows up in Insights."""
+        operations = self.operations()
+        defined = {m["measure_name"] for m in operations[-2]["measures"]}
+        used = set(re.findall(r"[A-Za-z_]\w*",
+                              operations[-1]["expression"]["expression"]))
+        self.assertTrue(used, "the expression referenced no measure at all")
+        self.assertEqual(used - defined, set(),
+                         f"expression names {used - defined}, summarize defines {defined}")
+
+    def test_both_aggregates_become_measures(self):
+        measures = self.operations()[-2]["measures"]
+        self.assertEqual([m["measure_name"] for m in measures],
+                         ["avg_of_qn_1", "avg_of_qn_5"])
+        self.assertEqual([m["aggregation"] for m in measures], ["avg", "avg"])
+
+    def test_the_same_aggregate_twice_is_one_measure_referenced_twice(self):
+        operations = self.operations(
+            self.SQL.replace("AVG(`c`.`qn_5`)", "AVG(`c`.`qn_1`)"))
+        self.assertEqual(len(operations[-2]["measures"]), 1)
+        self.assertEqual(operations[-1]["expression"]["expression"],
+                         "( avg_of_qn_1 + avg_of_qn_1 ) / 2")
+
+    def test_the_join_carries_the_columns_the_expression_reads(self):
+        """The aggregates inside a computed column are held apart from the
+        query's own, and a join that did not carry them would be missing
+        exactly the columns the chart is built from."""
+        self.assertEqual([c["column_name"] for c in self.operations()[1]["select_columns"]],
+                         ["parent", "qn_1", "qn_5"])
+
+    def test_a_percentage_of_a_count_converts(self):
+        operations = self.operations(
+            "SELECT SUM(`c`.`qn_1`) * 100 / COUNT(*) AS `rate` FROM `tabSurvey` "
+            "LEFT JOIN `tabEntry` c ON `tabSurvey`.`name` = c.`parent`")
+        self.assertEqual(operations[-1]["expression"]["expression"],
+                         "sum_of_qn_1 * 100 / count")
+
+    def test_a_text_column_inside_the_expression_still_refuses(self):
+        """The type check is not skipped just because the aggregate is inside
+        an expression — averaging text is the fault ADR-009 is about."""
+        columns = {"Survey": {"name": "String", "survey_name": "String"},
+                   "Entry": {"name": "String", "parent": "String",
+                             "qn_1": "String", "qn_5": "Integer"}}
+        self.assertIn("only a number can be AVG'd", self.refusal(self.SQL, columns))
+
+
+class TestWhatAnExpressionRefuses(unittest.TestCase):
+    """The allowlist. This builds a string Insights evaluates, so a token
+    nobody has read the meaning of must not travel into it."""
+
+    SQL = TestArithmeticOverAggregates.SQL
+    COLUMNS = TestArithmeticOverAggregates.COLUMNS
+    refusal = TestArithmeticOverAggregates.refusal
+
+    def test_CAST_refuses_and_says_why_the_cast_operation_is_not_the_answer(self):
+        """The obvious next thought is "there is already a cast operation".
+        There is, and it converts a COLUMN — there is no operation that casts
+        the result of an expression."""
+        reasons = self.refusal(self.SQL.replace(
+            "( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) ) / 2",
+            "CAST( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) AS double ) / 2.0"))
+        self.assertIn("CAST", reasons)
+        self.assertIn("converts a column, not the result of an expression", reasons)
+
+    def test_a_date_part_refuses_by_name(self):
+        self.assertIn("YEAR", self.refusal(self.SQL.replace(
+            "( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) ) / 2", "YEAR(AVG(`c`.`qn_1`))")))
+
+    def test_string_concatenation_refuses_by_name(self):
+        self.assertIn("CONCAT", self.refusal(self.SQL.replace(
+            "( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) ) / 2",
+            "CONCAT(AVG(`c`.`qn_1`), 'x')")))
+
+    def test_arithmetic_with_no_aggregate_refuses(self):
+        """`a + b` per row is a computed column, not a measure. Translating it
+        as one would answer a different question."""
+        self.assertIn("no aggregate in it", self.refusal(self.SQL.replace(
+            "( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) ) / 2", "`c`.`qn_1` + `c`.`qn_5`")))
+
+    def test_an_aggregate_inside_AND_outside_refuses(self):
+        """Which of the two the chart draws would be a guess."""
+        self.assertIn("two questions in one query", self.refusal(
+            "SELECT ( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) ) / 2 AS `Actual No`, "
+            "COUNT(*) AS `n` FROM `tabSurvey` LEFT JOIN `tabEntry` c "
+            "ON `tabSurvey`.`name` = c.`parent`"))
+
+    def test_the_shape_it_IS_meant_to_translate(self):
+        """A guard on the guard: if the allowlist stopped letting arithmetic
+        through, every refusal above would pass for the wrong reason."""
+        self.assertTrue(run(self.SQL, columns=self.COLUMNS)["supported"])
 
 
 class TestJoinRefusals(unittest.TestCase):
