@@ -155,6 +155,22 @@ So CAST refuses, and the refusal says outright that the cast operation is not th
 
 Also refused, deliberately: an aggregate inside a computed column *and* another standing alone (two questions in one query), and arithmetic with no aggregate in it (a per-row computed column, which is not a measure).
 
+**AMENDMENT (2026-08-05) — the expression LANGUAGE is still one captured example wide.** The capture that settled this shape, `"(avg_of_idx + avg_of_docstatus) / 2"`, is pure arithmetic. It says nothing about whether the language has `YEAR()`, `CONCAT()`, `CAST()` or any function at all, so the allowlist stays arithmetic-only and every function refuses by name. `scripts/insights_operations_probe.py` prints every `mutate` expression Insights has actually stored and tallies the functions in them; one that calls a function widens the allowlist to exactly the functions seen, and no further. Finding none is reported as **"NO FUNCTION SEEN — and that is not 'the language has none'"**, with the UI step that settles it.
+
+**A wider allowlist would not, by itself, unblock the date/label reports.** The `tabQuality Action` capture is the worked example:
+
+```sql
+SELECT `__mb_source`.`Year`, AVG(`__mb_source`.`custom_..._api`)
+FROM ( SELECT CAST(`tabQuality Action`.`custom_..._api` AS double) AS `custom_..._api`,
+              CONCAT('', YEAR(`tabQuality Action`.`custom_proposed_date`)) AS `Year`
+       FROM `tabQuality Action` ) AS `__mb_source`
+GROUP BY `__mb_source`.`Year`
+```
+
+Its functions are in the **inner** wrapper, computing per-row columns BEFORE the aggregate — they are not arithmetic over aggregates, and the outer expression check is never reached. Traced through all three wrapper rules: `unwrap_` declines (the inner computes, so it is not a pure projection), `drop_` declines (the outer aggregates), `lift_` declines (`_WRAPPER_ITEM` takes a qualified column with an optional `* 1`, not a function call). The refusal is "subquery", and it is correct.
+
+Unblocking that shape needs **two** things beyond the dialect: `lift_renaming_wrapper` accepting a computed inner item, and a `mutate` emitted **before** the `summarize` so the grouping has a real column to name. Mutate-before-summarize has never been observed — every mutate this project emits sits after one — and it is the same unobserved ordering the `qn_1 * 5` case needs. So this is one capability short of ADR-011, not one allowlist entry short of it.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

@@ -1,4 +1,4 @@
-"""Does Insights itself ever group by a NUMBER?
+"""What has Insights itself actually stored in its query operations?
 
 Paste into ``bench --site <site> console``, or pipe it in, or exec it from an
 open file — all three work (see the note at the bottom about why).
@@ -6,7 +6,11 @@ open file — all three work (see the note at the bottom about why).
 **Read-only.** It reads Insights' own query records. It writes nothing, creates
 nothing and executes nothing.
 
-It settles one question, and only one. This converter refuses to group by an
+It settles two open questions from evidence rather than reading, because
+`query.types.ts` is not in this repo and the expression language is not
+documented anywhere we can reach.
+
+**1. Does Insights ever group by a NUMBER?** This converter refuses to group by an
 Integer or a Decimal column, on the strength of `DIMENSION_DATA_TYPES =
 ("String", "Date", "Datetime", "Time")`. That constant's own recorded
 provenance — in `archive/api_insights_sql_path.py` — says *"these are not our
@@ -15,15 +19,20 @@ chart's x-axis. It is now applied to `summarize.dimensions`, which is a
 different thing, and it is why 18 reports refuse with "Insights groups only by
 text, a date or a time".
 
-`query.types.ts` is not in this repo, so the question cannot be settled by
-reading. It CAN be settled by evidence: if Insights has ever stored a summarize
-whose dimension is Integer or Decimal, then it accepts one, and the constant is
-this converter's own over-restriction. That is what this counts.
+If Insights has ever stored a summarize whose dimension is Integer or Decimal,
+then it accepts one, and the constant is this converter's own over-restriction.
 
-**A negative result proves nothing** and the output says so: nobody may simply
-have built one. In that case the answer comes from building one by hand in the
-Insights UI and reading back what it stores — the loop that produced the chart
-config, the `cast` shape and the expression dialect.
+**2. What may a `mutate` expression contain?** The one captured example is pure
+arithmetic — `"(avg_of_idx + avg_of_docstatus) / 2"` — which says nothing about
+whether the language has `YEAR()`, `CONCAT()`, `CAST()` or anything else. Every
+stored expression is printed whole here, with the functions in it tallied. One
+that calls a function settles it; the ALLOWLIST in `parser._ARITHMETIC_ONLY`
+can then widen to exactly the functions seen, and no further.
+
+**A negative result proves nothing** on either question, and the output says so:
+nobody may simply have built one. In that case the answer comes from building
+one by hand in the Insights UI and reading back what it stores — the loop that
+produced the chart config, the `cast` shape and the arithmetic dialect.
 
 The operations field is DISCOVERED rather than named: it prints the fields it
 found and reads whichever one parses as a list of operations, so a field name
@@ -39,6 +48,7 @@ def _probe():
     # noqa on the block: isort wants a blank line before the first-party
     # import, and a blank line here breaks the piped-paste form.
     import json  # noqa: I001
+    import re
     import frappe
     # INSIDE the function on purpose — see the note above about bench console's
     # split namespaces.
@@ -59,7 +69,7 @@ def _probe():
                 return parsed
         return []
     print("=" * 78)
-    print("Does Insights ever group by a number? — READ ONLY, nothing changed")
+    print("What Insights has stored in its own queries — READ ONLY, nothing changed")
     print("=" * 78)
     if not frappe.db.exists("DocType", doctype):
         print(f"   {doctype} does not exist on this site — Insights v3 is not here.")
@@ -70,6 +80,7 @@ def _probe():
     print(f"   {len(rows)} query records to read")
     print()
     seen, examples, read, with_summarize = {}, {}, 0, 0
+    expressions, functions = [], {}
     for row in rows:
         try:
             record = frappe.get_doc(doctype, row["name"])
@@ -80,7 +91,17 @@ def _probe():
         if operations:
             read += 1
         for operation in operations:
-            if not isinstance(operation, dict) or operation.get("type") != "summarize":
+            if not isinstance(operation, dict):
+                continue
+            if operation.get("type") == "mutate":
+                text = ((operation.get("expression") or {}).get("expression")
+                        if isinstance(operation.get("expression"), dict)
+                        else operation.get("expression"))
+                if text:
+                    expressions.append((row["name"], operation.get("new_name"), text))
+                    for name in re.findall(r"\b([A-Za-z_]\w*)\s*\(", str(text)):
+                        functions[name.upper()] = functions.get(name.upper(), 0) + 1
+            if operation.get("type") != "summarize":
                 continue
             with_summarize += 1
             for dimension in operation.get("dimensions") or []:
@@ -91,7 +112,7 @@ def _probe():
                 examples.setdefault(data_type,
                                     f"{row['name']}: {dimension.get('column_name')}")
     print("=" * 78)
-    print(f"Dimension data_types across {with_summarize} summarize steps "
+    print(f"1. Dimension data_types across {with_summarize} summarize steps "
           f"in {read} readable queries")
     print("=" * 78)
     for data_type in sorted(seen, key=lambda key: -seen[key]):
@@ -100,6 +121,32 @@ def _probe():
         print(f"          e.g. {examples[data_type]}")
     if not seen:
         print("   none — no summarize with a dimension was found")
+    print()
+    print("=" * 78)
+    print(f"2. Every `mutate` expression Insights has stored ({len(expressions)})")
+    print("=" * 78)
+    for name, new_name, text in expressions[:40]:
+        print(f"   {name}: {new_name} = {text}")
+    if len(expressions) > 40:
+        print(f"   ...and {len(expressions) - 40} more")
+    if not expressions:
+        print("   none — no query here has a calculated column")
+    if functions:
+        print()
+        print("   Functions called inside them:")
+        for name in sorted(functions, key=lambda key: -functions[key]):
+            print(f"      {functions[name]:>4}  {name}")
+        print()
+        print("   ANSWER: the expression language has functions, and these are")
+        print("   ones it accepts. The allowlist can widen to exactly these.")
+    else:
+        print()
+        print("   NO FUNCTION SEEN — and that is not "
+              "'the language has none'.")
+        print("   Every stored expression is plain arithmetic, which is all the")
+        print("   captured example showed too. To settle it: in the Insights UI,")
+        print("   add a calculated column that extracts a year from a date, save")
+        print("   it, and re-run this. What it stores is the answer.")
     print()
     print("=" * 78)
     found = [d for d in seen if d in numeric]

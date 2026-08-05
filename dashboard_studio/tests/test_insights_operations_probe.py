@@ -1,9 +1,13 @@
-"""scripts/insights_dimension_probe.py must answer one question honestly.
+"""scripts/insights_operations_probe.py must answer two questions honestly.
 
-The failure that matters is not a crash — it is an answer that reads as
-settled when it is not. A converter restriction removed on "no evidence" would
-be exactly the guess ADR-009's first delivery was, so a negative result has to
-say out loud that it is not a no.
+Both are open because the source cannot be read from here: whether Insights
+accepts a numeric dimension, and what a `mutate` expression may contain. Both
+are answered from what Insights has actually STORED.
+
+The failure that matters is not a crash — it is an answer that reads as settled
+when it is not. A converter restriction removed on "no evidence" would be
+exactly the guess ADR-009's first delivery was, so a negative result has to say
+out loud that it is not a no. That is asserted for both halves.
 """
 
 import contextlib
@@ -16,12 +20,24 @@ import types
 import unittest
 
 SCRIPT = (pathlib.Path(__file__).resolve().parents[2]
-          / "scripts" / "insights_dimension_probe.py")
+          / "scripts" / "insights_operations_probe.py")
 
 STRING_DIMENSION = [
     {"type": "source", "table": {"table_name": "tabX"}},
     {"type": "summarize", "measures": [{"measure_name": "count"}],
      "dimensions": [{"column_name": "status", "data_type": "String"}]},
+]
+MUTATE_ARITHMETIC = [
+    {"type": "summarize", "measures": [{"measure_name": "avg_of_idx"}], "dimensions": []},
+    {"type": "mutate", "new_name": "combined", "data_type": "Auto",
+     "expression": {"type": "expression", "expression": "(avg_of_idx + avg_of_x) / 2"}},
+]
+# What a function-using calculated column would look like if anybody has built
+# one. Invented HERE as a test input only — nothing asserts this is the real
+# spelling, which is precisely what the script exists to find out.
+MUTATE_WITH_FUNCTION = [
+    {"type": "mutate", "new_name": "Year", "data_type": "Auto",
+     "expression": {"type": "expression", "expression": "year(custom_proposed_date)"}},
 ]
 NUMERIC_DIMENSION = [
     {"type": "summarize", "measures": [{"measure_name": "count"}],
@@ -88,11 +104,11 @@ class _Base(unittest.TestCase):
 class TestItRuns(_Base):
     def test_runs_under_bench_consoles_split_namespaces(self):
         frappe, _ = make_frappe({"q1": STRING_DIMENSION})
-        self.assertIn("Does Insights ever group by a number", self.run_script(frappe, True))
+        self.assertIn("What Insights has stored", self.run_script(frappe, True))
 
     def test_runs_under_a_plain_module_level_exec(self):
         frappe, _ = make_frappe({"q1": STRING_DIMENSION})
-        self.assertIn("Does Insights ever group by a number", self.run_script(frappe, False))
+        self.assertIn("What Insights has stored", self.run_script(frappe, False))
 
     def test_no_blank_line_inside_an_indented_block(self):
         lines = SCRIPT.read_text().splitlines()
@@ -108,6 +124,34 @@ class TestItRuns(_Base):
 
 
 class TestTheAnswer(_Base):
+    def test_a_stored_expression_is_printed_whole(self):
+        """The expression is the evidence. Summarising it would lose the one
+        thing being looked for."""
+        frappe, _ = make_frappe({"q1": MUTATE_WITH_FUNCTION})
+        text = self.run_script(frappe)
+        self.assertIn("year(custom_proposed_date)", text)
+        self.assertIn("q1: Year =", text)
+
+    def test_a_function_in_a_stored_expression_settles_the_dialect(self):
+        frappe, _ = make_frappe({"q1": MUTATE_WITH_FUNCTION})
+        text = self.run_script(frappe)
+        self.assertIn("Functions called inside them", text)
+        self.assertIn("YEAR", text)
+        self.assertIn("the allowlist can widen to exactly these".upper()[:10], text.upper())
+
+    def test_arithmetic_only_expressions_are_NOT_reported_as_a_dialect_answer(self):
+        """The captured example was arithmetic. Reading "no function seen" as
+        "the language has no functions" is the guess this file exists to avoid."""
+        frappe, _ = make_frappe({"q1": MUTATE_ARITHMETIC})
+        text = self.run_script(frappe)
+        self.assertIn("NO FUNCTION SEEN", text)
+        self.assertIn("that is not", text)
+        self.assertNotIn("Functions called inside them", text)
+
+    def test_no_calculated_column_at_all_says_so(self):
+        frappe, _ = make_frappe({"q1": STRING_DIMENSION})
+        self.assertIn("no query here has a calculated column", self.run_script(frappe))
+
     def test_a_numeric_dimension_settles_it(self):
         frappe, _ = make_frappe({"q1": STRING_DIMENSION, "q2": NUMERIC_DIMENSION})
         text = self.run_script(frappe)
@@ -170,7 +214,7 @@ class TestItCreatesNothing(_Base):
         for forbidden in (".insert(", ".save(", ".delete(", "db.set_value",
                           "db.sql(", "frappe.enqueue", "requests."):
             self.assertNotIn(forbidden, source,
-                             f"insights_dimension_probe.py contains {forbidden!r}")
+                             f"insights_operations_probe.py contains {forbidden!r}")
 
 
 if __name__ == "__main__":
