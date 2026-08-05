@@ -201,6 +201,41 @@ class TestTheAnswer(_Base):
         self.assertIn("ANSWER: yes", text)
 
 
+class TestTheStoredOrder(_Base):
+    """A UI list is in the UI's display order. The record is the source of
+    truth for whether a mutate precedes a summarize."""
+
+    BEFORE = [
+        {"type": "source", "table": {"table_name": "tabQuality Action"}},
+        {"type": "mutate", "new_name": "year_col", "data_type": "Auto",
+         "expression": {"type": "expression",
+                        "expression": "year(custom_proposed_date)"}},
+        {"type": "summarize", "measures": [{"measure_name": "avg_of_x"}],
+         "dimensions": [{"column_name": "year_col", "data_type": "String"}]},
+    ]
+
+    def test_the_order_is_printed_from_the_record(self):
+        frappe, _ = make_frappe({"q1": self.BEFORE})
+        text = self.run_script(frappe)
+        self.assertIn("source -> mutate -> summarize", text)
+
+    def test_a_mutate_before_a_summarize_is_counted(self):
+        frappe, _ = make_frappe({"q1": self.BEFORE})
+        self.assertIn("1 of 1 put the mutate BEFORE a summarize", text := self.run_script(frappe))
+        self.assertIn("from the record rather than from the UI", text)
+
+    def test_a_mutate_after_a_summarize_is_not_counted_as_before(self):
+        """The arithmetic case puts it after. Counting that as evidence for the
+        other ordering would be reading the answer into the question."""
+        after = [self.BEFORE[0], self.BEFORE[2], self.BEFORE[1]]
+        frappe, _ = make_frappe({"q1": after})
+        self.assertIn("0 of 1 put the mutate BEFORE a summarize", self.run_script(frappe))
+
+    def test_no_mutate_anywhere_says_so(self):
+        frappe, _ = make_frappe({"q1": STRING_DIMENSION})
+        self.assertIn("no stored query has a mutate at all", self.run_script(frappe))
+
+
 class TestItCreatesNothing(_Base):
     def test_only_reads_were_called(self):
         frappe, calls = make_frappe({"q1": STRING_DIMENSION})

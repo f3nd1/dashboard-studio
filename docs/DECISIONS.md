@@ -171,6 +171,20 @@ Its functions are in the **inner** wrapper, computing per-row columns BEFORE the
 
 Unblocking that shape needs **two** things beyond the dialect: `lift_renaming_wrapper` accepting a computed inner item, and a `mutate` emitted **before** the `summarize` so the grouping has a real column to name. Mutate-before-summarize has never been observed — every mutate this project emits sits after one — and it is the same unobserved ordering the `qn_1 * 5` case needs. So this is one capability short of ADR-011, not one allowlist entry short of it.
 
+**AMENDMENT (2026-08-05, second) — two of the three unknowns are now settled, by a query built by hand in Insights.**
+
+1. **The expression language HAS functions, and `year` is spelled lowercase.** A calculated column `year(custom_proposed_date)` was built on `tabQuality Action` and returned 2023/2024/2025/2026. So the allowlist is not permanently arithmetic-only; it may widen to functions that have been *seen*, exactly as this file already said.
+2. **A `mutate` may precede a `summarize`.** That calculated column was then used as the grouping of a Group & Summarize (avg by `year_col`, returning 2023→1, 2024→0.84, 2025→0.69, 2026→0.36). It ran, so the ordering is valid — and it has to be, since a grouping cannot name a column that does not exist yet. This retires "mutate-before-summarize has never been observed", which was blocking both the `qn_1 * 5` case and the date/label family.
+
+**What is still missing, and why it is not a formality.** Metabase does not write `YEAR(date)` on its own — it writes `CONCAT('', YEAR(date))`, and the `CONCAT` is load-bearing: it turns the year into a **text label** so the chart gets a categorical axis. Translating that as `year(date)` alone would change the column's type, which lands straight on the one question still open — whether `DIMENSION_DATA_TYPES` genuinely excludes a numeric grouping. So this shape needs one of:
+
+- the `data_type` Insights stored for the `year_col` dimension in the query above (if it is Integer or Decimal, the dimension restriction is ours and comes out), **or**
+- `concat` confirmed in the expression language the same way `year` was.
+
+Both come from the same place: the stored Operations JSON of the query that was just built. `scripts/insights_operations_probe.py` reads exactly that — every mutate expression whole, the dimension data_types with examples, and the stored operation ORDER — so no screenshot or hand-copying is needed.
+
+**Nothing has been built on these two facts yet, deliberately.** Emitting a pre-summarize mutate needs a `data_type` for the dimension it feeds, and choosing one without reading what Insights stored is the guess ADR-009 paid for twice.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

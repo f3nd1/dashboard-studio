@@ -80,7 +80,7 @@ def _probe():
     print(f"   {len(rows)} query records to read")
     print()
     seen, examples, read, with_summarize = {}, {}, 0, 0
-    expressions, functions = [], {}
+    expressions, functions, orders = [], {}, []
     for row in rows:
         try:
             record = frappe.get_doc(doctype, row["name"])
@@ -90,6 +90,12 @@ def _probe():
         operations = operations_of(record, fields)
         if operations:
             read += 1
+        kinds = [o.get("type") for o in operations if isinstance(o, dict)]
+        if "mutate" in kinds:
+            # The ORDER, from the stored record rather than the UI, which lists
+            # the steps in its own display order. A mutate before a summarize
+            # is what lets a grouping name a calculated column.
+            orders.append((row["name"], " -> ".join(str(k) for k in kinds)))
         for operation in operations:
             if not isinstance(operation, dict):
                 continue
@@ -147,6 +153,23 @@ def _probe():
         print("   captured example showed too. To settle it: in the Insights UI,")
         print("   add a calculated column that extracts a year from a date, save")
         print("   it, and re-run this. What it stores is the answer.")
+    print()
+    print("=" * 78)
+    print(f"3. Stored operation ORDER for queries carrying a mutate ({len(orders)})")
+    print("=" * 78)
+    for name, order in orders[:20]:
+        print(f"   {name}: {order}")
+    if len(orders) > 20:
+        print(f"   ...and {len(orders) - 20} more")
+    if not orders:
+        print("   none — no stored query has a mutate at all")
+    else:
+        before = [name for name, order in orders
+                  if "mutate" in order.split(" -> summarize")[0]]
+        print()
+        print(f"   {len(before)} of {len(orders)} put the mutate BEFORE a summarize.")
+        print("   That is the ordering a calculated column feeding a grouping needs,")
+        print("   and this reads it from the record rather than from the UI's list.")
     print()
     print("=" * 78)
     found = [d for d in seen if d in numeric]
