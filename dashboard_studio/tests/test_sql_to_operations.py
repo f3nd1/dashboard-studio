@@ -771,10 +771,24 @@ class TestRefusals(unittest.TestCase):
             run("SELECT SUM(`status`) FROM `tabStudent Applicant`"),
             "only a number can be SUM'd")
 
-    def test_grouping_by_a_number_is_refused(self):
-        self.assert_refused(
-            run("SELECT `fee`, COUNT(*) FROM `tabStudent Applicant` GROUP BY `fee`"),
-            "groups only by")
+    def test_grouping_by_a_number_is_ALLOWED(self):
+        """This used to refuse, on a constant borrowed from the archived
+        chart-building path whose own comment said it was the CHART RENDERER's
+        rule for picking an x-axis. Applied to `summarize.dimensions` it was
+        ours, not Insights'. Settled by evidence: query `s39rc7j648` on the live
+        site stores a dimension typed Integer."""
+        result = run("SELECT `fee`, COUNT(*) FROM `tabStudent Applicant` "
+                     "GROUP BY `fee`")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["operations"][-1]["dimensions"], [
+            {"dimension_name": "fee", "column_name": "fee", "data_type": "Decimal"}])
+
+    def test_grouping_by_an_integer_is_allowed_too(self):
+        result = run("SELECT `headcount`, COUNT(*) FROM `tabStudent Applicant` "
+                     "GROUP BY `headcount`")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["operations"][-1]["dimensions"][0]["data_type"],
+                         "Integer")
 
     def test_grouping_without_aggregating_is_refused(self):
         self.assert_refused(

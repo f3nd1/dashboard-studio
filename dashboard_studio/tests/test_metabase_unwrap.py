@@ -43,6 +43,11 @@ QPO = pathlib.Path(__file__).resolve().parent / "fixtures" / "quality_performanc
 # and stops this rule reading it. See TestACommentIsNotStripped below.
 RESELECTED = (pathlib.Path(__file__).resolve().parent / "fixtures"
               / "aggregated_then_reselected.sql")
+# The fourth: a wrapper that COMPUTES its columns — a year label and a cast —
+# which the outer then groups by and averages. Reported 2026-08-05, and it also
+# has no comment header, for the reason above.
+YEAR_LABEL = (pathlib.Path(__file__).resolve().parent / "fixtures"
+              / "year_label_then_group.sql")
 
 # The inner wrapper, exactly as Metabase writes it.
 INNER = "( select * from `tabStudent Applicant` ) AS `__mb_source`"
@@ -785,6 +790,109 @@ class TestTheReselectedReportEndToEnd(unittest.TestCase):
         self.assertNotIn("__mb_source", text)
         self.assertNotIn("d700d9c7", text)
         self.assertNotIn("70767e69", text)
+
+
+class TestAComputedWrapperBecomesOperations(unittest.TestCase):
+    """The date/label family, end to end over the reported capture.
+
+    Its wrapper computes rather than renames, so no rule could touch it until
+    three facts were read off the live site: the expression language has
+    functions (`year`, lowercase), a `mutate` may precede a `summarize` (query
+    `s39rc7j648` stores `source -> mutate -> summarize`), and Insights accepts a
+    numeric grouping (that same query's dimension is typed Integer).
+    """
+
+    COLUMNS = {"Quality Action": {
+        "name": "String", "custom_proposed_date": "Date",
+        "custom_aggregated_performance_index_api": "String"}}
+
+    def operations(self):
+        result = operations_from_sql(analyze_sql(YEAR_LABEL.read_text()), self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def test_it_converts_in_full(self):
+        self.assertEqual(self.operations(), [
+            {"type": "source",
+             "table": {"type": "table", "data_source": "Site DB",
+                       "table_name": "tabQuality Action"}},
+            {"type": "cast",
+             "column": {"type": "column",
+                        "column_name": "custom_aggregated_performance_index_api"},
+             "data_type": "Decimal"},
+            {"type": "mutate", "new_name": "Year", "data_type": "Auto",
+             "expression": {"type": "expression",
+                            "expression": "year(custom_proposed_date)"}},
+            {"type": "summarize",
+             "measures": [{"measure_name":
+                           "avg_of_custom_aggregated_performance_index_api",
+                           "column_name":
+                           "custom_aggregated_performance_index_api",
+                           "data_type": "Decimal", "aggregation": "avg"}],
+             "dimensions": [{"dimension_name": "Year", "column_name": "Year",
+                             "data_type": "Integer"}]},
+        ])
+
+    def test_the_computed_column_exists_before_the_step_that_groups_by_it(self):
+        """The whole reason this needed a live answer: a grouping cannot name a
+        column that does not exist yet."""
+        kinds = [op["type"] for op in self.operations()]
+        self.assertLess(kinds.index("mutate"), kinds.index("summarize"))
+
+    def test_the_CONCAT_wrapper_is_dropped_and_the_year_keeps_its_own_type(self):
+        """Metabase writes `CONCAT('', YEAR(d))` to make the year a text label
+        so the chart axis is categorical. Insights groups by a number quite
+        happily, so the label wrapper goes and the values are the same years."""
+        mutate = [op for op in self.operations() if op["type"] == "mutate"][0]
+        self.assertEqual(mutate["expression"]["expression"],
+                         "year(custom_proposed_date)")
+        self.assertNotIn("concat", mutate["expression"]["expression"])
+
+    def test_the_wrappers_alias_reaches_nothing(self):
+        text = repr(self.operations())
+        self.assertNotIn("__mb_source", text)
+
+    def test_a_function_nobody_has_seen_stored_refuses_by_name(self):
+        """`year` is in the allowlist because a stored Insights expression uses
+        it. `month` is not, however reasonable it looks — the vocabulary widens
+        only to what has been observed."""
+        result = analyze_sql(YEAR_LABEL.read_text().replace("YEAR(", "MONTH("))
+        self.assertFalse(result["supported"])
+        self.assertIn("MONTH", " | ".join(result["reasons"]))
+
+    def test_a_CONCAT_that_actually_concatenates_refuses(self):
+        """`CONCAT('', x)` is Metabase making a value into text and is dropped.
+        `CONCAT('FY', x)` builds a different label — "FY2024", not 2024 — and
+        dropping that prefix would relabel every row silently."""
+        result = analyze_sql(YEAR_LABEL.read_text().replace("CONCAT('',", "CONCAT('FY',"))
+        self.assertFalse(result["supported"], "a prefix was dropped from every label")
+        self.assertIn("CONCAT", " | ".join(result["reasons"]))
+
+    def test_a_join_carries_the_column_the_computation_READS(self):
+        """Not the name it produces: `Year` is created by the mutate and is a
+        column of no table, while `custom_proposed_date` has to come across the
+        join or the mutate has nothing to read."""
+        sql = ("SELECT `w`.`Year` AS `Year`, AVG(`w`.`v`) AS `avg` FROM ( "
+               "SELECT CONCAT('', YEAR(`c`.`d`)) AS `Year`, `c`.`v` AS `v` "
+               "FROM `tabParent` LEFT JOIN `tabChild` c "
+               "ON `tabParent`.`name` = c.`parent` ) AS `w` GROUP BY `w`.`Year`")
+        columns = {"Parent": {"name": "String"},
+                   "Child": {"name": "String", "parent": "String", "d": "Date",
+                             "v": "Decimal"}}
+        result = operations_from_sql(analyze_sql(sql), columns)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        carried = [c["column_name"] for c in result["operations"][1]["select_columns"]]
+        self.assertIn("d", carried)
+        self.assertNotIn("Year", carried)
+
+    def test_a_CAST_that_also_renames_refuses(self):
+        """`cast` converts a column in place — CastArgs is {column, data_type},
+        with nowhere to put a new name."""
+        result = analyze_sql(YEAR_LABEL.read_text().replace(
+            "AS double) AS `custom_aggregated_performance_index_api`",
+            "AS double) AS `renamed`"))
+        self.assertFalse(result["supported"])
+        self.assertIn("renaming", " | ".join(result["reasons"]))
 
 
 class TestACommentIsNotStripped(unittest.TestCase):

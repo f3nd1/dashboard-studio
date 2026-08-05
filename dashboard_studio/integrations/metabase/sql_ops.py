@@ -75,7 +75,18 @@ INSIGHTS_AGGREGATIONS = ("sum", "count", "avg", "min", "max", "count_distinct")
 # to itself rather than inventing a convention.
 COUNT_COLUMN = "count"
 
-DIMENSION_DATA_TYPES = ("String", "Date", "Datetime", "Time")
+# There is no DIMENSION_DATA_TYPES any more. It was ("String", "Date",
+# "Datetime", "Time"), carried over from the archived chart-building path where
+# its own comment said *"these are not our rules, they are the ones the CHART
+# RENDERER applies"* — there it picked a chart's x-axis. Applied to
+# `summarize.dimensions` it refused to group by a number, and that was this
+# converter's own restriction, not Insights'. Settled by evidence rather than
+# argument: query `s39rc7j648` on the live site stores a dimension typed
+# Integer (`year_col`). Grouping by a year, a rating or a 0/1 flag is ordinary,
+# and Insights accepts it.
+#
+# MEASURE_DATA_TYPES stays, and is a different kind of rule: "only a number can
+# be averaged" is arithmetic, not a renderer's preference.
 MEASURE_DATA_TYPES = ("Integer", "Decimal")
 
 # Aggregations that need a number to work on. Counting is not one of them:
@@ -357,7 +368,19 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
         for column, data_type in (columns.get(doctype) or {}).items():
             available.setdefault(column, {})[doctype] = data_type
 
+    # A computed column is created by an operation before the summarize, so it
+    # is available to the grouping and the aggregate by name — and it is NOT a
+    # column of any table, so it must never reach the schema check.
+    computed = analysis.get("computed") or []
+    for entry in computed:
+        available.setdefault(str(entry["alias"]), {})[source] = entry["data_type"]
     referenced = _referenced_columns(analysis, available)
+    for entry in computed:
+        # What the join has to carry is the column the computation READS, not
+        # the name it produces.
+        table = entry.get("table") or source
+        referenced.setdefault(table, set()).add(str(entry["column"]))
+        referenced.get(table, set()).discard(str(entry["alias"]))
     operations = [_source("tab" + source, data_source)]
 
     # One Insights join operation per JOIN, in the order they were written: each
@@ -431,15 +454,18 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                 reasons.append(problem)
                 continue
             column = str(reference.get("field")).strip()
-            if data_type not in DIMENSION_DATA_TYPES:
-                reasons.append(
-                    f"'{column}' is {data_type}, and Insights groups only by "
-                    "text, a date or a time"
-                )
-                continue
             dimensions.append({"dimension_name": column, "column_name": column,
                                "data_type": data_type})
-        # The cast goes AFTER the filters and immediately before the
+        # A computed column comes first of all: the summarize below groups by
+        # it and aggregates over it, so it has to exist by then. Insights
+        # stores exactly this ordering — `source -> mutate -> summarize` on
+        # query `s39rc7j648` — which is what made this translatable.
+        for entry in computed:
+            if entry["kind"] == "cast":
+                operations.append(_cast(str(entry["column"]), entry["data_type"]))
+            else:
+                operations.append(_mutate(str(entry["alias"]), entry["expression"]))
+        # The ADR-009 cast goes AFTER the filters and immediately before the
         # summarize, which is where `* 1` sat in the original SQL: scoped to
         # the aggregate, not to the WHERE. Casting earlier would retype the
         # column the filters were already compared against as text.

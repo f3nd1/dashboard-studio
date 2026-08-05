@@ -466,10 +466,83 @@ _WRAPPER_ITEM = re.compile(
 _WRAPPER_BLOCKS = re.compile(r"\b(GROUP\s+BY|HAVING|DISTINCT|UNION|LIMIT)\b", re.IGNORECASE)
 
 
-def lift_renaming_wrapper(sql: str) -> tuple[str, list[str]]:
+# A wrapper item that COMPUTES a per-row column, rather than renaming one.
+# Metabase writes these to build a chart label or to force a type:
+#
+#   CONCAT('', YEAR(`tabX`.`d`)) AS `Year`     -> mutate  Year = year(d)
+#   CAST(`tabX`.`v` AS double)   AS `v`        -> cast    v -> Decimal
+#
+# Each becomes an OPERATION placed before the summarize, which is an ordering
+# Insights itself stores (`source -> mutate -> summarize`, query s39rc7j648 on
+# the live site). Only the forms actually seen are read; anything else refuses
+# by name, because this builds text a query engine evaluates.
+#
+# `year` is lowercase because that is the spelling in a stored expression on
+# that site (`year_col = year(custom_proposed_date)`). No other function is
+# accepted — the vocabulary widens only to what has been observed.
+_CALL = re.compile(r"^(?P<name>[A-Za-z_]\w*)\s*\((?P<args>.*)\)$",
+                   re.IGNORECASE | re.DOTALL)
+# `CONCAT('', x)` is Metabase making a value into a TEXT label so the chart axis
+# is categorical. Insights accepts a numeric grouping — proved by a stored
+# Integer dimension — so the wrapper is dropped and the value keeps its own
+# type. The values are the same years either way.
+_EMPTY_STRING = re.compile(r"^(?:''|\"\")$")
+_CAST_TYPES = {"double": "Decimal", "decimal": "Decimal", "float": "Decimal",
+               "real": "Decimal", "signed": "Integer", "integer": "Integer",
+               "int": "Integer", "unsigned": "Integer", "char": "String"}
+
+
+def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
+    """``(computed, offending)`` — exactly one is truthy.
+
+    `computed` is ``{alias, kind, column, table, expression, data_type}`` where
+    kind is "mutate" or "cast"; `offending` names the token that stopped it.
+    """
+    call = _CALL.match(text.strip())
+    if not call:
+        return None, text.strip()[:40]
+    name, args = call.group("name").upper(), call.group("args").strip()
+    if name == "CONCAT":
+        parts = _split_items(args)
+        if len(parts) == 2 and _EMPTY_STRING.match(parts[0].strip()):
+            return _computed_column(parts[1], alias, aliases, reasons)
+        return None, "CONCAT"
+    if name == "YEAR":
+        qualifier, column = _split_ref(args)
+        if not column:
+            return None, "YEAR of something that is not a column"
+        return {"alias": alias, "kind": "mutate", "column": column,
+                "table": _resolve(qualifier, aliases, reasons),
+                "expression": f"year({column})", "data_type": "Integer"}, ""
+    if name == "CAST":
+        cast = re.match(r"^(?P<value>.+?)\s+AS\s+(?P<type>\w+)\s*$", args,
+                        re.IGNORECASE | re.DOTALL)
+        if not cast:
+            return None, "CAST without an AS"
+        data_type = _CAST_TYPES.get(cast.group("type").lower())
+        if not data_type:
+            return None, "CAST to " + cast.group("type")
+        qualifier, column = _split_ref(cast.group("value"))
+        if not column:
+            return None, "CAST of something that is not a column"
+        if column != alias:
+            # `cast` converts a column IN PLACE — CastArgs is {column,
+            # data_type} with nowhere to put a new name. Casting AND renaming
+            # is two things, and only one of them is expressible.
+            return None, f"CAST renaming '{column}' to '{alias}'"
+        return {"alias": alias, "kind": "cast", "column": column,
+                "table": _resolve(qualifier, aliases, reasons),
+                "expression": "", "data_type": data_type}, ""
+    return None, name
+
+
+def lift_renaming_wrapper(sql: str, aliases: dict | None = None):
     """Fold a renaming wrapper into the query it wraps.
 
-    Returns ``(statement, reasons)``. Every bail-out returns the statement as it
+    Returns ``(statement, reasons, computed)``, where `computed` is the wrapper
+    items that COMPUTE a column rather than renaming one. Each becomes an
+    operation before the summarize; the alias travels on as an ordinary column
+    name, which is what lets the outer GROUP BY and aggregate reference it. Every bail-out returns the statement as it
     was, so the subquery check downstream turns it into a named reason; the
     reasons list is for the one case where a generic "subquery" would hide
     something specific worth reading.
@@ -477,18 +550,20 @@ def lift_renaming_wrapper(sql: str) -> tuple[str, list[str]]:
     if not isinstance(sql, str):
         raise TypeError("sql must be a string")
     reasons: list[str] = []
+    computed: list[dict] = []
+    aliases = aliases or {}
     match = _FROM_PAREN.search(sql)
     if not match:
-        return sql, reasons
+        return sql, reasons, computed
     opened = match.end() - 1
     closed = _matching_paren(sql, opened)
     if closed < 0:
-        return sql, reasons
+        return sql, reasons, computed
     head, inner, after = sql[:match.start()], sql[opened + 1:closed], sql[closed + 1:]
 
     named = _WRAPPER_ALIAS.match(after)
     if not named:
-        return sql, reasons
+        return sql, reasons, computed
     wrapper = named.group(1) or named.group(2)
     tail = after[named.end():]
 
@@ -496,30 +571,52 @@ def lift_renaming_wrapper(sql: str) -> tuple[str, list[str]]:
     # to be ANDed with the inner one, and a second derived table is a different
     # shape entirely.
     if re.search(r"\bWHERE\b", tail, re.IGNORECASE) or "(" in tail:
-        return sql, reasons
+        return sql, reasons, computed
     if len(re.findall(r"\bSELECT\b", head, re.IGNORECASE)) != 1:
-        return sql, reasons
+        return sql, reasons, computed
     # Exactly one SELECT inside: a second means a per-table wrapper this pass
     # could not flatten, so the joins are not readable and there is nothing to
     # lift onto. (A bare "( in source" check was written alongside this and
     # removed — it caught nothing this did not, and a stray parenthesis in an
     # ON clause fails the join parse downstream anyway, which is a refusal.)
     if len(re.findall(r"\bSELECT\b", inner, re.IGNORECASE)) != 1:
-        return sql, reasons
+        return sql, reasons, computed
     if _WRAPPER_BLOCKS.search(inner):
-        return sql, reasons
+        return sql, reasons, computed
 
     inner_from = re.search(r"\bFROM\b", inner, re.IGNORECASE)
     if not inner_from:
-        return sql, reasons
+        return sql, reasons, computed
     items, source = inner[:inner_from.start()], inner[inner_from.start():]
     if not re.match(r"\s*SELECT\b", items, re.IGNORECASE):
-        return sql, reasons
+        return sql, reasons, computed
     renames = {}
     for item in _split_items(items.strip()[len("SELECT"):]):
-        parsed = _WRAPPER_ITEM.match(" ".join(item.split()))
+        text = " ".join(item.split())
+        parsed = _WRAPPER_ITEM.match(text)
         if not parsed:
-            return sql, reasons
+            # Not a rename. It may still be a computed column this can turn
+            # into an operation — `CONCAT('', YEAR(d)) AS Year` and
+            # `CAST(v AS double) AS v` are the forms Metabase writes.
+            named_item = _TRAILING_ALIAS.search(text)
+            if not named_item:
+                return sql, reasons, computed
+            item_alias = (named_item.group("alias_q") or named_item.group("alias")).strip()
+            built, offending = _computed_column(
+                _TRAILING_ALIAS.sub("", text).strip(), item_alias, aliases, reasons)
+            if not built:
+                reasons.append(
+                    f"the wrapper computes '{item_alias}' using {offending}, which "
+                    "this converter does not translate — `year(...)` and a numeric "
+                    "`CAST` are the calculated columns it reads, because those are "
+                    "the ones Insights has been seen to store"
+                )
+                return sql, reasons, computed
+            computed.append(built)
+            # The alias travels on as a plain column name: the operation this
+            # becomes creates a real column by that name before the summarize.
+            renames[item_alias] = (f"`{item_alias}`", False)
+            continue
         alias = parsed.group("alias_q") or parsed.group("alias")
         # The `* 1` is kept in the mapped text: dropping it here would hide a
         # cast the query asked for, and the aggregate would then be typed as
@@ -546,7 +643,7 @@ def lift_renaming_wrapper(sql: str) -> tuple[str, list[str]]:
                     "coerced column is translated; grouping by one is not, because "
                     "every row that is not a number coerces to the same 0"
                 )
-                return sql, reasons
+                return sql, reasons, computed
 
     unmapped = []
 
@@ -561,9 +658,9 @@ def lift_renaming_wrapper(sql: str) -> tuple[str, list[str]]:
     rewritten_head = reference.sub(swap, head)
     rewritten_tail = reference.sub(swap, tail)
     if unmapped:
-        return sql, reasons
+        return sql, reasons, computed
     return (rewritten_head.rstrip() + " " + source.strip() + " "
-            + rewritten_tail.strip()).strip(), reasons
+            + rewritten_tail.strip()).strip(), reasons, computed
 
 
 # A SELECT item that computes over aggregates — `( AVG(a) + AVG(b) ) / 2.0`.
@@ -893,8 +990,16 @@ def analyze_sql(sql: str) -> dict:
     # before lift_ so that a wrapper it removes cannot be mistaken for one to
     # lift onto. They cannot both fire on the same statement: drop_ requires an
     # outer that does nothing, lift_ an outer that aggregates.
-    statement, lift_reasons = lift_renaming_wrapper(
-        drop_passthrough_wrapper(unwrap_derived_tables(sql.strip().rstrip(";"))))
+    flattened = drop_passthrough_wrapper(unwrap_derived_tables(sql.strip().rstrip(";")))
+    # The lift resolves the qualifier of a computed column against the tables
+    # the statement names, so it needs an alias map before the final one exists.
+    # Built from the flattened text, which already has the real table names in
+    # it — the wrapper aliases it would add are exactly the ones being removed.
+    provisional = _aliases(_FROM_TABLE.search(flattened),
+                           _dt((_FROM_TABLE.search(flattened) or [None, ""]).group(1))
+                           if _FROM_TABLE.search(flattened) else None,
+                           list(_JOIN_TABLE.finditer(flattened)))
+    statement, lift_reasons, computed = lift_renaming_wrapper(flattened, provisional)
     reasons.extend(lift_reasons)
 
     # Subquery / nested SELECT: more than one SELECT keyword.
@@ -997,6 +1102,7 @@ def analyze_sql(sql: str) -> dict:
         "source_doctype": source_doctype,
         "aggregations": aggregations,
         "expressions": expressions,
+        "computed": computed,
         "filters": filters,
         "group_by": group_by,
         "joins": joins,

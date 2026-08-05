@@ -64,9 +64,9 @@ def _shapes():
         from dashboard_studio.integrations.metabase import parser
     def rewritten(sql):
         """What the three existing rules leave behind — the actual residue."""
-        statement, _ = parser.lift_renaming_wrapper(
+        statement = parser.lift_renaming_wrapper(
             parser.drop_passthrough_wrapper(
-                parser.unwrap_derived_tables(sql.strip().rstrip(";"))))
+                parser.unwrap_derived_tables(sql.strip().rstrip(";"))))[0]
         return statement
     def clauses(text):
         found = []

@@ -185,6 +185,26 @@ Both come from the same place: the stored Operations JSON of the query that was 
 
 **Nothing has been built on these two facts yet, deliberately.** Emitting a pre-summarize mutate needs a `data_type` for the dimension it feeds, and choosing one without reading what Insights stored is the guess ADR-009 paid for twice.
 
+## ADR-012 — A wrapper that COMPUTES becomes operations before the summarize
+
+**Decision.** A Metabase wrapper whose items compute rather than rename is lifted, and each computed item becomes an operation placed **before** the `summarize` that reads it: `CONCAT('', YEAR(d)) AS Year` → a `mutate` `Year = year(d)`, `CAST(v AS double) AS v` → a `cast`. `DIMENSION_DATA_TYPES` is deleted, so a grouping may be a number.
+
+**Three facts made this possible, and all three were read off the live site rather than reasoned about** (probe output 2026-08-05):
+
+- **Insights accepts a numeric grouping.** Query `s39rc7j648` stores a dimension typed `Integer` (`year_col`). `DIMENSION_DATA_TYPES` came from the archived chart path, where its own comment said *"these are not our rules, they are the ones the CHART RENDERER applies"* — it picked a chart's x-axis there. Applied to `summarize.dimensions` it was ours, and it was wrong. Gone.
+- **The expression language has functions, and `year` is lowercase.** Two stored expressions on the site, one of them `year_col = year(custom_proposed_date)`. The allowlist widens to **exactly `year`** — `MONTH`, `DAY` and `QUARTER` refuse by name however reasonable they look, because the vocabulary widens only to what has been observed.
+- **A `mutate` may precede a `summarize`.** Stored order on that query: `source -> mutate -> summarize`. Read from the record, not the UI's display list.
+
+**`CONCAT('', x)` is dropped, and that is a judgement worth stating.** Metabase writes it to turn the year into a TEXT label so the chart axis is categorical. Since Insights groups by a number quite happily, the wrapper goes and the value keeps its own type — the rows are the same years either way, only the column's type differs. `CONCAT('FY', x)` is a different matter and **refuses**: that prefix is part of the label, and dropping it would relabel every row silently.
+
+**`CAST` here is the operation, not the expression.** `CAST(v AS double) AS v` becomes a real `cast`, which converts a column in place. `CAST(v AS double) AS renamed` refuses: `CastArgs` is `{column, data_type}` with nowhere to put a new name, so casting and renaming is two things and only one is expressible. This is the same reason ADR-011 still refuses `CAST(<expression> AS double)` — that one converts a result that is never a column, and nothing has changed about it.
+
+**What the join carries is the column the computation READS**, never the name it produces. `Year` is created by the mutate and belongs to no table; `custom_proposed_date` has to come across the join or the mutate has nothing to read. Both directions are tested.
+
+`dashboard_studio/tests/fixtures/year_label_then_group.sql` is the reported capture, asserted end to end.
+
+**Still refused, and worth knowing before assuming this generalises**: any function but `year`, a `CONCAT` that really concatenates, a `CAST` that renames, and a computed item this cannot read at all. Each names the token that stopped it.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.
