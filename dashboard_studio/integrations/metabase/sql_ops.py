@@ -373,6 +373,29 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     # column of any table, so it must never reach the schema check.
     computed = analysis.get("computed") or []
     for entry in computed:
+        if entry.get("data_type") is None:
+            # A scale factor is typed from the column it reads: `rating * 5` is
+            # a number only if `rating` is one. Multiplying text by 5 is a
+            # coercion nobody asked for — ADR-009's rule, and the same reason
+            # `* 1` is allowed only as an explicit cast for an aggregate.
+            known = available.get(str(entry["column"]), {})
+            found = {data_type for data_type in known.values()}
+            if not found:
+                reasons.append(
+                    f"'{entry['column']}' is computed from, and is not a column of "
+                    "any table this query reads"
+                )
+                continue
+            if not found <= set(MEASURE_DATA_TYPES):
+                reasons.append(
+                    f"the wrapper computes '{entry['alias']}' from '{entry['column']}', "
+                    f"which is {'/'.join(sorted(found))} — arithmetic on text coerces "
+                    "every value that is not a number to 0, silently"
+                )
+                continue
+            # Decimal rather than the column's own type: a scale factor may
+            # divide, and a Decimal groups and aggregates the same values.
+            entry["data_type"] = "Decimal"
         available.setdefault(str(entry["alias"]), {})[source] = entry["data_type"]
     referenced = _referenced_columns(analysis, available)
     for entry in computed:

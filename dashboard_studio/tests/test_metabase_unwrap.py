@@ -48,6 +48,11 @@ RESELECTED = (pathlib.Path(__file__).resolve().parent / "fixtures"
 # has no comment header, for the reason above.
 YEAR_LABEL = (pathlib.Path(__file__).resolve().parent / "fixtures"
               / "year_label_then_group.sql")
+# The fifth: report 1680, the original flagship blocker. Its wrapper scales a
+# rating by 5. That half converts now; the outer CAST over an expression does
+# not, which is what its test asserts.
+SCALE_FACTOR = (pathlib.Path(__file__).resolve().parent / "fixtures"
+                / "scale_factor_wrapper.sql")
 
 # The inner wrapper, exactly as Metabase writes it.
 INNER = "( select * from `tabStudent Applicant` ) AS `__mb_source`"
@@ -893,6 +898,79 @@ class TestAComputedWrapperBecomesOperations(unittest.TestCase):
             "AS double) AS `renamed`"))
         self.assertFalse(result["supported"])
         self.assertIn("renaming", " | ".join(result["reasons"]))
+
+
+class TestAScaleFactorWrapper(unittest.TestCase):
+    """`rating * 5` — Metabase putting a 1-5 answer on a 0-100 scale.
+
+    It needed NO new evidence: arithmetic in a mutate expression is what the
+    first captured expression was, and mutate-before-summarize was settled by
+    ADR-012. It is not the `* 1` of ADR-009 — `* 1` leaves every value alone,
+    `* 5` changes them, so it is a computation rather than a cast.
+    """
+
+    SQL = ("SELECT `w`.`Q1` AS `Q1`, AVG(`w`.`Q1`) AS `avg` FROM ( "
+           "SELECT `c`.`rating_1` * 5 AS `Q1` FROM `tabSurvey` "
+           "LEFT JOIN `tabResponse` c ON `tabSurvey`.`name` = c.`parent` ) AS `w` "
+           "GROUP BY `w`.`Q1`")
+    COLUMNS = {"Survey": {"name": "String"},
+               "Response": {"name": "String", "parent": "String",
+                            "rating_1": "Integer"}}
+
+    def operations(self, columns=None):
+        result = operations_from_sql(analyze_sql(self.SQL), columns or self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def test_the_scale_factor_becomes_a_mutate_before_the_summarize(self):
+        operations = self.operations()
+        self.assertEqual([op["type"] for op in operations],
+                         ["source", "join", "mutate", "summarize"])
+        self.assertEqual(operations[2], {
+            "type": "mutate", "new_name": "Q1", "data_type": "Auto",
+            "expression": {"type": "expression", "expression": "rating_1 * 5"}})
+
+    def test_it_is_typed_from_the_column_it_reads(self):
+        summarize = self.operations()[-1]
+        self.assertEqual(summarize["measures"][0]["data_type"], "Decimal")
+        self.assertEqual(summarize["dimensions"][0]["data_type"], "Decimal")
+
+    def test_scaling_a_TEXT_column_refuses(self):
+        """`'abc' * 5` is 0 in MySQL. Scaling text is a coercion nobody asked
+        for — ADR-009's rule, and the reason `* 1` is allowed only as an
+        explicit cast for an aggregate."""
+        columns = {"Survey": {"name": "String"},
+                   "Response": {"name": "String", "parent": "String",
+                                "rating_1": "String"}}
+        result = operations_from_sql(analyze_sql(self.SQL), columns)
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+        self.assertIn("coerces every value that is not a number to 0",
+                      " | ".join(result["reasons"]))
+
+    def test_the_join_carries_the_column_the_scale_reads(self):
+        carried = [c["column_name"] for c in self.operations()[1]["select_columns"]]
+        self.assertIn("rating_1", carried)
+        self.assertNotIn("Q1", carried)
+
+    def test_two_columns_multiplied_together_refuses(self):
+        """One column with numeric literals is the observed shape. `a * b` is
+        expressible in the dialect but has not been seen, and typing it is a
+        second question."""
+        result = analyze_sql(self.SQL.replace("* 5", "* `c`.`rating_2`"))
+        self.assertFalse(result["supported"])
+        self.assertIn("rating_2", " | ".join(result["reasons"]))
+
+    def test_the_real_capture_still_names_its_REMAINING_blocker(self):
+        """Report 1680, the original flagship. Its `* 5` wrapper lifts now, so
+        the refusal has moved on to the outer `CAST(<expression> AS double)` —
+        which ADR-011 refuses for an unchanged reason: `cast` converts a
+        column, and that converts a result which is never one."""
+        result = analyze_sql(SCALE_FACTOR.read_text())
+        self.assertFalse(result["supported"])
+        reasons = " | ".join(result["reasons"])
+        self.assertIn("CAST", reasons)
+        self.assertNotIn("subquery", reasons)
 
 
 class TestACommentIsNotStripped(unittest.TestCase):

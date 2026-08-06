@@ -492,12 +492,49 @@ _CAST_TYPES = {"double": "Decimal", "decimal": "Decimal", "float": "Decimal",
                "int": "Integer", "unsigned": "Integer", "char": "String"}
 
 
+# One column reference, anywhere in a string — the scanning counterpart of the
+# anchored `_QUALIFIED`. Quoted or qualified only: Metabase always quotes, and a
+# bare word left unmatched lands in the residue below, which refuses. That is
+# the safe direction.
+_COLUMN_REF = re.compile(r"(?:`[^`]+`|\b[A-Za-z_]\w*)\.`?[A-Za-z_][\w ]*`?"
+                         r"|`[A-Za-z_][\w ]*`")
+
+
 def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
     """``(computed, offending)`` — exactly one is truthy.
 
     `computed` is ``{alias, kind, column, table, expression, data_type}`` where
     kind is "mutate" or "cast"; `offending` names the token that stopped it.
+    A `data_type` of None means "type it from the source column", which only
+    the translator can do.
     """
+    text = text.strip()
+    # `col * 5` — a SCALE FACTOR. Metabase writes it to put a 1-5 rating on a
+    # 0-100 scale, and it is not the `* 1` cast of ADR-009: `* 1` leaves every
+    # value alone, `* 5` is arithmetic that changes them. It needs no new
+    # vocabulary — arithmetic in a mutate expression is what the FIRST captured
+    # expression was, `(avg_of_idx + avg_of_docstatus) / 2` — and no new
+    # ordering, since ADR-012 established mutate-before-summarize.
+    #
+    # Exactly one column, with numeric literals around it. The residue after
+    # removing the column has to be arithmetic and contain an operator, which
+    # is the same allowlist ADR-011 applies to an expression over aggregates,
+    # and for the same reason: this becomes text a query engine evaluates.
+    references = _COLUMN_REF.findall(text)
+    if references and not _CALL.match(text):
+        residue = _COLUMN_REF.sub("", text)
+        named = {_split_ref(reference)[1] for reference in references}
+        if (_ARITHMETIC_ONLY.match(residue) and any(c in residue for c in "+-*/")
+                and len(named) == 1):
+            qualifier, column = _split_ref(references[0])
+            if column:
+                return {"alias": alias, "kind": "mutate", "column": column,
+                        "table": _resolve(qualifier, aliases, reasons),
+                        "expression": _COLUMN_REF.sub(column, text),
+                        # Typed from the column it reads: `rating * 5` is a
+                        # number only if `rating` is one, and the parser has no
+                        # types.
+                        "data_type": None}, ""
     call = _CALL.match(text.strip())
     if not call:
         return None, text.strip()[:40]

@@ -205,6 +205,22 @@ Both come from the same place: the stored Operations JSON of the query that was 
 
 **Still refused, and worth knowing before assuming this generalises**: any function but `year`, a `CONCAT` that really concatenates, a `CAST` that renames, and a computed item this cannot read at all. Each names the token that stopped it.
 
+## ADR-013 — A scale factor is a mutate, and it needed no new evidence
+
+**Decision.** `rating_1 * 5 AS Q1` in a wrapper becomes a `mutate` `Q1 = rating_1 * 5` before the `summarize`, typed from the column it reads.
+
+**Why it was buildable immediately**, where the CASE pattern reported alongside it is not: every fact it needs was already settled. Arithmetic in a mutate expression is what the *first* captured expression was (`(avg_of_idx + avg_of_docstatus) / 2`, ADR-011), and mutate-before-summarize was settled by ADR-012 from a stored operation order. So no new vocabulary and no new ordering — only the wrapper reader learning one more shape.
+
+**It is not ADR-009's `* 1`.** `* 1` leaves every value alone and exists to force a type; `* 5` changes every value. One is a cast, the other a computation, and they are read by different code for that reason.
+
+**Typed from the source column, and refused when that column is text.** The parser has no types, so it emits `data_type: None` meaning "the translator decides". The translator looks the column up and refuses if it is not numeric: `'abc' * 5` is 0 in MySQL, so scaling text would coerce every non-numeric row to zero silently — ADR-009's rule again, applied where it belongs. A numeric column gives `Decimal`, because a scale factor may divide and a Decimal groups and aggregates the same values.
+
+**Exactly one column, with numeric literals.** `a * b` refuses by name. It is expressible in the dialect, but it has not been observed and typing it is a second question; the vocabulary widens to what is seen.
+
+**The original flagship, report 1680, still refuses — and now says something new.** Its `* 5` wrapper lifts; what is left is the outer `CAST( AVG(a) + AVG(b) AS double ) / 2.0`, which ADR-011 refuses for an unchanged reason: `cast` converts a *column*, and that expression converts a result which is never one. Checked in as `fixtures/scale_factor_wrapper.sql` and asserted — the test requires the refusal to name CAST and NOT to say "subquery", so the progress is pinned rather than assumed.
+
+**A test fixture had to move because of this.** `test_subquery_shapes.py` used `* 5` precisely because it kept a query unliftable. It lifts now, so those fixtures use `MONTH(...)` instead — a function outside the allowlist. Worth noting as a pattern: a fixture chosen to be *unsupported* has a shelf life, and when it expires the tests that depend on it fail loudly, which is the right direction.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

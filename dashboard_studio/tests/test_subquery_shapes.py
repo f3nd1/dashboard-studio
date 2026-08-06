@@ -139,12 +139,15 @@ class TestTheExpressionVocabulary(_Base):
     about what those expressions are BUILT FROM — so it is counted, not
     assumed."""
 
-    # The reported capture, reduced. The inner `* 5` is what stops the lift —
-    # _WRAPPER_ITEM allows `* 1` and nothing else — so it stays a subquery and
-    # lands in this script's population, which is the point of the fixture.
+    # The reported capture, reduced. The inner items have to be something the
+    # lift still declines, or the query converts and leaves this script's
+    # population altogether — which is what happened to the original `* 5`
+    # here once a scale factor became a pre-summarize mutate. `MONTH` is the
+    # current choice for the same job: the allowlist widens only to functions
+    # seen stored, and only `year` has been.
     COMPOSITE = ("SELECT CAST( AVG(`w`.`Q1`) + AVG(`w`.`Q5`) AS double ) / 2.0 "
                  "AS `Actual No` FROM ( "
-                 "SELECT `c`.`qn_1` * 5 AS `Q1`, `c`.`qn_5` * 5 AS `Q5` "
+                 "SELECT MONTH(`c`.`qn_1`) AS `Q1`, MONTH(`c`.`qn_5`) AS `Q5` "
                  "FROM `tabSurvey` LEFT JOIN `tabEntry` c "
                  "ON `tabSurvey`.`name` = c.`parent` WHERE `x` > 1 ) AS `w`")
     DATE_PART = COMPOSITE.replace("CAST( AVG(`w`.`Q1`) + AVG(`w`.`Q5`) AS double ) / 2.0",
@@ -178,7 +181,7 @@ class TestTheExpressionVocabulary(_Base):
         self.assertIn("1 of 1 use nothing but arithmetic over", text)
 
     def test_count_star_does_not_read_as_a_multiplication(self):
-        sql = ("SELECT COUNT(*) AS `n` FROM ( SELECT `c`.`x` * 5 AS `x` FROM `tabSurvey` "
+        sql = ("SELECT COUNT(*) AS `n` FROM ( SELECT MONTH(`c`.`x`) AS `x` FROM `tabSurvey` "
                "LEFT JOIN `tabEntry` c ON `tabSurvey`.`name` = c.`parent` "
                "WHERE `x` > 1 ) AS `w`")
         text = self.run_script({"a": sql})
