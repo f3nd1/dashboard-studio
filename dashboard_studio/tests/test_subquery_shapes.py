@@ -189,6 +189,62 @@ class TestTheExpressionVocabulary(_Base):
         self.assertNotIn("*", self.vocabulary_lines(text))
 
 
+class TestTheCaseShapes(_Base):
+    """A CASE that scores a survey answer and a CASE that labels a status share
+    one refusal message. Telling them apart is the whole question behind "is
+    this group one pattern", so the features are counted rather than eyeballed.
+    """
+
+    COMPOSITE_INDEX = (
+        "SELECT CASE WHEN (CASE WHEN AVG(`w`.`1`) IS NULL THEN 0 ELSE 1 END) = 0 "
+        "THEN 0 ELSE COALESCE(AVG(`w`.`1`), 0) / NULLIF(1, 0.0) END AS `HR` FROM ( "
+        "SELECT CASE WHEN LOWER(`c`.`question`) LIKE "
+        "'%I was helped to understand and engage with the vision and values%' "
+        "THEN CASE WHEN LOWER(`c`.`response`) = 'agree' THEN 4 END END AS `1` "
+        "FROM `tabSurvey` LEFT JOIN `tabResponse` c "
+        "ON `tabSurvey`.`name` = c.`parent` ) AS `w`")
+    PLAIN_LABEL = (
+        "SELECT `w`.`Flag` AS `Flag`, COUNT(*) AS `n` FROM ( "
+        "SELECT CASE WHEN LOWER(`c`.`answer`) = 'yes' THEN 1 ELSE 0 END AS `Flag` "
+        "FROM `tabSurvey` LEFT JOIN `tabResponse` c "
+        "ON `tabSurvey`.`name` = c.`parent` ) AS `w` GROUP BY `w`.`Flag`")
+
+    def case_lines(self, text):
+        section = text.split("does not.", 1)[-1].split("=" * 78, 1)[0]
+        return [line.strip() for line in section.splitlines() if "branches=" in line]
+
+    def test_a_composite_index_and_a_plain_label_are_different_shapes(self):
+        text = self.run_script({"index": self.COMPOSITE_INDEX, "flag": self.PLAIN_LABEL})
+        self.assertEqual(len(self.case_lines(text)), 2, text)
+
+    def test_the_composite_index_shows_its_three_markers(self):
+        """Many branches, a hardcoded question text, and null logic — the three
+        things that make it report-specific rather than a general pattern."""
+        text = self.run_script({"index": self.COMPOSITE_INDEX})
+        line = self.case_lines(text)[0]
+        self.assertIn("long-literals=1-2", line)
+        self.assertIn("null-logic=yes", line)
+
+    def test_a_plain_label_has_none_of_them(self):
+        text = self.run_script({"flag": self.PLAIN_LABEL})
+        line = self.case_lines(text)[0]
+        self.assertIn("long-literals=0", line)
+        self.assertIn("null-logic=no", line)
+
+    def test_a_report_with_no_CASE_is_not_counted(self):
+        text = self.run_script({"a": OUTER_WHERE_A})
+        self.assertNotIn("What the CASE reports are built from", text)
+
+    def test_a_flat_CASE_query_counts_even_without_a_subquery(self):
+        """A CASE with no wrapper refuses on CASE alone. It is the same question
+        about the same group, so restricting this section to subquery refusals
+        would undercount it."""
+        flat = ("SELECT CASE WHEN `status` = 'x' THEN 1 ELSE 0 END AS `f`, COUNT(*) "
+                "FROM `tabStudent Applicant` GROUP BY `status`")
+        text = self.run_script({"flat": flat})
+        self.assertIn("What the CASE reports are built from (1 reports)", text)
+
+
 class TestItSaysWhatItDoesNotKnow(_Base):
     def test_it_does_not_call_a_group_fixable(self):
         """A frequency count is not a proof. Two of the three existing rules

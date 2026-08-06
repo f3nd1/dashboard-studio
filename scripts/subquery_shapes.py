@@ -104,6 +104,24 @@ def _shapes():
         found = {name.upper() for name in re.findall(r"\b([A-Za-z_]\w*)\s*\(", text)}
         found |= {op for op in "+-*/" if op in text}
         return found
+    def bucket(count):
+        return "0" if not count else "1-2" if count <= 2 else "3-6" if count <= 6 else "7+"
+    def case_shape(sql):
+        """What a CASE-bearing report is built from — features, not a verdict.
+        A CASE that scores a survey answer and a CASE that labels a status are
+        one refusal message and two different problems. Three things tell them
+        apart without reading the SQL: how many branches it has, whether it
+        matches against LONG string literals (hardcoded question wording), and
+        whether it counts answered-versus-unanswered with COALESCE/NULLIF/IS
+        NULL, which is what a composite index does and a categorical label
+        does not.
+        """
+        whens = len(re.findall(r"\bWHEN\b", sql, re.IGNORECASE))
+        literals = len([s for s in re.findall(r"'([^']*)'", sql) if len(s) > 40])
+        null_logic = bool(re.search(r"\bCOALESCE\b|\bNULLIF\b|\bIS\s+NULL\b",
+                                    sql, re.IGNORECASE))
+        return (f"branches={bucket(whens):<4} long-literals={bucket(literals):<4} "
+                f"null-logic={'yes' if null_logic else 'no'}")
     def describe(sql):
         """A factual signature for the outermost surviving FROM-subquery."""
         match = parser._FROM_PAREN.search(sql)
@@ -161,6 +179,7 @@ def _shapes():
     files = sorted(folder.rglob("*.sql"))
     groups, failed = {}, []
     vocab, arithmetic_only = {}, []
+    case_shapes = {}
     for path in files:
         try:
             text = path.read_text()
@@ -168,6 +187,11 @@ def _shapes():
         except Exception as error:  # noqa: BLE001
             failed.append(f"{path.name}: {type(error).__name__}: {error}")
             continue
+        # CASE is counted across EVERY refusing report, not only the ones that
+        # also refuse on a subquery: a flat query with a CASE in it is the same
+        # question about the same group.
+        if any("CASE" in reason for reason in reasons):
+            case_shapes.setdefault(case_shape(text), []).append(path.name)
         if not any("subquery / nested SELECT" in reason for reason in reasons):
             continue
         try:
@@ -200,6 +224,21 @@ def _shapes():
             print(f"         {path.name}  ({size} bytes)")
         if len(rows) > examples_per_group:
             print(f"         ...and {len(rows) - examples_per_group} more")
+        print()
+    if case_shapes:
+        print("=" * 78)
+        print(f"What the CASE reports are built from ({sum(len(v) for v in case_shapes.values())} reports)")
+        print("=" * 78)
+        print("   A CASE that scores a survey answer and a CASE that labels a status")
+        print("   share one refusal message and are two different problems. Long string")
+        print("   literals mean hardcoded text matching; null-logic (COALESCE / NULLIF /")
+        print("   IS NULL) means the query counts answered against unanswered, which is")
+        print("   what a composite index does and a plain categorical label does not.")
+        print()
+        for shape in sorted(case_shapes, key=lambda key: -len(case_shapes[key])):
+            names = sorted(case_shapes[shape])
+            print(f"   {len(names):>5}  {shape}")
+            print(f"          e.g. {', '.join(names[:examples_per_group])}")
         print()
     if vocab:
         print("=" * 78)

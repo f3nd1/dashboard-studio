@@ -221,6 +221,35 @@ Both come from the same place: the stored Operations JSON of the query that was 
 
 **A test fixture had to move because of this.** `test_subquery_shapes.py` used `* 5` precisely because it kept a query unliftable. It lifts now, so those fixtures use `MONTH(...)` instead — a function outside the allowlist. Worth noting as a pattern: a fixture chosen to be *unsupported* has a shelf life, and when it expires the tests that depend on it fail loudly, which is the right direction.
 
+## ADR-014 — Do not translate the composite-index survey reports; rebuild them in Insights
+
+**Decision.** The survey composite-index reports — `10- - Communication Effectiveness Index--3001` and its family — are **not** translated. They refuse by name, and the recommendation for them is a manual rebuild in Insights rather than a conversion. No "Likert word → number" capability is extracted.
+
+**This was assessed from the real capture**, not from the group summary, and the group summary was misleading: the refusal message reads like a two-branch categorical CASE, and the query is a 9-question weighted composite index.
+
+**What it actually needs.** Counted from the file rather than estimated:
+
+- a **conditional** in the expression language — unknown whether one exists, and unknown how spelled;
+- `TRIM`, `LOWER`, `COALESCE`, `NULLIF` — four functions, none confirmed. Only `year` has ever been seen stored;
+- `IS NULL` as a test inside an expression — unconfirmed;
+- `LIKE` inside an expression — unconfirmed, and `LIKE` is already refused as a filter operator;
+- `CAST(TRIM(x) AS signed)` — a CAST over an *expression*, which ADR-011 refuses for a reason nothing here changes;
+- **OR in the WHERE** — refused; the inner WHERE ORs three survey titles;
+- a **computed column in the WHERE** — `LOWER(CASE WHEN parent LIKE 'UCC-SVR-25%' THEN '2025' END) LIKE '%2025%'`, a filter on a per-row computed value.
+
+**And one thing that is not a missing function at all.** The nine columns are a hand-rolled **pivot**: one row per survey response, each column non-NULL only for the row whose question text matches, then `AVG` per column so the NULLs fall out. Nothing in Insights' operation vocabulary pivots. Even granting every function above, this SQL has no counterpart to translate *into* — the same report in Insights is "group by question, average the score", which is a different query returning a different shape, from which the index is then composed. That is a rebuild, not a translation.
+
+**Why the Likert mapping is not extracted, though it is the most tempting piece.**
+
+- It is **domain content, not converter knowledge**. That `'agree'` means 4 is a fact about UCC's surveys. A converter carrying it has one institution's semantics compiled in.
+- Recognising a 5-branch CASE and *asserting* it means Likert is precisely the guess this project refuses. A sixth branch, a "somewhat agree", a 1-7 scale, or a **reverse-coded** item — real and common in surveys — would either refuse (no gain) or map backwards, and a reverse-coded item mapped forwards is a silently inverted score. `SOPHIA_FAULT_PATTERN.md`: they do not fail, they disagree.
+- It would not unblock this report. Seven other gaps remain.
+- It is **ADR-009's problem one level up**: `response` is free text where a score belongs. If the survey stored a number, the entire inner wrapper collapses to `AVG(score)` grouped by question, which converts today. The fix is in the data model, exactly as it was for `actual_value`.
+
+**Rebuilding these in Insights is arguably better than translating them**, and worth saying rather than treating manual work as the consolation prize: the composite index becomes a visible, clickable chain of operations instead of 400 lines of nested CASE that nobody can edit. That is the entire point of the project.
+
+**The group is not one pattern, and that is now measurable.** `scripts/subquery_shapes.py` reports what each CASE-bearing report is built from — branch count, long string literals (hardcoded question wording), and null logic (COALESCE/NULLIF/IS NULL, which is what an "average of answered" does and a plain label does not). A composite index and a `CASE WHEN answer = 'yes' THEN 1 ELSE 0` come out as different lines. **Run that before deciding anything about the remaining reports**: the ~150 figure covers both, and the simple half may be worth a capability that this one never justified.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.
