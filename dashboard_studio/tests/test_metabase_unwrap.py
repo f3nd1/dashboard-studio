@@ -599,6 +599,51 @@ class TestRowLimits(unittest.TestCase):
         self.assertTrue(result["supported"], result["reasons"])
 
 
+class TestOrderByIsDroppedOnPurpose(unittest.TestCase):
+    """An ORDER BY is used only as a clause boundary and never translated.
+
+    That is a DECISION rather than the oversight it looks like, and the proof it
+    rests on is the row limit next door. ORDER BY changes which rows come back
+    only in company with a LIMIT, and a real LIMIT refuses — so a surviving
+    ORDER BY leaves both the rows and every value alone, and reorders them.
+    Three of the four checked-in captures carry one; refusing it would block
+    them all for a difference no number can show.
+
+    The one honest edge: Metabase's own `LIMIT 1048575` cap is allowed through,
+    so a report returning more than 1,048,575 rows would have its ORDER BY
+    decide which of them survive. No report here is near that.
+
+    It is pinned here so that widening it — should Insights turn out to store an
+    order operation — is a change somebody makes on purpose.
+    """
+
+    SQL = ("SELECT `w`.`Year` AS `Year`, COUNT(*) AS `n` FROM ( "
+           "SELECT `tabQuality Action`.`name` AS `name`, "
+           "`tabQuality Action`.`custom_proposed_date` AS `Year` "
+           "FROM `tabQuality Action` ) AS `w` GROUP BY `w`.`Year`")
+    COLUMNS = {"Quality Action": {"name": "String", "custom_proposed_date": "Date"}}
+
+    def operations(self, sql):
+        result = operations_from_sql(analyze_sql(sql), self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def test_an_order_by_changes_nothing_in_the_operations(self):
+        self.assertEqual(self.operations(self.SQL + " ORDER BY `w`.`Year` DESC"),
+                         self.operations(self.SQL))
+
+    def test_the_real_captures_carry_one_and_still_convert(self):
+        self.assertIn("ORDER BY", YEAR_LABEL.read_text().upper())
+        self.assertTrue(analyze_sql(YEAR_LABEL.read_text())["supported"])
+
+    def test_ordering_a_LIMITED_query_still_refuses_for_the_limit(self):
+        """The proof this rests on. Order plus a cut-off is a different set of
+        rows, and that is refused — by the LIMIT, before the ordering matters."""
+        result = analyze_sql(self.SQL + " ORDER BY `w`.`Year` DESC LIMIT 10")
+        self.assertFalse(result["supported"])
+        self.assertIn("LIMIT 10", " | ".join(result["reasons"]))
+
+
 class TestComputedSelectColumns(unittest.TestCase):
     """The SELECT list is not otherwise read, so a computed column used to be
     dropped in silence — the converted query then answers a smaller question."""
