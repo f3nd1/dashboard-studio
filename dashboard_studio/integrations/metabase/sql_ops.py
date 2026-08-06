@@ -89,6 +89,11 @@ COUNT_COLUMN = "count"
 # be averaged" is arithmetic, not a renderer's preference.
 MEASURE_DATA_TYPES = ("Integer", "Decimal")
 
+# What a date difference may be taken between. `date_diff` returns a count of
+# days, which is only true of dates — between two strings it is whatever the
+# engine makes of them, which is the silent-wrong-number direction.
+DATE_DATA_TYPES = ("Date", "Datetime")
+
 # Aggregations that need a number to work on. Counting is not one of them:
 # count_distinct of a text column is an ordinary thing to want, and Insights'
 # MeasureDataType allows String precisely because of it.
@@ -373,37 +378,58 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     # column of any table, so it must never reach the schema check.
     computed = analysis.get("computed") or []
     for entry in computed:
+        # What the computation READS has to be the right kind of thing, and only
+        # the translator knows types. `rating * 5` is a number only if `rating`
+        # is one; a date difference is days only between dates.
+        wanted = entry.get("requires")
+        if wanted:
+            types = {}
+            for column in entry["columns"]:
+                types[str(column)] = set((available.get(str(column)) or {}).values())
+            unknown = [column for column, found in types.items() if not found]
+            if unknown:
+                reasons.append(
+                    f"the wrapper computes '{entry['alias']}' from "
+                    f"'{', '.join(unknown)}', which is not a column of any table "
+                    "this query reads"
+                )
+            allowed = (MEASURE_DATA_TYPES if wanted == "number" else DATE_DATA_TYPES)
+            wrong = {column: found for column, found in types.items()
+                     if not found <= set(allowed)}
+            if wrong:
+                detail = ", ".join(f"'{column}' is {'/'.join(sorted(found))}"
+                                   for column, found in sorted(wrong.items()))
+                reasons.append(
+                    f"the wrapper computes '{entry['alias']}' from a column that is "
+                    f"not a {wanted}: {detail}. "
+                    + ("Arithmetic on text coerces every value that is not a number "
+                       "to 0, silently" if wanted == "number" else
+                       "A difference between things that are not dates is not a "
+                       "count of days")
+                )
         if entry.get("data_type") is None:
-            # A scale factor is typed from the column it reads: `rating * 5` is
-            # a number only if `rating` is one. Multiplying text by 5 is a
-            # coercion nobody asked for — ADR-009's rule, and the same reason
-            # `* 1` is allowed only as an explicit cast for an aggregate.
-            known = available.get(str(entry["column"]), {})
-            found = {data_type for data_type in known.values()}
-            if not found:
-                reasons.append(
-                    f"'{entry['column']}' is computed from, and is not a column of "
-                    "any table this query reads"
-                )
-                continue
-            if not found <= set(MEASURE_DATA_TYPES):
-                reasons.append(
-                    f"the wrapper computes '{entry['alias']}' from '{entry['column']}', "
-                    f"which is {'/'.join(sorted(found))} — arithmetic on text coerces "
-                    "every value that is not a number to 0, silently"
-                )
-                continue
             # Decimal rather than the column's own type: a scale factor may
             # divide, and a Decimal groups and aggregates the same values.
             entry["data_type"] = "Decimal"
+        # The alias is registered even when the computation was just REFUSED.
+        # Nothing is emitted from a refused query, and skipping it made the
+        # grouping and the aggregate that read this alias each report it as "not
+        # a column of" the tables — one fault told three times, two of them
+        # pointing at the join instead of at the computation.
         available.setdefault(str(entry["alias"]), {})[source] = entry["data_type"]
     referenced = _referenced_columns(analysis, available)
     for entry in computed:
         # What the join has to carry is the column the computation READS, not
         # the name it produces.
-        table = entry.get("table") or source
-        referenced.setdefault(table, set()).add(str(entry["column"]))
-        referenced.get(table, set()).discard(str(entry["alias"]))
+        # EVERY column the computation reads, not just the first. A
+        # two-argument function whose second column was dropped here produced a
+        # mutate referencing a column the join never brought across — it
+        # converted cleanly and would have failed on open.
+        for column, table in zip(entry["columns"],
+                                 entry.get("tables") or [None] * len(entry["columns"])):
+            referenced.setdefault(table or source, set()).add(str(column))
+        for names in referenced.values():
+            names.discard(str(entry["alias"]))
     operations = [_source("tab" + source, data_source)]
 
     # One Insights join operation per JOIN, in the order they were written: each
@@ -485,7 +511,9 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
         # query `s39rc7j648` — which is what made this translatable.
         for entry in computed:
             if entry["kind"] == "cast":
-                operations.append(_cast(str(entry["column"]), entry["data_type"]))
+                # A cast converts one column in place; the parser refuses any
+                # other shape, so there is exactly one here.
+                operations.append(_cast(str(entry["columns"][0]), entry["data_type"]))
             else:
                 operations.append(_mutate(str(entry["alias"]), entry["expression"]))
         # The ADR-009 cast goes AFTER the filters and immediately before the

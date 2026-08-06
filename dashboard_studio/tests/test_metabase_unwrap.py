@@ -973,6 +973,129 @@ class TestAScaleFactorWrapper(unittest.TestCase):
         self.assertNotIn("subquery", reasons)
 
 
+class TestADateDifferenceWrapper(unittest.TestCase):
+    """`DATEDIFF(a, b)` — "how many days did this take", the duration family.
+
+    The SHAPE is ADR-012's and needed nothing new. What it needed was the
+    function's spelling, and that is three facts rather than one: a name, an
+    argument order and a unit. All three came off two stored expressions on the
+    live site, `date_diff(modified, creation, 'day')` — `modified` is always the
+    later date and the values came back positive, so MySQL's `DATEDIFF(a, b) =
+    a - b` carries across argument-for-argument.
+    """
+
+    SQL = ("SELECT `w`.`Days` AS `Days`, AVG(`w`.`Days`) AS `avg` FROM ( "
+           "SELECT DATEDIFF(`c`.`completed_on`, `c`.`raised_on`) AS `Days` "
+           "FROM `tabJob Requisition` "
+           "LEFT JOIN `tabRequisition Stage` c "
+           "ON `tabJob Requisition`.`name` = c.`parent` ) AS `w` "
+           "GROUP BY `w`.`Days`")
+    COLUMNS = {"Job Requisition": {"name": "String"},
+               "Requisition Stage": {"name": "String", "parent": "String",
+                                     "completed_on": "Date",
+                                     "raised_on": "Date"}}
+
+    def operations(self, columns=None):
+        result = operations_from_sql(analyze_sql(self.SQL), columns or self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def test_the_difference_becomes_a_mutate_before_the_summarize(self):
+        operations = self.operations()
+        self.assertEqual([op["type"] for op in operations],
+                         ["source", "join", "mutate", "summarize"])
+        self.assertEqual(operations[2], {
+            "type": "mutate", "new_name": "Days", "data_type": "Auto",
+            "expression": {"type": "expression",
+                           "expression": "date_diff(completed_on, raised_on, 'day')"}})
+
+    def test_the_arguments_keep_the_order_they_were_written_in(self):
+        """The whole risk in this translation. `DATEDIFF(end, start)` is
+        `end - start`; swapping them negates every value, and "days to
+        complete: -14" is exactly the silently-wrong number this refuses on
+        everywhere else."""
+        expression = self.operations()[2]["expression"]["expression"]
+        self.assertLess(expression.index("completed_on"), expression.index("raised_on"))
+
+    def test_the_join_carries_BOTH_columns_the_difference_reads(self):
+        """The regression this exists for. A computed entry used to name one
+        source column, so the join brought `completed_on` across and dropped
+        `raised_on` — a query that converted cleanly and would have failed the
+        moment somebody opened it."""
+        carried = [c["column_name"] for c in self.operations()[1]["select_columns"]]
+        self.assertIn("completed_on", carried)
+        self.assertIn("raised_on", carried)
+        self.assertNotIn("Days", carried)
+
+    def test_a_count_of_days_is_an_integer(self):
+        summarize = self.operations()[-1]
+        self.assertEqual(summarize["measures"][0]["data_type"], "Integer")
+        self.assertEqual(summarize["dimensions"][0]["data_type"], "Integer")
+
+    def test_a_difference_between_things_that_are_not_dates_refuses(self):
+        """`date_diff` returns a count of days, which is only true of dates.
+        Between two strings it is whatever the engine makes of them."""
+        columns = {"Job Requisition": {"name": "String"},
+                   "Requisition Stage": {"name": "String", "parent": "String",
+                                         "completed_on": "Date",
+                                         "raised_on": "String"}}
+        result = operations_from_sql(analyze_sql(self.SQL), columns)
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+        reasons = " | ".join(result["reasons"])
+        self.assertIn("raised_on", reasons)
+        self.assertNotIn("completed_on", reasons)
+
+    def test_the_SECOND_column_is_checked_as_well_as_the_first(self):
+        """Same class of fault as the dropped join column: a check that reads
+        only `columns[0]` passes everything about the second."""
+        columns = {"Job Requisition": {"name": "String"},
+                   "Requisition Stage": {"name": "String", "parent": "String",
+                                         "completed_on": "String",
+                                         "raised_on": "Date"}}
+        result = operations_from_sql(analyze_sql(self.SQL), columns)
+        self.assertFalse(result["supported"])
+        self.assertIn("completed_on", " | ".join(result["reasons"]))
+
+    def test_TIMESTAMPDIFF_refuses_by_name(self):
+        """It puts the unit FIRST and subtracts the other way round, so
+        translating it as a `date_diff` of its two columns would negate every
+        value. It has been seen in no capture either — the vocabulary widens
+        only to what has been observed."""
+        result = analyze_sql(self.SQL.replace(
+            "DATEDIFF(`c`.`completed_on`", "TIMESTAMPDIFF(DAY, `c`.`completed_on`"))
+        self.assertFalse(result["supported"])
+        self.assertIn("TIMESTAMPDIFF", " | ".join(result["reasons"]))
+
+    def test_a_DATEDIFF_with_a_unit_argument_refuses(self):
+        """Three arguments is somebody else's dialect, not MySQL's. Reading the
+        first two and dropping the third would answer in days whatever unit was
+        asked for."""
+        result = analyze_sql(self.SQL.replace(
+            "`c`.`raised_on`)", "`c`.`raised_on`, 'month')"))
+        self.assertFalse(result["supported"])
+        self.assertIn("3 arguments", " | ".join(result["reasons"]))
+
+    def test_a_refused_computation_is_reported_ONCE(self):
+        """A refused computation used to leave its alias undefined, so the
+        grouping and the aggregate that read it each added "'Days' is not a
+        column of Job Requisition or Requisition Stage" — one fault told three
+        times, and two of them point at the join rather than at the
+        computation."""
+        columns = {"Job Requisition": {"name": "String"},
+                   "Requisition Stage": {"name": "String", "parent": "String",
+                                         "completed_on": "Date",
+                                         "raised_on": "String"}}
+        reasons = operations_from_sql(analyze_sql(self.SQL), columns)["reasons"]
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertNotIn("'Days' is not a column", reasons[0])
+
+    def test_a_difference_from_a_literal_refuses(self):
+        result = analyze_sql(self.SQL.replace("`c`.`raised_on`", "'2024-01-01'"))
+        self.assertFalse(result["supported"])
+        self.assertIn("not a column", " | ".join(result["reasons"]))
+
+
 class TestACommentIsNotStripped(unittest.TestCase):
     """Known limitation, recorded where it will be found again.
 

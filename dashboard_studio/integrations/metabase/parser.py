@@ -503,10 +503,18 @@ _COLUMN_REF = re.compile(r"(?:`[^`]+`|\b[A-Za-z_]\w*)\.`?[A-Za-z_][\w ]*`?"
 def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
     """``(computed, offending)`` — exactly one is truthy.
 
-    `computed` is ``{alias, kind, column, table, expression, data_type}`` where
-    kind is "mutate" or "cast"; `offending` names the token that stopped it.
-    A `data_type` of None means "type it from the source column", which only
-    the translator can do.
+    `computed` is ``{alias, kind, columns, tables, expression, data_type,
+    requires}`` where kind is "mutate" or "cast"; `offending` names the token
+    that stopped it. A `data_type` of None means "type it from the source
+    column", which only the translator can do.
+
+    `columns` and `tables` are LISTS — one entry per column the computation
+    reads, in the order it reads them. A single-column shape carries a list of
+    one rather than a scalar, because the join carries what these name and a
+    two-argument function whose second column was dropped there converts
+    cleanly and fails the moment the query is opened. `requires` says what kind
+    of column those have to be — "number", "date", or None for a computation
+    that reads any column safely — and only the translator knows types.
     """
     text = text.strip()
     # `col * 5` — a SCALE FACTOR. Metabase writes it to put a 1-5 rating on a
@@ -528,13 +536,14 @@ def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
                 and len(named) == 1):
             qualifier, column = _split_ref(references[0])
             if column:
-                return {"alias": alias, "kind": "mutate", "column": column,
-                        "table": _resolve(qualifier, aliases, reasons),
+                return {"alias": alias, "kind": "mutate",
+                        "columns": [column],
+                        "tables": [_resolve(qualifier, aliases, reasons)],
                         "expression": _COLUMN_REF.sub(column, text),
                         # Typed from the column it reads: `rating * 5` is a
                         # number only if `rating` is one, and the parser has no
                         # types.
-                        "data_type": None}, ""
+                        "data_type": None, "requires": "number"}, ""
     call = _CALL.match(text.strip())
     if not call:
         return None, text.strip()[:40]
@@ -548,9 +557,36 @@ def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
         qualifier, column = _split_ref(args)
         if not column:
             return None, "YEAR of something that is not a column"
-        return {"alias": alias, "kind": "mutate", "column": column,
-                "table": _resolve(qualifier, aliases, reasons),
-                "expression": f"year({column})", "data_type": "Integer"}, ""
+        return {"alias": alias, "kind": "mutate",
+                "columns": [column],
+                "tables": [_resolve(qualifier, aliases, reasons)],
+                "expression": f"year({column})", "data_type": "Integer",
+                "requires": None}, ""
+    if name == "DATEDIFF":
+        # MySQL: `DATEDIFF(a, b)` is a - b, in whole days. Insights spells the
+        # same thing `date_diff(a, b, 'day')` — read from two stored
+        # expressions on the live site, `date_diff(modified, creation, 'day')`,
+        # where `modified` is always the later date and the values came back
+        # POSITIVE. So the argument order carries across unchanged, and the
+        # unit is the third argument.
+        #
+        # `TIMESTAMPDIFF(DAY, a, b)` is NOT accepted: it puts the unit first
+        # and subtracts the other way round, so translating it as this would
+        # negate every value. It has not been seen in a capture either.
+        parts = _split_items(args)
+        if len(parts) != 2:
+            return None, f"DATEDIFF with {len(parts)} arguments"
+        read = [_split_ref(part) for part in parts]
+        if not all(column for _, column in read):
+            return None, "DATEDIFF of something that is not a column"
+        return {"alias": alias, "kind": "mutate",
+                "columns": [column for _, column in read],
+                "tables": [_resolve(qualifier, aliases, reasons)
+                           for qualifier, _ in read],
+                "expression": "date_diff({}, {}, 'day')".format(
+                    *[column for _, column in read]),
+                # A count of whole days.
+                "data_type": "Integer", "requires": "date"}, ""
     if name == "CAST":
         cast = re.match(r"^(?P<value>.+?)\s+AS\s+(?P<type>\w+)\s*$", args,
                         re.IGNORECASE | re.DOTALL)
@@ -567,9 +603,10 @@ def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
             # data_type} with nowhere to put a new name. Casting AND renaming
             # is two things, and only one of them is expressible.
             return None, f"CAST renaming '{column}' to '{alias}'"
-        return {"alias": alias, "kind": "cast", "column": column,
-                "table": _resolve(qualifier, aliases, reasons),
-                "expression": "", "data_type": data_type}, ""
+        return {"alias": alias, "kind": "cast",
+                "columns": [column],
+                "tables": [_resolve(qualifier, aliases, reasons)],
+                "expression": "", "data_type": data_type, "requires": None}, ""
     return None, name
 
 
@@ -644,9 +681,10 @@ def lift_renaming_wrapper(sql: str, aliases: dict | None = None):
             if not built:
                 reasons.append(
                     f"the wrapper computes '{item_alias}' using {offending}, which "
-                    "this converter does not translate — `year(...)` and a numeric "
-                    "`CAST` are the calculated columns it reads, because those are "
-                    "the ones Insights has been seen to store"
+                    "this converter does not translate — `year(...)`, "
+                    "`DATEDIFF(later, earlier)`, a scale factor like `col * 5` and "
+                    "a numeric `CAST` are the calculated columns it reads, because "
+                    "those are the ones Insights has been seen to store"
                 )
                 return sql, reasons, computed
             computed.append(built)

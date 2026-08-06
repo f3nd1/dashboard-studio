@@ -250,6 +250,26 @@ Both come from the same place: the stored Operations JSON of the query that was 
 
 **The group is not one pattern, and that is now measurable.** `scripts/subquery_shapes.py` reports what each CASE-bearing report is built from — branch count, long string literals (hardcoded question wording), and null logic (COALESCE/NULLIF/IS NULL, which is what an "average of answered" does and a plain label does not). A composite index and a `CASE WHEN answer = 'yes' THEN 1 ELSE 0` come out as different lines. **Run that before deciding anything about the remaining reports**: the ~150 figure covers both, and the simple half may be worth a capability that this one never justified.
 
+## ADR-015 — A date difference is a mutate, and a computed column may read more than one column
+
+**Decision.** `DATEDIFF(a, b) AS Days` in a Metabase wrapper becomes a `mutate` emitted before the summarize, spelled `date_diff(a, b, 'day')`. Both columns it reads are carried by the join. Anything else that computes a duration refuses by name.
+
+**The shape needed nothing new** — it is ADR-012's, a wrapper computing a per-row column that the outer query groups by or averages. That was proved by experiment before any of this was built: with the function's spelling stubbed in, a constructed `DATEDIFF(a, b) AS Days` wrapper already converted end to end, producing `source -> join -> mutate -> summarize`. What it needed was a spelling, and a spelling here is **three facts, not one**: a name, an argument order and a unit.
+
+**All three came off the live site, from two stored expressions**, `bchov0s5ue` and `bke9fgllri`, both holding `date_diff(modified, creation, 'day')`. So: the name is `date_diff` and not `datediff`; there are exactly three arguments with the unit last as a quoted string; and the order is (later, earlier), proven rather than inferred — `modified` is always the later of the two and the values came back **positive**. MySQL's `DATEDIFF(a, b)` is `a - b`, so the arguments carry across in the order they were written.
+
+**The argument order is the whole risk in this translation.** `date_diff(start, end, 'day')` is the same number with the opposite sign. "Days to complete: −14" is a report that runs, renders, and is wrong — `SOPHIA_FAULT_PATTERN.md` exactly. It has its own test, and reversing the arguments turns the suite red.
+
+**`TIMESTAMPDIFF(DAY, a, b)` refuses.** It puts the unit first *and* subtracts the other way round, so reading its two columns as a `date_diff` would negate every value. It has appeared in no capture either, and the vocabulary widens only to what has been observed. A `DATEDIFF` with any other argument count refuses by count — three arguments is some other dialect's, and reading the first two would answer in days whatever unit was asked for.
+
+**The columns have to be dates.** `date_diff` returns a count of days, which is true of dates and not of two strings that happen to look like them. Both arguments are checked, not just the first.
+
+**Piece two — the plumbing — is the part that would have failed silently.** A computed entry carried a single `column`/`table` pair, and `_referenced_columns` added exactly that one, so the join brought `completed_on` across and dropped `raised_on`: the query converted cleanly, listed back correctly, and would have failed the moment somebody opened it. `columns`/`tables` are now lists on every computed entry — the single-column shapes carry a list of one — and the join carries all of them. `requires` moved onto the entry at the same time, so the translator's type check is per-computation ("number" for a scale factor, "date" for a difference, None for `year` and `cast`) rather than a special case for the one shape that had one.
+
+**One refusal-quality fault came out with it.** A refused computation left its alias undefined, so the grouping and the aggregate that read it each added *"'Days' is not a column of Job Requisition or Requisition Stage"* — one fault told three times, two of them pointing at the join rather than at the computation. The alias is now registered even when the computation is refused; nothing is emitted from a refused query, so that costs nothing and the reason list says the one true thing. `scripts/bulk_dry_run.py` gained the two matching groups, placed **before** the join's `is not a column of` — which they would otherwise have matched, filing a computation problem under joins.
+
+Both halves have their mutation proof: carrying only the first column, type-checking only the first column, accepting TIMESTAMPDIFF, reversing the arguments, accepting any arity, dropping the date check, reading a literal as a column, and restoring the cascade each turn the suite red.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.
@@ -260,15 +280,15 @@ Both come from the same place: the stored Operations JSON of the query that was 
 
 One judgement call worth naming: Metabase writes `` `col` * 1 `` for a custom numeric field, and the lift treats that as the column. `x * 1` IS `x` for a number, but MySQL coerces `'abc' * 1` to 0, and the column's type is not known at that point — so it is allowed as an aggregate argument and **refused in a GROUP BY**, where grouping by a coerced zero would not be grouping by the column.
 
-**DATEDIFF — assessed 2026-08-06, not built, and it is TWO pieces rather than one.**
+**DATEDIFF — assessed 2026-08-06 as TWO pieces rather than one; both are now built, see ADR-015.**
 
 The shape is the ADR-012 one: a wrapper computing a per-row column, averaged or grouped outside. Proved by experiment rather than assumed — with the function's spelling stubbed into `_computed_column`, a constructed `DATEDIFF(a, b) AS Days` wrapper converts end to end through the existing machinery, producing `source -> join -> mutate -> summarize`. So no new operation, no new ordering, no pivot.
 
 **Piece one: the spelling, and it is three unknowns rather than one.** `year(x)` was a single fact. A date difference has a *name*, an *argument order* and a *unit*, and getting the order wrong negates every value silently — `DATEDIFF(end, start)` in MySQL is `end - start`, and a function spelled `date_diff(start, end, 'day')` is the same number with the opposite sign. "Days to complete" coming out as −14 is the failure mode this project exists to refuse.
 
-**Piece two: a computed column may currently name only ONE source column, and DATEDIFF names two.** The experiment caught this: the join carried `['completed_on', 'parent']` and dropped `raised_on`, because `_computed_column` entries carry a single `column` key and `_referenced_columns` adds exactly that one. The query converted cleanly with a mutate referencing a column the join never brought across. That plumbing has to widen before any two-argument function is accepted, and it is independent of the spelling — but it is not built speculatively, because nothing today produces a two-column entry and an unused generalisation is a check nobody can test.
+**Piece two: a computed column may currently name only ONE source column, and DATEDIFF names two.** The experiment caught this: the join carried `['completed_on', 'parent']` and dropped `raised_on`, because `_computed_column` entries carry a single `column` key and `_referenced_columns` adds exactly that one. The query converted cleanly with a mutate referencing a column the join never brought across. That plumbing had to widen before any two-argument function could be accepted, and it is independent of the spelling — it was not built speculatively, because until DATEDIFF nothing produced a two-column entry and an unused generalisation is a check nobody can test.
 
-**What settles piece one, exactly one thing to build.** In the Insights UI, on any table, add a calculated column computing the difference in days between `modified` and `creation` — every Frappe table has both, and `modified` is always the later one, so a correct result is **≥ 0** and the sign reveals the argument order. Save it, then run `scripts/insights_operations_probe.py`, which prints every stored expression whole. That one column yields the name, the argument order and the unit together.
+**What settled piece one, and it was exactly one thing to build.** In the Insights UI, on any table, add a calculated column computing the difference in days between `modified` and `creation` — every Frappe table has both, and `modified` is always the later one, so a correct result is **≥ 0** and the sign reveals the argument order. Save it, then run `scripts/insights_operations_probe.py`, which prints every stored expression whole. That one column yields the name, the argument order and the unit together.
 
 Still unsupported, unchanged: a wrapper that filters, an outer WHERE alongside an inner one, the same DocType joined twice, computed columns in the SELECT list, and a row limit other than Metabase's own cap.
 
