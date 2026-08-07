@@ -357,6 +357,30 @@ Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN
 
 **The distinction the classifier already drew turned out to be the right one.** `scripts/subquery_shapes.py` reports CASE-bearing reports by branch count, long string literals and null logic; the month-label report and the composite index share a branch count and differ on the other two. This was translated on the strength of that separation, and the group that was declined is the one that still refuses.
 
+## ADR-021 — A plain-English question box, whose safety argument is the read-back
+
+**Decision.** A question box proposes an Insights setup and creates nothing. The model emits SQL, which goes through the existing converter unchanged; the one-line summary the user reads is composed by our code from the emitted operations, never by the model.
+
+**The honest finding first, because it decides the rest.** The existing validation is **referential, not semantic**. It checks that a column exists on the real table and is the right kind of thing. It cannot check that the model picked the column somebody meant. `sales_income`, `net_income` and `commission_amount` all exist and are all numeric; `posting_date`, `transaction_date` and `creation` are all Date. A confidently wrong proposal passes every check this project has, and returns a different number without failing — `SOPHIA_FAULT_PATTERN.md` exactly. Pasted SQL carried a human's semantic choices out of Metabase. A proposal carries a model's. Named gaps, all real: which column, which date, join fan-out, an absent `docstatus` filter, and sum-versus-avg.
+
+**So the gate is the read-back, and it is load-bearing.** `describeProposal` in `studio_core.js` composes one sentence from the operations that will run — "sum of sales_income for each agent_name and Year, from tabSales Invoice, where docstatus = 1, highest sum_of_sales_income first". Change which column is aggregated and the sentence changes with it; a JS assertion holds that property, because it is the whole reason reading the line is a check at all. **If the model wrote that sentence it would describe its intention while the operations did something else, and the review would verify nothing.** The endpoint therefore returns no free text from the model, and an AST test asserts the reply's key set, so adding one fails rather than being noticed later.
+
+**Three structural guarantees, none of them by convention:**
+
+- `integrations/llm/question.py` **does not import frappe**, so there is no path from it to a row. Sample values are not withheld by care — they are unreachable. Tested by reading its import list from the syntax tree.
+- `api/propose.py` has **no write path**: no `get_doc`, `insert`, `save` or `convert_sql`, asserted by walking its call graph. Creation stays in `convert_sql`, behind a button pressed after reading the proposal.
+- Exactly **one** `requests.post` in the app, its URL checked at the call site — the shape `metabase_export_sql.py` already uses.
+
+**The validation strip states both halves.** Green reports what was verified by name; the line under it says *"Not checked: whether these are the columns you meant."* A strip that reports only what it checked implies an assurance nobody can give, and would invite the one thing this cannot survive — somebody not reading the proposal.
+
+**Join fan-out is named, and only where it is provable.** Joining a parent to a child table gives the parent one output row per child, so a SUM after it counts the parent's value once per child: too big, and entirely ordinary-looking. `rows_multiplied_by` reports joins to DocTypes Frappe marks `istable`, and only under a summarize — warning about a plain join would train people past the warning. **It does not detect an ordinary one-to-many between two normal DocTypes**, which fans out identically and is not marked in metadata. That limit is in the docstring rather than approximated, because a warning that looks complete is worse than none.
+
+**Two pieces of the requested design were not built, rather than approximated.** There is no chart-type picker: this app creates no charts — that code is in `archive/` — so the control would have done nothing. And the workbook picker is not repeated inside the proposal card; the existing one below already feeds `convert_sql`, and two controls meaning one thing is worse than one.
+
+**Reused as-is**: the whole converter and every refusal in it, `_table_columns`, `describeOperation`, `refusalMessage`, the workbook picker, `convert_sql`, `DS_WRITE_ROLES`. What is new is one pure module, one endpoint, one summary function and a panel.
+
+**Not verified live.** The HTTP call is injected and unit-tested against fakes; there is no network route or Bench here. Nobody has yet run a real question against a real site — that is the user's step, and the first thing to watch is whether the model's SQL lands inside the supported subset often enough to be worth the round trip.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

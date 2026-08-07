@@ -800,3 +800,39 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
 .dss-val-inner { margin: 4px 0 2px; }
 .dss-val-inner th { font-size: 7px; padding: 6px 8px; }
 .dss-val-inner td { padding: 6px 8px; font-size: 10px; }
+
+/* ---- The question box, and the setup it proposes ----
+ *
+ * The card is deliberately NOT green until the user acts. It carries a "Not
+ * created yet" badge because the one thing this feature cannot survive is
+ * somebody assuming a proposal is a result — nothing here has reached Insights.
+ */
+.dss-questionbox { margin-bottom: 12px; }
+.dss-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 9px; }
+.dss-chip {
+  font-size: 11px; padding: 4px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--dss-line); background: var(--dss-surface);
+  color: var(--dss-ink-700); text-align: left;
+}
+.dss-chip:hover { border-color: var(--dss-line-dark); color: var(--dss-ink); }
+.dss-badge {
+  margin-left: 8px; font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; padding: 2px 7px; border-radius: 999px;
+  background: var(--dss-orange-100); border: 1px solid #f0d19a;
+  color: var(--dss-orange);
+}
+.dss-saveresult.is-bad { background: var(--dss-surface); border: 1px solid var(--dss-line); }
+
+/* The validation strip states BOTH halves. A green tick reporting only what it
+   checked implies an assurance nobody can give — the limit line is not
+   decoration, it is the honest half of the claim, so it is never dimmed away. */
+.dss-validation {
+  margin-top: 9px; padding: 8px 10px; border-radius: var(--dss-r-sm);
+  font-size: 11.5px; line-height: 1.5;
+}
+.dss-validation.is-ok { background: var(--dss-green-100); border: 1px solid #b9e0c4; }
+.dss-validation.is-warn {
+  background: var(--dss-orange-100); border: 1px solid #f0d19a; margin-top: 7px;
+}
+.dss-validation-line { color: var(--dss-ink); }
+.dss-validation-limit { margin-top: 5px; color: var(--dss-ink); font-weight: 600; }

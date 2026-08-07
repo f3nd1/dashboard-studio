@@ -47,7 +47,76 @@
           (m.coerced_from ? " — " + m.coerced_from + " cast to a number" : "");
       }).join(", ") + (by.length ? " by " + by.join(", ") : "");
     }
+    if (op.type === "filter_group") {
+      var joiner = " " + String(op.logical_operator || "Or").toLowerCase() + " ";
+      return (op.filters || []).map(function (f) {
+        return ((f.column || {}).column_name || "?") + " " + (f.operator || "?") +
+          " " + JSON.stringify(f.value);
+      }).join(joiner);
+    }
+    if (op.type === "order_by") {
+      return ((op.column || {}).column_name || "?") + ", " +
+        (op.direction === "desc" ? "highest first" : "lowest first");
+    }
+    if (op.type === "limit") return "first " + op.limit + " rows";
     return op.type || "";
+  }
+
+  // The plain label beside each operation. The user reads these to judge
+  // whether the proposal understood the question, so they say what the step
+  // DOES rather than naming Insights' internals.
+  var LABELS = {
+    source: "Source", join: "Join", filter: "Filter", filter_group: "Filter",
+    cast: "Convert", mutate: "Calculate", summarize: "Summarise",
+    order_by: "Sort", limit: "Limit",
+  };
+
+  function labelForOperation(op) {
+    return LABELS[(op || {}).type] || (op || {}).type || "";
+  }
+
+  // ONE sentence describing what the query will do, composed HERE from the
+  // operations that will actually run.
+  //
+  // This is the safety argument for the question box, so read the next bit
+  // before changing it. The server never returns the model's own words. If the
+  // model wrote this sentence, it would describe what it MEANT while the
+  // operations did something else, and a person reading it would be checking
+  // the model's intention rather than the query — which is no check at all.
+  // Composed from the operations, a mismatch between the question asked and the
+  // query built is visible in the one line somebody actually reads.
+  function describeProposal(operations) {
+    operations = operations || [];
+    var find = function (type) {
+      for (var i = 0; i < operations.length; i++) {
+        if (operations[i].type === type) return operations[i];
+      }
+      return null;
+    };
+    var summarize = find("summarize");
+    if (!summarize) return "";
+    var measures = (summarize.measures || []).map(function (m) {
+      return m.aggregation ? m.aggregation + " of " + m.column_name : m.measure_name;
+    });
+    var by = (summarize.dimensions || []).map(function (d) { return d.column_name; });
+    var sentence = measures.join(" and ") || "a count";
+    if (by.length) sentence += " for each " + by.join(" and ");
+    var source = find("source");
+    if (source) sentence += ", from " + ((source.table || {}).table_name || "?");
+    var filters = operations.filter(function (op) {
+      return op.type === "filter" || op.type === "filter_group";
+    });
+    if (filters.length) {
+      sentence += ", where " + filters.map(describeOperation).join(" and ");
+    }
+    var order = find("order_by");
+    if (order) {
+      sentence += ", " + (order.direction === "desc" ? "highest" : "lowest") +
+        " " + ((order.column || {}).column_name || "?") + " first";
+    }
+    var limit = find("limit");
+    if (limit) sentence += ", top " + limit.limit;
+    return sentence;
   }
 
   // What the user is told when the server refuses.
@@ -135,6 +204,7 @@
   }
 
   root.DSStudioCore = { describeOperation: describeOperation,
+    labelForOperation: labelForOperation, describeProposal: describeProposal,
     refusalMessage: refusalMessage };
   if (typeof module !== "undefined" && module.exports) module.exports = root.DSStudioCore;
 })(typeof window !== "undefined" ? window : this);

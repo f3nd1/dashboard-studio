@@ -84,6 +84,11 @@
       vizWorkbook: (options || {}).workbook || "",
       vizWorkbooks: null,
       conversion: null,
+      // The question box. `proposal` holds what the server proposed and is
+      // cleared the moment anything is created or the user asks again — it must
+      // never sit on screen next to a query it did not produce.
+      question: "",
+      proposal: null,
     };
   }
 
@@ -96,6 +101,9 @@
     // sit here was explanation, and the controls are the explanation.
     var card = el("section", "dss-vizstep");
     var body = el("div", "dss-vizstep-body");
+    body.appendChild(this.buildQuestionBox());
+    var proposal = this.buildProposal();
+    if (proposal) body.appendChild(proposal);
     body.appendChild(this.buildSqlInput());
     body.appendChild(this.buildTitleField());
     body.appendChild(this.buildWorkbookPicker());
@@ -234,6 +242,163 @@
       self.convertSql(sql, note).then(done, done);
     });
     return wrap;
+  };
+
+  // ------------------------------------------------------------------ ask ---
+  // A question, and three examples to show the shape that works.
+  App.prototype.buildQuestionBox = function () {
+    var self = this;
+    var wrap = el("div", "dss-field dss-questionbox");
+    wrap.appendChild(el("label", "dss-field-label", "Ask a question"));
+    var box = el("input", "dss-input");
+    box.type = "text";
+    box.placeholder = "which agent brought in the most sales income, and in which year";
+    box.value = this.state.question || "";
+    box.setAttribute("aria-label", "Ask a question");
+    // Updated WITHOUT re-rendering — a re-render per keystroke replaces the
+    // input mid-type and takes the caret with it. Fixed twice already here.
+    box.addEventListener("input", function () { self.state.question = box.value; });
+    wrap.appendChild(box);
+
+    var chips = el("div", "dss-chips");
+    ["which agent brought in the most sales income, and in which year",
+      "how many invoices were raised each month last year",
+      "average invoice value per customer, highest first"].forEach(function (text) {
+      var chip = el("button", "dss-chip", text);
+      chip.type = "button";
+      chip.addEventListener("click", function () {
+        self.state.question = text;
+        self.render();
+      });
+      chips.appendChild(chip);
+    });
+    wrap.appendChild(chips);
+
+    var go = el("button", "dss-btn dss-btn-primary", "Propose a setup");
+    go.type = "button";
+    go.title = "Asks the model for a query and checks it. Creates nothing.";
+    go.addEventListener("click", function () {
+      var question = (self.state.question || "").trim();
+      if (!question) { toast("Type a question first."); return; }
+      go.disabled = true;
+      go.textContent = "Thinking…";
+      self.propose(question).then(function () {
+        go.disabled = false;
+        go.textContent = "Propose a setup";
+      });
+    });
+    wrap.appendChild(go);
+    return wrap;
+  };
+
+  App.prototype.propose = function (question) {
+    var self = this;
+    return dsCall({
+      method: "dashboard_studio.api.propose.propose_from_question",
+      args: { question: question },
+    }).then(function (r) {
+      self.state.proposal = r.message || null;
+      self.state.conversion = null;
+      self.render();
+    }).catch(function (err) {
+      self.state.proposal = { supported: false, reasons: [
+        core.refusalMessage(err, "Could not propose a setup for that.")] };
+      self.render();
+    });
+  };
+
+  // The proposed setup. NOTHING here has reached Insights.
+  //
+  // Read the read-back note in studio_core.js before changing the summary: it
+  // is composed from the operations, never written by the model, and that is
+  // the whole reason a person reading it is checking anything at all.
+  App.prototype.buildProposal = function () {
+    var proposal = this.state.proposal;
+    if (!proposal) return null;
+    var self = this;
+    var box = el("div", "dss-saveresult" + (proposal.supported ? "" : " is-bad"));
+
+    var head = el("div", "dss-saveresult-title", "Proposed setup");
+    head.appendChild(el("span", "dss-badge", "Not created yet"));
+    box.appendChild(head);
+
+    if (!proposal.supported) {
+      (proposal.reasons || []).forEach(function (reason) {
+        box.appendChild(el("div", "dss-saveresult-detail", reason));
+      });
+      box.appendChild(el("div", "dss-hint",
+        "Nothing was created. Try asking differently, or paste the SQL below."));
+      return box;
+    }
+
+    // The summary FIRST: it is what the user reads to judge whether the
+    // proposal understood the question.
+    box.appendChild(el("div", "dss-saveresult-detail",
+      core.describeProposal(proposal.operations)));
+
+    var steps = el("div", "dss-handoff-todo");
+    steps.appendChild(el("div", "dss-handoff-todo-head", "Operations"));
+    (proposal.operations || []).forEach(function (op) {
+      var row = el("div", "dss-handoff-todo-row");
+      row.appendChild(el("span", "dss-handoff-todo-key", core.labelForOperation(op)));
+      row.appendChild(el("span", "dss-handoff-todo-val", core.describeOperation(op)));
+      steps.appendChild(row);
+    });
+    box.appendChild(steps);
+
+    // The validation strip, saying BOTH halves. A green tick that implies more
+    // assurance than it gives is worse than no strip at all.
+    var strip = el("div", "dss-validation is-ok");
+    strip.appendChild(el("div", "dss-validation-line",
+      "Checked against the live schema: " +
+      (proposal.checked || []).join(", ") + " — all exist and are the right type."));
+    strip.appendChild(el("div", "dss-validation-limit", proposal.not_checked));
+    box.appendChild(strip);
+
+    (proposal.multiplied || []).forEach(function (table) {
+      box.appendChild(el("div", "dss-validation is-warn",
+        "This joins " + table + ", a child table: each parent record gets one " +
+        "row per child row, so any total counts it more than once. " +
+        "Sanity-check the number before trusting it."));
+    });
+
+    // No workbook picker in here. There is already one below, `convertSql`
+    // reads it either way, and two of them on screen is two controls meaning
+    // one thing. (The design also called for a chart-type picker beside it;
+    // this app does not create charts — that code was archived — so there is
+    // nothing to pick. Better absent than a control that does nothing.)
+    var actions = el("div", "dss-insights-links");
+    var create = el("button", "dss-btn dss-btn-primary", "Create in Insights");
+    create.type = "button";
+    create.addEventListener("click", function () {
+      create.disabled = true;
+      var note = el("div", "dss-hint");
+      box.appendChild(note);
+      self.convertSql(proposal.sql, note).then(function () {
+        create.disabled = false;
+      });
+    });
+    actions.appendChild(create);
+
+    var edit = el("button", "dss-btn", "Edit the setup");
+    edit.type = "button";
+    edit.title = "Puts the query in the box below, where you can change it.";
+    edit.addEventListener("click", function () {
+      self.state.vizSql = proposal.sql;
+      self.state.proposal = null;
+      self.render();
+    });
+    actions.appendChild(edit);
+
+    var again = el("button", "dss-btn", "Ask differently");
+    again.type = "button";
+    again.addEventListener("click", function () {
+      self.state.proposal = null;
+      self.render();
+    });
+    actions.appendChild(again);
+    box.appendChild(actions);
+    return box;
   };
 
   App.prototype.convertSql = function (sql, note) {

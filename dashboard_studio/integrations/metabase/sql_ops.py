@@ -605,6 +605,41 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     return {"supported": True, "operations": operations, "reasons": []}
 
 
+def rows_multiplied_by(operations, child_doctypes):
+    """Joined tables that give a parent row one output row per child row.
+
+    Returns the joined table names, in order. NOT a refusal — the join is
+    usually exactly what was asked for — but a SUM or a COUNT taken after one
+    counts the parent's value once per child, which is a number that is too big
+    and looks perfectly ordinary. It is the likeliest way a proposed query is
+    quietly wrong, so it is said out loud next to the proposal.
+
+    `child_doctypes` is the set of DocTypes Frappe marks `istable`, passed in
+    rather than read here so this stays testable without a site. That flag is
+    the authority: a child table's rows belong to a parent, so joining one
+    always multiplies.
+
+    **What this does NOT detect**, stated because a warning that looks complete
+    is worse than none: an ordinary one-to-many between two normal DocTypes
+    fans out identically, and nothing in Frappe's metadata marks it. Only the
+    child-table case is provable from the schema, so only it is reported.
+    """
+    if not isinstance(operations, list):
+        raise TypeError("operations must be a list")
+    children = {str(name) for name in (child_doctypes or ())}
+    aggregating = any(operation.get("type") == "summarize" for operation in operations)
+    if not aggregating:
+        return []
+    multiplied = []
+    for operation in operations:
+        if operation.get("type") != "join":
+            continue
+        table = (operation.get("table") or {}).get("table_name") or ""
+        if table.startswith("tab") and table[3:] in children:
+            multiplied.append(table)
+    return multiplied
+
+
 def _produced_columns(operations):
     """The column names the result carries, or None when that is not knowable.
 

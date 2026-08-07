@@ -1,0 +1,154 @@
+"""A plain-English question -> SQL, for the existing converter to translate.
+
+**This module must never import frappe, and there is a test that says so.** That
+is the structural guarantee that no row of data can reach the model: there is no
+path from here to a database. What goes out is a question somebody typed, a list
+of DocType names, and column names with their types. Sample values are not
+withheld by care — they are unreachable.
+
+**The model emits SQL, not operations.** Everything downstream then applies
+unchanged: the wrapper rules, the allowlists, the type checks and every refusal
+built over twenty ADRs. Emitting operations directly would need a second
+validator for operation shapes, against a format where an unrecognised key is
+dropped silently — rebuilding what already exists, worse.
+
+Nothing here executes anything. The SQL is parsed, never run, exactly as pasted
+SQL is.
+
+The HTTP call is INJECTED (`call`), so the whole path is testable without a
+network route — there is none from this repo — and so this file has no
+credential in it to leak.
+"""
+
+from __future__ import annotations
+
+# The narrow shape the converter can translate, told to the model up front.
+# Asking for SQL it cannot translate wastes a round trip and produces a refusal
+# the user reads as a failure of the feature rather than of the question.
+_SUPPORTED = """\
+- ONE table, or tables joined each on a single `a.column = b.column` equality
+- WHERE with comparisons (=, !=, >, >=, <, <=), either all AND-ed or all OR-ed
+- GROUP BY plain columns
+- COUNT, SUM, AVG, MIN, MAX, and arithmetic over them
+- year(), month(), quarter(), day() of a date column
+- CASE WHEN <column or date part> = <literal> THEN <literal> ... END
+- ORDER BY a column the query produces, and LIMIT
+
+NOT supported, do not use: subqueries, UNION, HAVING, DISTINCT, LIKE, IN,
+BETWEEN, IS NULL, window functions, CROSS joins, joining the same table twice,
+AND and OR mixed in one WHERE, DAYOFWEEK, WEEK, CAST to an integer type."""
+
+_SYSTEM = """\
+You translate a business question into ONE MySQL SELECT statement against a \
+Frappe database. Tables are named `tab<DocType>`, e.g. `tabSales Invoice`.
+
+Rules:
+- Use ONLY the columns listed for you. Never invent one.
+- Reply with the SQL and nothing else. No explanation, no code fences.
+- If the question cannot be answered from the columns given, reply with exactly \
+CANNOT: followed by one short sentence saying what is missing.
+
+The statement must fit this subset:
+""" + _SUPPORTED
+
+_PICK_SYSTEM = """\
+You are given a business question and a list of Frappe DocType names. Reply \
+with the names of up to 4 DocTypes needed to answer it, one per line, exactly \
+as spelled in the list, and nothing else. If none fit, reply with exactly NONE."""
+
+# Read at the top of the file it belongs to rather than guessed: the request
+# shape is Anthropic's Messages API. `anthropic-version` is required and is a
+# date, not the model's version.
+API_URL = "https://api.anthropic.com/v1/messages"
+API_VERSION = "2023-06-01"
+MODEL = "claude-opus-5"
+MAX_TOKENS = 1024
+
+
+def _message(system: str, user: str) -> dict:
+    return {"model": MODEL, "max_tokens": MAX_TOKENS, "system": system,
+            "messages": [{"role": "user", "content": user}]}
+
+
+def _text_of(response) -> str:
+    """The assistant's text, or "" — never an exception on an odd shape."""
+    if not isinstance(response, dict):
+        return ""
+    parts = response.get("content")
+    if not isinstance(parts, list):
+        return ""
+    out = []
+    for part in parts:
+        if isinstance(part, dict) and part.get("type") == "text":
+            out.append(str(part.get("text") or ""))
+    return "\n".join(out).strip()
+
+
+def pick_doctypes_request(question: str, doctypes) -> dict:
+    """Step one: which tables. Names only — no columns, no values.
+
+    A whole site's schema does not fit in one request, and sending the columns
+    of a thousand DocTypes to answer a question about two is the kind of egress
+    nobody agreed to. So the first pass sees names.
+    """
+    if not isinstance(question, str):
+        raise TypeError("question must be a string")
+    listing = "\n".join(sorted(str(name) for name in doctypes))
+    return _message(_PICK_SYSTEM, f"Question: {question}\n\nDocTypes:\n{listing}")
+
+
+def doctypes_from_response(response, known) -> list[str]:
+    """The names it chose, keeping only ones that really exist.
+
+    A name it invented is dropped here rather than reaching `frappe.get_meta`,
+    where it would become "There is no DocType called …" — a true message about
+    the wrong thing.
+    """
+    known = {str(name) for name in known}
+    text = _text_of(response)
+    if text.upper().startswith("NONE"):
+        return []
+    return [line.strip() for line in text.splitlines()
+            if line.strip() in known][:4]
+
+
+def write_sql_request(question: str, schema: dict) -> dict:
+    """Step two: the SQL. `schema` is ``{DocType: {column: data_type}}``.
+
+    That mapping is the same one the converter itself types columns from, so
+    what the model is told and what the validator checks against cannot drift
+    apart — they are one value.
+    """
+    if not isinstance(question, str):
+        raise TypeError("question must be a string")
+    if not isinstance(schema, dict):
+        raise TypeError("schema must be a dict")
+    blocks = []
+    for doctype in sorted(schema):
+        columns = schema[doctype] or {}
+        listing = ", ".join(f"{name} ({columns[name]})" for name in sorted(columns))
+        blocks.append(f"`tab{doctype}`\n  {listing}")
+    tables = "\n\n".join(blocks)
+    return _message(_SYSTEM, f"Question: {question}\n\nTables and columns:\n\n{tables}")
+
+
+def sql_from_response(response) -> tuple[str, str]:
+    """``(sql, refusal)`` — exactly one is truthy.
+
+    A model that says CANNOT is doing the right thing, and its sentence is a
+    better message than anything this could invent, so it is passed through.
+    """
+    text = _text_of(response)
+    if not text:
+        return "", "The model returned nothing this could read as SQL."
+    if text.upper().startswith("CANNOT"):
+        return "", text[len("CANNOT"):].lstrip(": ").strip() or "It could not answer that."
+    # Fences are asked against, and arrive anyway often enough to be worth
+    # stripping rather than refusing over.
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        text = text.rsplit("```", 1)[0]
+    text = text.strip()
+    if not text.upper().lstrip("( ").startswith("SELECT"):
+        return "", "The model replied with something that is not a SELECT statement."
+    return text, ""

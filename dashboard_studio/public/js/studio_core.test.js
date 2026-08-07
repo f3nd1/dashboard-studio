@@ -110,3 +110,64 @@ assert.strictEqual(core.refusalMessage({ message: "ValidationError" }, "GENERIC"
   "ValidationError");
 
 console.log("studio_core.test.js — all assertions passed");
+
+// ---------------------------------------------------------------------------
+// The proposal read-back.
+//
+// This is the question box's whole safety argument: the sentence a person reads
+// to decide whether the proposal understood them is composed HERE, from the
+// operations that will run, and never by the model. So these assertions are
+// about faithfulness, not phrasing.
+// ---------------------------------------------------------------------------
+var PROPOSAL = [
+  { type: "source", table: { table_name: "tabSales Invoice" } },
+  { type: "mutate", new_name: "Year",
+    expression: { expression: "year(posting_date)" } },
+  { type: "filter", column: { column_name: "docstatus" }, operator: "=", value: 1 },
+  { type: "summarize",
+    measures: [{ measure_name: "sum_of_sales_income", column_name: "sales_income",
+      aggregation: "sum", data_type: "Decimal" }],
+    dimensions: [{ dimension_name: "agent_name", column_name: "agent_name",
+      data_type: "String" },
+    { dimension_name: "Year", column_name: "Year", data_type: "Integer" }] },
+  { type: "order_by", column: { column_name: "sum_of_sales_income" },
+    direction: "desc" },
+];
+
+var line = core.describeProposal(PROPOSAL);
+// Every part of the sentence comes from an operation, so a proposal that
+// aggregates the wrong column says so in the line somebody reads.
+assert.ok(line.indexOf("sum of sales_income") !== -1, line);
+assert.ok(line.indexOf("for each agent_name and Year") !== -1, line);
+assert.ok(line.indexOf("from tabSales Invoice") !== -1, line);
+assert.ok(line.indexOf("where docstatus = 1") !== -1, line);
+assert.ok(line.indexOf("highest sum_of_sales_income first") !== -1, line);
+
+// Change which column is aggregated and the sentence changes with it. This is
+// the property that makes reading it a real check.
+var swapped = JSON.parse(JSON.stringify(PROPOSAL));
+swapped[3].measures[0].column_name = "commission_amount";
+assert.ok(core.describeProposal(swapped).indexOf("commission_amount") !== -1,
+  "the read-back must follow the operations");
+assert.notStrictEqual(core.describeProposal(swapped), line);
+
+// Nothing to summarise means no sentence, rather than an invented one.
+assert.strictEqual(core.describeProposal([{ type: "source", table: {} }]), "");
+assert.strictEqual(core.describeProposal(null), "");
+
+// The operations added since describeOperation was written must read back too —
+// an operation rendering as its own type name is a step nobody can check.
+assert.strictEqual(core.describeOperation(
+  { type: "order_by", column: { column_name: "n" }, direction: "desc" }),
+"n, highest first");
+assert.strictEqual(core.describeOperation({ type: "limit", limit: 10 }),
+  "first 10 rows");
+assert.strictEqual(core.describeOperation({ type: "filter_group",
+  logical_operator: "Or",
+  filters: [{ column: { column_name: "s" }, operator: "=", value: "A" },
+    { column: { column_name: "s" }, operator: "=", value: "B" }] }),
+'s = "A" or s = "B"');
+assert.strictEqual(core.labelForOperation({ type: "summarize" }), "Summarise");
+assert.strictEqual(core.labelForOperation({ type: "order_by" }), "Sort");
+
+console.log("studio_core.test.js — proposal read-back assertions passed");

@@ -60,11 +60,16 @@ class TestEndpointsReachable(unittest.TestCase):
     def test_the_front_end_calls_something(self):
         """A guard on the guard: if the regex stops matching, everything below
         passes vacuously."""
-        # Two, and they are named: if the regex stops matching, everything below
-        # passes vacuously, so this has to fail loudly rather than quietly.
+        # Named one by one: if the regex stops matching, everything below passes
+        # vacuously, so this has to fail loudly rather than quietly.
+        #
+        # `propose_from_question` proposes and creates nothing. `convert_sql` is
+        # still the only route to Insights, whether the SQL was pasted or came
+        # from a proposal the user read and accepted.
         self.assertEqual(set(js_call_sites()), {
             "dashboard_studio.api.insights.list_insights_workbooks",
             "dashboard_studio.api.convert.convert_sql",
+            "dashboard_studio.api.propose.propose_from_question",
         }, "the front end's call sites changed — has the call shape changed too?")
 
     def test_every_method_the_browser_calls_is_whitelisted(self):
