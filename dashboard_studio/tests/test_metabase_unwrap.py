@@ -16,6 +16,7 @@ question without failing.
 """
 
 import pathlib
+import re
 import unittest
 
 from dashboard_studio.integrations.metabase.parser import (
@@ -49,10 +50,17 @@ RESELECTED = (pathlib.Path(__file__).resolve().parent / "fixtures"
 YEAR_LABEL = (pathlib.Path(__file__).resolve().parent / "fixtures"
               / "year_label_then_group.sql")
 # The fifth: report 1680, the original flagship blocker. Its wrapper scales a
-# rating by 5. That half converts now; the outer CAST over an expression does
-# not, which is what its test asserts.
+# rating by 5, and the outer CAST over an expression is dropped as an identity
+# — it converts end to end now (ADR-017).
 SCALE_FACTOR = (pathlib.Path(__file__).resolve().parent / "fixtures"
                 / "scale_factor_wrapper.sql")
+# The sixth: a 12-branch CASE mapping MONTH() to a month label, alongside a
+# year label, the month number, an ORDER BY over all three and a cast. Reported
+# 2026-08-07 as the case FOR reopening the declined CASE group, and it was the
+# right call — this is a deterministic lookup, not the composite index of
+# ADR-014.
+MONTH_LABEL = (pathlib.Path(__file__).resolve().parent / "fixtures"
+               / "month_label_lookup.sql")
 
 # The inner wrapper, exactly as Metabase writes it.
 INNER = "( select * from `tabStudent Applicant` ) AS `__mb_source`"
@@ -1235,6 +1243,192 @@ class TestADateDifferenceWrapper(unittest.TestCase):
         result = analyze_sql(self.SQL.replace("`c`.`raised_on`", "'2024-01-01'"))
         self.assertFalse(result["supported"])
         self.assertIn("not a column", " | ".join(result["reasons"]))
+
+
+class TestACaseThatMapsValuesToLabels(unittest.TestCase):
+    """The reopened CASE group, end to end over the reported capture.
+
+    `case(condition, value, *args)` takes its pairs FLAT with an optional
+    trailing else, and its body is `ibis.cases(*branches)` — no `else_` when the
+    count is even, which is NULL, exactly as a SQL CASE with no ELSE returns
+    NULL. Read from `functions.py` at v3.12.2, along with the comparison
+    spelling: `status == 'Active'`, Python's `==` rather than SQL's `=`.
+
+    This is NOT a reversal of ADR-014. That decision rested on a hand-rolled
+    pivot and seven other gaps, not on the conditional being unavailable — a
+    composite-index survey report still refuses, and should.
+    """
+
+    COLUMNS = {"Quality Action": {
+        "name": "String", "custom_proposed_date": "Date",
+        "custom_aggregated_performance_index_api": "String"}}
+
+    def operations(self, sql=None):
+        result = operations_from_sql(
+            analyze_sql(sql or MONTH_LABEL.read_text()), self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def labelling(self, operations=None):
+        return [op for op in (operations or self.operations())
+                if op.get("new_name") == "Month Label"][0]
+
+    def test_the_reported_capture_converts_in_full(self):
+        self.assertEqual([op["type"] for op in self.operations()],
+                         ["source", "cast", "mutate", "mutate", "mutate",
+                          "summarize", "order_by", "order_by", "order_by"])
+
+    def test_the_twelve_branches_all_survive_in_order(self):
+        expression = self.labelling()["expression"]["expression"]
+        self.assertEqual(
+            re.findall(r"month\(custom_proposed_date\) == (\d+), '([^']+)'", expression),
+            [("1", "01-Jan"), ("2", "02-Feb"), ("3", "03-Mar"), ("4", "04-Apr"),
+             ("5", "05-May"), ("6", "06-Jun"), ("7", "07-Jul"), ("8", "08-Aug"),
+             ("9", "09-Sep"), ("10", "10-Oct"), ("11", "11-Nov"), ("12", "12-Dec")])
+
+    def test_the_pairs_are_FLAT_not_tuples(self):
+        """`case` takes them flat; `cases` is the one that takes tuples. Writing
+        one shape into the other's name is a call that fails or, worse, reads a
+        condition as a value."""
+        expression = self.labelling()["expression"]["expression"]
+        self.assertTrue(expression.startswith("case(month("), expression[:40])
+        self.assertFalse(expression.startswith("case(("), expression[:40])
+
+    def test_no_ELSE_means_no_trailing_value(self):
+        """The capture has no ELSE, and a SQL CASE without one returns NULL.
+        `case` with an even argument count calls `ibis.cases` with no `else_`,
+        which is also NULL. An invented else would relabel every row that
+        matches nothing."""
+        expression = self.labelling()["expression"]["expression"]
+        self.assertTrue(expression.rstrip().endswith("'12-Dec')"), expression[-30:])
+
+    def test_an_ELSE_becomes_the_trailing_value(self):
+        expression = self.labelling(self.operations(
+            MONTH_LABEL.read_text().replace("END AS `Month Label`",
+                                            "ELSE 'Unknown' END AS `Month Label`")
+        ))["expression"]["expression"]
+        self.assertTrue(expression.rstrip().endswith("'12-Dec', 'Unknown')"),
+                        expression[-40:])
+
+    def test_the_labelled_column_is_a_String_dimension(self):
+        dimensions = {d["dimension_name"]: d["data_type"] for d in
+                      [op for op in self.operations()
+                       if op["type"] == "summarize"][0]["dimensions"]}
+        self.assertEqual(dimensions,
+                         {"Year": "Integer", "Month Label": "String",
+                          "Month No": "Integer"})
+
+    def test_the_mutate_comes_before_the_summarize_that_groups_by_it(self):
+        kinds = [op["type"] for op in self.operations()]
+        self.assertLess(max(i for i, k in enumerate(kinds) if k == "mutate"),
+                        kinds.index("summarize"))
+
+    def test_SQL_equality_becomes_the_dialects_double_equals(self):
+        """`status == 'Active'` in `functions.py`'s own examples, not SQL's
+        single `=`. A lone `=` would be an assignment, not a comparison."""
+        expression = self.labelling()["expression"]["expression"]
+        self.assertIn("== 1,", expression)
+        self.assertIsNone(re.search(r"[^=]=\s*\d", expression), expression)
+
+
+class TestWhatACaseRefuses(unittest.TestCase):
+    """Much narrower than `case` can express, because this becomes text a query
+    engine evaluates. One column — or one date part of one — compared against
+    one literal, producing one literal."""
+
+    COLUMNS = TestACaseThatMapsValuesToLabels.COLUMNS
+
+    def refusal(self, replacement, original="MONTH(`tabQuality Action`.`custom_proposed_date`) = 1"):
+        result = analyze_sql(MONTH_LABEL.read_text().replace(original, replacement, 1))
+        self.assertFalse(result["supported"], "expected a refusal")
+        return " | ".join(result["reasons"])
+
+    def test_a_compound_condition_refuses(self):
+        """One comparison per branch. A compound one is expressible in the
+        dialect and has not been read from anything."""
+        self.assertIn("CASE WHEN", self.refusal(
+            "MONTH(`tabQuality Action`.`custom_proposed_date`) = 1 AND `name` = 'x'"))
+
+    def test_IS_NULL_refuses(self):
+        self.assertIn("CASE WHEN", self.refusal(
+            "`tabQuality Action`.`custom_proposed_date` IS NULL"))
+
+    def test_LIKE_inside_a_branch_refuses(self):
+        """It is already refused as a filter operator; a CASE is not a way in."""
+        self.assertIn("CASE WHEN", self.refusal(
+            "`tabQuality Action`.`name` LIKE 'UCC%'"))
+
+    def test_comparing_two_columns_refuses(self):
+        self.assertIn("not a plain number or a quoted label", self.refusal(
+            "MONTH(`tabQuality Action`.`custom_proposed_date`) = `tabQuality Action`.`name`"))
+
+    def test_a_date_part_Insights_numbers_differently_refuses_here_too(self):
+        """The allowlist is the same table the standalone date parts use, so
+        DAYOFWEEK's 0-Monday-against-1-Sunday problem cannot be walked around by
+        putting it inside a CASE."""
+        self.assertIn("not a column or a date part", self.refusal(
+            "DAYOFWEEK(`tabQuality Action`.`custom_proposed_date`) = 1"))
+
+    def test_a_COLUMN_as_the_result_refuses(self):
+        """A literal is what has been read. A branch returning a column is a
+        different capability and would need its own proof."""
+        self.assertIn("not a plain number or a quoted label", self.refusal(
+            "`tabQuality Action`.`name`", "'01-Jan'"))
+
+    def test_a_COMPUTED_result_refuses(self):
+        self.assertIn("not a plain number or a quoted label", self.refusal(
+            "1 + 1", "'01-Jan'"))
+
+    def test_branches_returning_different_types_refuse(self):
+        """A column holds one type. A branch returning a number and another
+        returning a label are two columns wearing one name."""
+        self.assertIn("a column holds one type",
+                      self.refusal("1", "'01-Jan'"))
+
+    def test_the_simple_CASE_form_refuses(self):
+        """`CASE x WHEN 1 THEN …` compares x against each value; `CASE WHEN …`
+        evaluates each condition. Reading one as the other changes what every
+        branch tests."""
+        sql = MONTH_LABEL.read_text().replace(
+            "CASE\n        WHEN MONTH(`tabQuality Action`.`custom_proposed_date`) = 1",
+            "CASE MONTH(`tabQuality Action`.`custom_proposed_date`)\n        WHEN 1")
+        result = analyze_sql(sql)
+        self.assertFalse(result["supported"])
+        self.assertIn("simple form", " | ".join(result["reasons"]))
+
+    def test_a_label_carrying_a_QUOTE_refuses(self):
+        """The boundary that matters. This expression is a string somebody else
+        evaluates; a literal that cannot terminate itself early cannot become
+        code."""
+        self.assertIn("not a plain number or a quoted label",
+                      self.refusal("'01-Jan'', evil('", "'01-Jan'"))
+
+    def test_a_label_carrying_a_BACKSLASH_refuses(self):
+        self.assertIn("not a plain number or a quoted label",
+                      self.refusal(r"'01\\Jan'", "'01-Jan'"))
+
+    def test_a_CASE_somewhere_the_reader_never_looks_still_refuses(self):
+        """The global marker is what catches those, and it still fires — a
+        translated CASE stops tripping it only because the lift removes its text
+        from the statement first."""
+        result = analyze_sql(
+            "SELECT COUNT(*) AS `n` FROM `tabStudent Applicant` "
+            "WHERE CASE WHEN `status` = 'A' THEN 1 ELSE 0 END = 1")
+        self.assertFalse(result["supported"])
+        self.assertIn("CASE expression", " | ".join(result["reasons"]))
+
+    def test_the_composite_index_report_is_STILL_refused(self):
+        """ADR-014 is not reversed by this. That decision rested on a
+        hand-rolled pivot and seven other gaps, not on the conditional being
+        unavailable."""
+        sql = ("SELECT AVG(`w`.`score`) AS `avg` FROM ( SELECT CASE "
+               "WHEN LOWER(TRIM(`c`.`response`)) = 'strongly agree' THEN 5 "
+               "WHEN LOWER(TRIM(`c`.`response`)) = 'agree' THEN 4 END AS `score` "
+               "FROM `tabSurvey` LEFT JOIN `tabEntry` c "
+               "ON `tabSurvey`.`name` = c.`parent` ) AS `w`")
+        result = analyze_sql(sql)
+        self.assertFalse(result["supported"])
+        self.assertIn("not a column or a date part", " | ".join(result["reasons"]))
 
 
 class TestACommentIsNotStripped(unittest.TestCase):

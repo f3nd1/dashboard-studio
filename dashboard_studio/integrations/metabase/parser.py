@@ -513,6 +513,140 @@ _COLUMN_REF = re.compile(r"(?:`[^`]+`|\b[A-Za-z_]\w*)\.`?[A-Za-z_][\w ]*`?"
                          r"|`[A-Za-z_][\w ]*`")
 
 
+# --------------------------------------------------------------------------
+# A CASE that maps values to labels
+#
+# `case(condition, value, *args)` in `functions.py` at v3.12.2 takes the pairs
+# FLAT, with an optional trailing else:
+#
+#   case(age > 30, 'Above 30', age > 20, 'Above 20')
+#   case(age > 18, 'Eligible', 'Not Eligible')      <- odd count: the last is else_
+#
+# and its body is `ibis.cases(*branches)` — with no `else_` when the count is
+# even, which is NULL, exactly as a SQL CASE with no ELSE returns NULL.
+#
+# The comparison spelling is Python's, read off the same docstrings:
+# `status == 'Active'`, `age > 18`. Not SQL's single `=`.
+#
+# What is accepted is deliberately much narrower than what `case` can express,
+# because this becomes text a query engine evaluates. A condition is one
+# column — or one date part of one column — compared against one literal. A
+# result is one literal. Everything else refuses by name.
+# --------------------------------------------------------------------------
+_CASE = re.compile(r"^CASE\b(?P<body>.+)\bEND$", re.IGNORECASE | re.DOTALL)
+_WHEN = re.compile(r"\bWHEN\b(?P<condition>.+?)\bTHEN\b(?P<value>.+?)"
+                   r"(?=\bWHEN\b|\bELSE\b|$)", re.IGNORECASE | re.DOTALL)
+_ELSE = re.compile(r"\bELSE\b(?P<value>(?:(?!\bWHEN\b).)+)$", re.IGNORECASE | re.DOTALL)
+_COMPARISON = re.compile(r"^(?P<left>.+?)\s*(?P<operator><=|>=|<>|!=|=|<|>)\s*"
+                         r"(?P<right>.+)$", re.DOTALL)
+# A quoted literal with no quote, backslash or backtick inside it. That is the
+# boundary that matters: the expression is a string somebody else evaluates, and
+# a literal that cannot terminate itself early cannot become code. Brackets and
+# commas inside one are harmless for the same reason.
+_SAFE_STRING = re.compile(r"^'(?P<text>[^'\"\\`\r\n]*)'$")
+_SAFE_NUMBER = re.compile(r"^-?\d+(?:\.\d+)?$")
+_CASE_OPERATORS = {"=": "==", "!=": "!=", "<>": "!=", "<": "<", "<=": "<=",
+                   ">": ">", ">=": ">="}
+
+
+def _case_literal(text: str):
+    """``(rendered, kind)`` for a literal, or ``(None, None)``."""
+    text = text.strip()
+    string = _SAFE_STRING.match(text)
+    if string:
+        return "'" + string.group("text") + "'", "String"
+    if _SAFE_NUMBER.match(text):
+        return text, "Decimal" if "." in text else "Integer"
+    return None, None
+
+
+def _case_operand(text: str, aliases: dict, reasons: list):
+    """``(rendered, column, table)`` for the left of a comparison, or Nones.
+
+    One column, or one date part of one column. A date part is spelled by the
+    same `_DATE_PARTS` table the standalone computed columns use, so `MONTH`
+    means `month` here for the same reason it does there.
+    """
+    text = text.strip()
+    call = _CALL.match(text)
+    if call:
+        name = call.group("name").upper()
+        if name not in _DATE_PARTS:
+            return None, None, None
+        qualifier, column = _split_ref(call.group("args"))
+        if not column:
+            return None, None, None
+        return (f"{_DATE_PARTS[name]}({column})", column,
+                _resolve(qualifier, aliases, reasons))
+    qualifier, column = _split_ref(text)
+    if not column:
+        return None, None, None
+    return column, column, _resolve(qualifier, aliases, reasons)
+
+
+def _case_column(text: str, alias: str, aliases: dict, reasons: list):
+    """A CASE mapping values to labels -> a `case(...)` mutate."""
+    match = _CASE.match(text.strip())
+    if not match:
+        return None, "CASE without an END"
+    body = match.group("body").strip()
+    if not re.match(r"^WHEN\b", body, re.IGNORECASE):
+        # `CASE x WHEN 1 THEN …` compares x against each value; `CASE WHEN …`
+        # evaluates each condition. Reading one as the other silently changes
+        # what every branch tests.
+        return None, "CASE <expression> WHEN … (the simple form)"
+    branches = _WHEN.findall(body)
+    if not branches:
+        return None, "CASE with no WHEN … THEN"
+    otherwise = _ELSE.search(body)
+    parts, columns, tables, kinds = [], [], [], set()
+    for condition, value in branches:
+        comparison = _COMPARISON.match(" ".join(condition.split()))
+        if not comparison:
+            return None, f"CASE WHEN {' '.join(condition.split())[:40]}"
+        if re.search(r"\b(AND|OR|NOT|LIKE|IN|BETWEEN|IS)\b", condition, re.IGNORECASE):
+            # One comparison per branch. A compound condition is expressible in
+            # the dialect and has not been read, and `IS NULL` / `LIKE` are
+            # their own questions — see ADR-014.
+            return None, f"CASE WHEN {' '.join(condition.split())[:40]}"
+        rendered, column, table = _case_operand(comparison.group("left"), aliases, reasons)
+        if not rendered:
+            return None, (f"CASE testing {comparison.group('left').strip()[:40]}, "
+                          "which is not a column or a date part of one")
+        literal, _ = _case_literal(comparison.group("right"))
+        if literal is None:
+            return None, (f"CASE comparing against {comparison.group('right').strip()[:40]}, "
+                          "which is not a plain number or a quoted label")
+        result, kind = _case_literal(value)
+        if result is None:
+            return None, (f"CASE producing {' '.join(value.split())[:40]}, which is not "
+                          "a plain number or a quoted label")
+        kinds.add(kind)
+        columns.append(column)
+        tables.append(table)
+        parts.append(f"{rendered} {_CASE_OPERATORS[comparison.group('operator')]} "
+                     f"{literal}")
+        parts.append(result)
+    if otherwise:
+        result, kind = _case_literal(otherwise.group("value"))
+        if result is None:
+            return None, (f"CASE ELSE {' '.join(otherwise.group('value').split())[:40]}, "
+                          "which is not a plain number or a quoted label")
+        kinds.add(kind)
+        parts.append(result)
+    if kinds == {"Integer", "Decimal"}:
+        kinds = {"Decimal"}
+    if len(kinds) != 1:
+        # A column holds one type. Branches returning a number and a label are
+        # two different columns wearing one name.
+        return None, ("CASE whose branches return " + " and ".join(sorted(kinds))
+                      + " — a column holds one type")
+    return {"alias": alias, "kind": "mutate",
+            "columns": columns, "tables": tables,
+            "expression": "case(" + ", ".join(parts) + ")",
+            "data_type": kinds.pop(), "requires": None}, ""
+
+
 def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
     """``(computed, offending)`` — exactly one is truthy.
 
@@ -541,6 +675,8 @@ def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
     # removing the column has to be arithmetic and contain an operator, which
     # is the same allowlist ADR-011 applies to an expression over aggregates,
     # and for the same reason: this becomes text a query engine evaluates.
+    if re.match(r"^CASE\b", text, re.IGNORECASE):
+        return _case_column(text, alias, aliases, reasons)
     references = _COLUMN_REF.findall(text)
     if references and not _CALL.match(text):
         residue = _COLUMN_REF.sub("", text)

@@ -334,6 +334,29 @@ Refused: an ORDER BY of anything that is not a plain column (an expression is a 
 
 Brackets are stripped around the whole clause and around each condition. That is only safe because a mixed clause has already refused: where one operator governs, grouping brackets change nothing.
 
+## ADR-020 — A CASE that maps values to labels becomes a `case(...)` mutate; ADR-014 stands
+
+**Decision.** A searched `CASE WHEN <column-or-date-part> <op> <literal> THEN <literal> … [ELSE <literal>] END` becomes a `mutate` whose expression is `case(cond, value, cond, value, …)`. Every other CASE refuses by name — including the composite-index survey reports of ADR-014, which are **not** reopened.
+
+**The shape came from source, not from a guess.** `case(condition, value, *args)` in `functions.py` at v3.12.2 takes its pairs **flat**, with an optional trailing else, and its body is `ibis.cases(*branches)` — with no `else_` when the argument count is even. A SQL CASE with no ELSE returns NULL and so does that, so the no-ELSE capture translates exactly rather than needing an invented default. (`cases` is the sibling that takes tuples; writing one shape into the other's name would read a condition as a value.) The comparison spelling came from the same docstrings: `status == 'Active'`, Python's `==`, not SQL's single `=`.
+
+**Accepted is far narrower than `case` can express**, because this becomes text a query engine evaluates:
+
+- a condition is **one** column, or one date part of one column, compared against **one** literal, using `=` `!=` `<>` `<` `<=` `>` `>=`;
+- a result is a plain number or a quoted label — not a column, not an expression;
+- all branches must return the same kind, since a column holds one type;
+- the date-part allowlist is the same `_DATE_PARTS` table the standalone computations use, so `DAYOFWEEK`'s 0-Monday-against-1-Sunday problem cannot be walked around by putting it inside a CASE.
+
+Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN`, `BETWEEN`, the simple `CASE x WHEN 1` form (it compares x against each value rather than evaluating each condition — reading one as the other changes what every branch tests), and a result that is not a literal.
+
+**The literal rule is the injection boundary and is worth stating as one.** A quoted label may not contain a quote, a double quote, a backslash or a backtick. The expression is a string that Insights evaluates; a literal that cannot terminate itself early cannot become code. Brackets and commas inside a label are harmless for the same reason and are allowed, since real labels have them.
+
+**How a translated CASE stops tripping the global CASE refusal.** It does not need special-casing: `_UNSUPPORTED_MARKERS` scans the statement *after* the wrapper rules have run, and lifting a wrapper removes its item text from the statement. A CASE anywhere the readers do not look — in a WHERE, inside an aggregate — is still in the statement at that point and still refuses. `test_a_CASE_somewhere_the_reader_never_looks_still_refuses` pins that.
+
+**Why this is not a reversal of ADR-014.** That decision was never "there is no conditional". It rested on a hand-rolled **pivot**, which nothing in Insights' operation vocabulary expresses, plus `TRIM`/`LOWER`/`COALESCE`/`NULLIF`, `IS NULL` inside an expression, `LIKE` inside an expression, a CAST over an expression, an OR'd WHERE and a computed column in the WHERE. The conditional was one item on a list of eight. A composite-index report still refuses here — on `LOWER(TRIM(response))`, which is not a column or a date part — and the recommendation for those is still a rebuild.
+
+**The distinction the classifier already drew turned out to be the right one.** `scripts/subquery_shapes.py` reports CASE-bearing reports by branch count, long string literals and null logic; the month-label report and the composite index share a branch count and differ on the other two. This was translated on the strength of that separation, and the group that was declined is the one that still refuses.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.
