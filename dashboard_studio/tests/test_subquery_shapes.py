@@ -141,13 +141,17 @@ class TestTheExpressionVocabulary(_Base):
 
     # The reported capture, reduced. The inner items have to be something the
     # lift still declines, or the query converts and leaves this script's
-    # population altogether — which is what happened to the original `* 5`
-    # here once a scale factor became a pre-summarize mutate. `MONTH` is the
-    # current choice for the same job: the allowlist widens only to functions
-    # seen stored, and only `year` has been.
+    # population altogether. This has now expired twice — first `* 5`, when a
+    # scale factor became a pre-summarize mutate, then `MONTH`, when
+    # `functions.py` confirmed Insights has one.
+    #
+    # `TRIM` should last: it was checked against the whole 85-function list in
+    # `functions.py` at v3.12.2 and Insights has no trim of any spelling. If it
+    # ever gains one, this expires again — pick the replacement the same way,
+    # from that list, rather than from what looks unlikely.
     COMPOSITE = ("SELECT CAST( AVG(`w`.`Q1`) + AVG(`w`.`Q5`) AS double ) / 2.0 "
                  "AS `Actual No` FROM ( "
-                 "SELECT MONTH(`c`.`qn_1`) AS `Q1`, MONTH(`c`.`qn_5`) AS `Q5` "
+                 "SELECT TRIM(`c`.`qn_1`) AS `Q1`, TRIM(`c`.`qn_5`) AS `Q5` "
                  "FROM `tabSurvey` LEFT JOIN `tabEntry` c "
                  "ON `tabSurvey`.`name` = c.`parent` WHERE `x` > 1 ) AS `w`")
     DATE_PART = COMPOSITE.replace("CAST( AVG(`w`.`Q1`) + AVG(`w`.`Q5`) AS double ) / 2.0",
@@ -181,7 +185,7 @@ class TestTheExpressionVocabulary(_Base):
         self.assertIn("1 of 1 use nothing but arithmetic over", text)
 
     def test_count_star_does_not_read_as_a_multiplication(self):
-        sql = ("SELECT COUNT(*) AS `n` FROM ( SELECT MONTH(`c`.`x`) AS `x` FROM `tabSurvey` "
+        sql = ("SELECT COUNT(*) AS `n` FROM ( SELECT TRIM(`c`.`x`) AS `x` FROM `tabSurvey` "
                "LEFT JOIN `tabEntry` c ON `tabSurvey`.`name` = c.`parent` "
                "WHERE `x` > 1 ) AS `w`")
         text = self.run_script({"a": sql})

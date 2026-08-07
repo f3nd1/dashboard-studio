@@ -25,10 +25,11 @@ SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "bulk_dry_run
 
 CLEAN = ("SELECT `academic_year`, COUNT(*) AS `n` FROM `tabStudent Applicant` "
          "GROUP BY `academic_year`")
-# Two row limits, different numbers. One blocker, not two — grouping on the
-# whole message would split it, which is the fault this script cannot have.
-LIMIT_TEN = CLEAN + " LIMIT 10"
-LIMIT_FIFTY = CLEAN + " LIMIT 50"
+# Two orderings by an expression, different expressions. One blocker, not two —
+# grouping on the whole message would split it, which is the fault this script
+# cannot have. (A row limit used to be this example; it converts now.)
+ORDER_COUNT = CLEAN + " ORDER BY COUNT(*) DESC"
+ORDER_SUM = CLEAN + " ORDER BY SUM(`fees`) DESC"
 # Two blockers at once: a CASE and a computed column. Blocked by each, sole
 # blocker for neither.
 TWO_FAULTS = ("SELECT CASE WHEN `status` = 'x' THEN 1 ELSE 0 END AS `flag`, "
@@ -155,7 +156,7 @@ class TestItReadsTheDirectoryItWasGiven(_Base):
 
     def test_the_environment_variable_is_read_under_bench_console(self):
         """The one mechanism that works in all three run modes."""
-        text = self.run_script({"a": CLEAN, "b": LIMIT_TEN},
+        text = self.run_script({"a": CLEAN, "b": ORDER_COUNT},
                                raw_argv=self.BENCH_ARGV, extra_dirs=("grc",),
                                env={"DASHBOARD_STUDIO_SQL_DIR": "<DIR>"})
         self.assertIn("2 report files under", text)
@@ -164,7 +165,7 @@ class TestItReadsTheDirectoryItWasGiven(_Base):
     def test_the_environment_variable_beats_a_stray_site_folder(self):
         """The exact live failure: both are present, and the site folder must
         lose. It holds one .sql file, so picking it would report "1"."""
-        text = self.run_script({"a": CLEAN, "b": LIMIT_TEN, "c": TWO_FAULTS},
+        text = self.run_script({"a": CLEAN, "b": ORDER_COUNT, "c": TWO_FAULTS},
                                raw_argv=self.BENCH_ARGV, extra_dirs=("grc",),
                                env={"DASHBOARD_STUDIO_SQL_DIR": "<DIR>"})
         self.assertIn("3 report files under", text)
@@ -194,30 +195,31 @@ class TestItReadsTheDirectoryItWasGiven(_Base):
 class TestGroupingByReason(_Base):
     """The whole value of the script: one blocker, one line, counted."""
 
-    def test_two_reports_with_different_limits_are_ONE_blocker(self):
-        """The messages differ — `LIMIT 10` and `LIMIT 50`. Grouping on the
-        message text would report two blockers of one report each, and the
-        answer to "what should we fix first" would be noise."""
-        text = self.run_script({"ten": LIMIT_TEN, "fifty": LIMIT_FIFTY})
-        rows = [line for line in text.splitlines() if "row limit (LIMIT)" in line]
-        self.assertEqual(len(rows), 1, f"the limit blocker was split:\n{text}")
-        self.assertRegex(rows[0], r"^\s+2\s+2\s+row limit \(LIMIT\)")
-        self.assertIn("e.g. fifty, ten", text)
+    def test_two_reports_with_different_expressions_are_ONE_blocker(self):
+        """The messages differ — they quote `COUNT(*)` and `SUM(\u0060fees\u0060)`.
+        Grouping on the message text would report two blockers of one report
+        each, and the answer to "what should we fix first" would be noise."""
+        text = self.run_script({"counted": ORDER_COUNT, "summed": ORDER_SUM})
+        rows = [line for line in text.splitlines()
+                if "ORDER BY an expression" in line]
+        self.assertEqual(len(rows), 1, f"the blocker was split:\n{text}")
+        self.assertRegex(rows[0], r"^\s+2\s+2\s+ORDER BY an expression")
+        self.assertIn("e.g. counted, summed", text)
 
     def test_a_report_with_two_blockers_is_sole_for_neither(self):
         """`sole` is the number this script is steered by: fix that blocker and
         that many reports convert. Counting a two-blocker report as sole for
         each would promise conversions that would not happen."""
-        text = self.run_script({"both": TWO_FAULTS, "ten": LIMIT_TEN})
+        text = self.run_script({"both": TWO_FAULTS, "ordered": ORDER_COUNT})
         case = [ln for ln in text.splitlines() if ln.strip().endswith("CASE expression")]
         computed = [ln for ln in text.splitlines() if "computed column" in ln]
-        limit = [ln for ln in text.splitlines() if "row limit (LIMIT)" in ln]
+        order = [ln for ln in text.splitlines() if "ORDER BY an expression" in ln]
         self.assertRegex(case[0], r"^\s+1\s+0\s+")
         self.assertRegex(computed[0], r"^\s+1\s+0\s+")
-        self.assertRegex(limit[0], r"^\s+1\s+1\s+")
+        self.assertRegex(order[0], r"^\s+1\s+1\s+")
 
     def test_the_examples_name_reports_not_reasons(self):
-        text = self.run_script({"enrolment_by_year": LIMIT_TEN})
+        text = self.run_script({"enrolment_by_year": ORDER_COUNT})
         self.assertIn("e.g. enrolment_by_year", text)
 
     def test_a_clean_run_says_so(self):
@@ -326,7 +328,7 @@ class TestNothingIsForcedIntoTheWrongBucket(_Base):
 class TestItCreatesNothing(_Base):
     def test_no_insights_record_is_written(self):
         frappe, store = self.with_frappe()
-        self.run_script({"a": CLEAN, "b": LIMIT_TEN, "c": LIKE}, frappe=frappe)
+        self.run_script({"a": CLEAN, "b": ORDER_COUNT, "c": LIKE}, frappe=frappe)
         self.assertEqual(store, {}, "the dry run wrote something")
 
     def test_the_source_never_reaches_for_a_write(self):

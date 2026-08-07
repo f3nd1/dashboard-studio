@@ -270,6 +270,53 @@ Both come from the same place: the stored Operations JSON of the query that was 
 
 Both halves have their mutation proof: carrying only the first column, type-checking only the first column, accepting TIMESTAMPDIFF, reversing the arguments, accepting any arity, dropping the date check, reading a literal as a column, and restoring the cascade each turn the suite red.
 
+## ADR-016 — Read Insights' own source instead of confirming one function per round
+
+**Decision.** The vocabulary and the operation shapes come from two files in the installed Insights app, read directly:
+
+- `insights/insights/doctype/insights_data_source_v3/ibis/functions.py` — every function the expression editor accepts, with signatures and bodies
+- `frontend/src2/types/query.types.ts` — every operation shape
+
+Both are public at the installed tag, `github.com/frappe/insights` at **v3.12.2**, so they can be read from here rather than requested from the site.
+
+**Why this is a decision and not just a lookup.** Until now every question about Insights' vocabulary cost a round trip: build one calculated column in the UI, run the probe, read one fact back. That produced `year`, then `date_diff`, and would have produced `month` next — one function per round, each with the same ceremony. The rule behind it was sound (**the vocabulary widens only to what has been observed**) and it stays sound; what changed is that reading the source IS an observation, and a better one than a stored record, because it carries the signature and the implementation rather than one example of the output.
+
+**Verify the file is the file.** Upstream at a tag is not automatically what is installed — a site can carry local patches. The check is cheap and was run: the `^def ` list from the fetched file was compared name-for-name against a `grep` of the installed copy. 85 names, same set, in the same order. Do that again before trusting either file at a new version.
+
+**What it settled at once**, none of which needed a round trip:
+
+- **`month`, `quarter`, `day` exist** and are `year`'s shape exactly — `def month(column: ir.DateValue): return column.month()`. MySQL returns the same numbers, so they carry across unchanged.
+- **`DAYOFWEEK` must refuse, and that is the finding that pays for the whole exercise.** Insights has a function called `day_of_week`, so the translation looks obviously available — but it returns ibis's `day_of_week.index()`, which counts **0 = Monday**, while MySQL's DAYOFWEEK counts **1 = Sunday**. Matching them by name would have shifted every row with nothing failing. A stored-expression probe would never have shown this; only the body does.
+- **`WEEK` must refuse too** — MySQL's takes a mode argument deciding which day starts a week, and `week_of_year` takes none.
+- **`date_diff` corroborates ADR-015 rather than contradicting it.** It is `column.delta(other, unit=unit)` — first argument minus second — which is what the live evidence (`date_diff(modified, creation, 'day')` returning positive values) already said. Two independent sources agreeing is the strongest state this project has had on a spelling. It also casts non-date arguments itself, so our Date/Datetime check is stricter than Insights requires, which is the safe direction and stays.
+- **There is no cast function.** 85 functions and not one casts, so `CAST(<expression> AS …)` has nothing to translate into — see ADR-017.
+- **`OrderBy` and `Limit` are real operations** — see ADR-018.
+- **Conditionals exist**: `case(condition, value, *args)`, `cases(*branches, else_=None)`, `if_else`, `one_if`. That retires the wall ADR-014 ran into. It does **not** retire ADR-014's decision, which rested on a hand-rolled pivot and seven other gaps, not on the conditional alone.
+
+**What it does not settle.** `ExpressionMeasure`, `FilterExpression`, `CustomOperation`, `SQL` and `Code` are all real operations that take free text. Being expressible is not being translatable: this converter's whole safety argument is that it emits shapes whose meaning it can state. `SQL = { type: 'sql'; raw_sql: string }` in particular would let any refusal be "solved" by passing the SQL through untranslated, which is the opposite of the product — a report nobody can click. Do not reach for it.
+
+## ADR-017 — Drop a value-preserving CAST around an expression; refuse the rest
+
+**Decision.** `CAST(<expression> AS double | decimal | float | real)` is replaced by `(<expression>)`. `CAST(… AS signed | integer | int | unsigned | char)` still refuses by name.
+
+**Why dropping is the only option, and why it is legitimate.** There is no cast function in the expression language (ADR-016) and the `cast` OPERATION takes a named column — `CastArgs = { column: Column; data_type: ColumnDataType }` — so an expression's result has nowhere to put one. Removing it is therefore the only translation available, and it needs its own proof rather than a shrug. To a **float** type it has one: what is inside is arithmetic over aggregates, which is numeric by the time it converts, and widening a number to a float leaves every value alone. That is exactly what Metabase writes `CAST(… AS double)` for — forcing float division. To an **integer** type there is no such proof: `CAST(5/2 AS signed)` is 2, a truncation, and dropping it would round every value silently. `char` stringifies.
+
+**The brackets are the part that could have gone wrong.** Metabase does not always write the cast outermost — report 1680 has `CAST( AVG(a) + AVG(b) AS double ) / 2.0`, wrapping one operand of a division. Replacing that with `AVG(a) + AVG(b) / 2.0` is a valid expression, converts without complaint, and is a different number. The rewrite keeps the brackets the CAST already had, so it is an identity in the arithmetic as well as in the type. `test_the_BRACKETS_the_cast_had_are_kept` pins it and dropping them turns the suite red.
+
+**Report 1680, the original flagship, now converts end to end** — `source -> join -> join -> filter -> mutate -> mutate -> summarize -> mutate`, ending in `(avg_of_Q1 + avg_of_Q5) / 2.0`. Every earlier refusal on it was correct at the time; this was the last one.
+
+## ADR-018 — Translate ORDER BY and LIMIT, together
+
+**Decision.** An ORDER BY becomes one `order_by` operation per item, after the summarize; a row limit becomes a `limit` operation, after those. Metabase's own `LIMIT 1048575` export cap is still dropped rather than translated.
+
+**Both were held back for the same reason and are released for the same reason.** `OrderBy = { type: 'order_by' } & { column: Column; direction: 'asc' | 'desc' }` and `Limit = { type: 'limit'; limit: number }` are in `query.types.ts`. Before that file was read, the ORDER BY was discarded in silence — recorded one day earlier as a deliberate trade — and the LIMIT refused by name.
+
+**They had to ship together.** The argument for dropping an ORDER BY safely was that a real LIMIT refused, so ordering could never decide *which* rows came back, only their order. Translating LIMIT alone would have destroyed that argument while leaving the ordering on the floor: a converted "top 10" would have been ten arbitrary rows. Shipping the ordering alone would have been harmless but half a feature. This is the shape of trade that only looks safe one clause at a time.
+
+**An ordering is checked against what the query PRODUCES.** After a summarize the result is exactly its dimensions and measures — the source columns are gone — so ordering by one of those is a query that fails the moment it is opened, the same fault as a join carrying a column it dropped. Where there is no summarize the check returns "unknowable" and does not run, because a guess there is worse than no guess and the schema check upstream has already vouched for the names.
+
+Refused: an ORDER BY of anything that is not a plain column (an expression is a different operation, and guessing at one silently reorders the rows a chart reads), and two different LIMITs in one statement (which one bounds the result depends on where each sits, and that is not read here).
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.
@@ -292,7 +339,9 @@ The shape is the ADR-012 one: a wrapper computing a per-row column, averaged or 
 
 Still unsupported, unchanged: a wrapper that filters, an outer WHERE alongside an inner one, the same DocType joined twice, computed columns in the SELECT list, and a row limit other than Metabase's own cap.
 
-**ORDER BY is dropped, and that is a decision rather than the oversight it looks like — recorded 2026-08-06.** It is used only as a clause boundary and never translated, so three of the four checked-in captures carry one that goes nowhere. It survived unrecorded and untested, which is exactly how the dropped LIMIT and the dropped computed column survived.
+**ORDER BY is dropped — recorded 2026-08-06, and SUPERSEDED the next day by ADR-018, which translates it.** The reasoning below was sound on the evidence it had and is kept because the shape of the mistake is worth recognising: the trade looked safe only because the clause next door refused. What actually settled it was reading Insights' own `query.types.ts`, which has had an `order_by` operation all along.
+
+**The original note, as written:** It is used only as a clause boundary and never translated, so three of the four checked-in captures carry one that goes nowhere. It survived unrecorded and untested, which is exactly how the dropped LIMIT and the dropped computed column survived.
 
 What makes it a different case from those two is the row limit next door. **An ORDER BY changes which rows come back only in company with a LIMIT, and a real LIMIT refuses** — so a surviving ORDER BY leaves both the rows and every value alone and only reorders them. Refusing it would block essentially every compiled Metabase report for a difference no number can show. One honest edge: Metabase's own `LIMIT 1048575` cap is allowed through, so a report returning more than 1,048,575 rows would have its ORDER BY decide which of them survive. Nothing here is near that.
 

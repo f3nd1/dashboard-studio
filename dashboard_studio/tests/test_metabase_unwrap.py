@@ -381,7 +381,8 @@ class TestTheRealReportEndToEnd(unittest.TestCase):
         result = operations_from_sql(analyze_sql(QPO.read_text()), numeric)
         self.assertTrue(result["supported"], result["reasons"])
         self.assertEqual([op["type"] for op in result["operations"]],
-                         ["source", "join", "join", "filter", "summarize"])
+                         ["source", "join", "join", "filter", "summarize",
+                          "order_by", "order_by"])
 
     def test_a_join_carries_only_the_columns_the_report_reads(self):
         numeric = dict(self.COLUMNS)
@@ -402,7 +403,8 @@ class TestTheRealReportEndToEnd(unittest.TestCase):
         the column. This is the whole real report, not an approximation of it."""
         operations = self.operations()
         self.assertEqual([op["type"] for op in operations],
-                         ["source", "join", "join", "filter", "cast", "summarize"])
+                         ["source", "join", "join", "filter", "cast", "summarize",
+                          "order_by", "order_by"])
         self.assertEqual(operations[4], {
             "type": "cast",
             "column": {"type": "column", "column_name": "actual_value"},
@@ -585,36 +587,43 @@ class TestClauseBoundaries(unittest.TestCase):
 
 
 class TestRowLimits(unittest.TestCase):
-    """A row limit was previously read and then silently ignored, so "top 10"
-    converted into "all of them" — a different number, with no error."""
+    """A row limit was read and then silently ignored, so "top 10" converted
+    into "all of them" — a different number, with no error. It then refused by
+    name for want of anywhere to put it, and now it is translated: `Limit =
+    { type: 'limit'; limit: number }`, from `query.types.ts` at v3.12.2."""
 
-    def test_a_real_limit_refuses_by_name(self):
+    def test_a_real_limit_is_carried_across(self):
         result = analyze_sql("SELECT `status`, COUNT(*) FROM `tabStudent Applicant` "
                              "GROUP BY `status` LIMIT 10")
+        self.assertTrue(result["supported"], result["reasons"])
+        self.assertEqual(result["limit"], 10)
+
+    def test_two_different_limits_in_one_statement_refuse(self):
+        """Which one bounds the result depends on where each sits, and that is
+        not read here — so it is not guessed at either."""
+        result = analyze_sql("SELECT `status`, COUNT(*) FROM `tabStudent Applicant` "
+                             "GROUP BY `status` LIMIT 10 LIMIT 20")
         self.assertFalse(result["supported"])
-        self.assertIn("LIMIT 10", " | ".join(result["reasons"]))
+        self.assertIn("different LIMITs", " | ".join(result["reasons"]))
 
     def test_metabases_export_cap_is_not_a_row_limit(self):
         result = analyze_sql("SELECT COUNT(*) FROM `tabStudent Applicant` LIMIT 1048575")
         self.assertTrue(result["supported"], result["reasons"])
 
 
-class TestOrderByIsDroppedOnPurpose(unittest.TestCase):
-    """An ORDER BY is used only as a clause boundary and never translated.
+class TestOrderByAndLimitAreTranslated(unittest.TestCase):
+    """Both were dropped or refused for want of somewhere to put them.
 
-    That is a DECISION rather than the oversight it looks like, and the proof it
-    rests on is the row limit next door. ORDER BY changes which rows come back
-    only in company with a LIMIT, and a real LIMIT refuses — so a surviving
-    ORDER BY leaves both the rows and every value alone, and reorders them.
-    Three of the four checked-in captures carry one; refusing it would block
-    them all for a difference no number can show.
+    `query.types.ts` at v3.12.2 has both: `OrderBy = { type: 'order_by' } &
+    { column: Column; direction: 'asc' | 'desc' }` and `Limit = { type:
+    'limit'; limit: number }`. The ORDER BY had been discarded in silence,
+    which cost a chart its reading order, and the LIMIT refused, which blocked
+    every "top N" report.
 
-    The one honest edge: Metabase's own `LIMIT 1048575` cap is allowed through,
-    so a report returning more than 1,048,575 rows would have its ORDER BY
-    decide which of them survive. No report here is near that.
-
-    It is pinned here so that widening it — should Insights turn out to store an
-    order operation — is a change somebody makes on purpose.
+    They go together: the argument for dropping the ORDER BY safely was that a
+    real LIMIT refused, so ordering could not decide which rows came back. The
+    moment LIMIT is translated that argument is gone — which is why translating
+    one without the other would have been the wrong half to ship.
     """
 
     SQL = ("SELECT `w`.`Year` AS `Year`, COUNT(*) AS `n` FROM ( "
@@ -628,20 +637,69 @@ class TestOrderByIsDroppedOnPurpose(unittest.TestCase):
         self.assertTrue(result["supported"], " | ".join(result["reasons"]))
         return result["operations"]
 
-    def test_an_order_by_changes_nothing_in_the_operations(self):
-        self.assertEqual(self.operations(self.SQL + " ORDER BY `w`.`Year` DESC"),
-                         self.operations(self.SQL))
+    def test_an_order_by_becomes_an_order_by_operation(self):
+        operations = self.operations(self.SQL + " ORDER BY `w`.`Year` DESC")
+        # `custom_proposed_date`, not `Year`: the wrapper renamed the column and
+        # `lift_renaming_wrapper` folds that rename away, rewriting the ORDER BY
+        # along with the GROUP BY. Ordering has to name the column that survives.
+        self.assertEqual(operations[-1], {
+            "type": "order_by",
+            "column": {"type": "column", "column_name": "custom_proposed_date"},
+            "direction": "desc"})
 
-    def test_the_real_captures_carry_one_and_still_convert(self):
+    def test_no_direction_written_means_ascending(self):
+        """SQL's default, and Insights has no third state to carry "unstated"
+        into — `direction` is 'asc' | 'desc'."""
+        operations = self.operations(self.SQL + " ORDER BY `w`.`Year`")
+        self.assertEqual(operations[-1]["direction"], "asc")
+
+    def test_several_ordering_columns_keep_their_order(self):
+        operations = self.operations(
+            self.SQL + " ORDER BY `w`.`Year` DESC, `count` ASC")
+        self.assertEqual([(op["column"]["column_name"], op["direction"])
+                          for op in operations if op["type"] == "order_by"],
+                         [("custom_proposed_date", "desc"), ("count", "asc")])
+
+    def test_the_ordering_comes_after_the_summarize_that_defines_the_column(self):
+        operations = self.operations(self.SQL + " ORDER BY `w`.`Year` DESC")
+        kinds = [op["type"] for op in operations]
+        self.assertLess(kinds.index("summarize"), kinds.index("order_by"))
+
+    def test_ordering_by_a_column_the_query_does_not_PRODUCE_refuses(self):
+        """After a summarize the result is its dimensions and measures and
+        nothing else. Ordering by a source column that is gone by then is a
+        query that fails the moment somebody opens it — the same fault as a
+        join carrying a column it dropped."""
+        result = operations_from_sql(
+            analyze_sql(self.SQL + " ORDER BY `w`.`name` ASC"), self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+        self.assertIn("ORDER BY 'name'", " | ".join(result["reasons"]))
+
+    def test_ordering_by_an_expression_refuses(self):
+        result = analyze_sql(self.SQL + " ORDER BY COUNT(*) DESC")
+        self.assertFalse(result["supported"])
+        self.assertIn("not a plain column", " | ".join(result["reasons"]))
+
+    def test_a_row_limit_becomes_a_limit_operation(self):
+        operations = self.operations(self.SQL + " LIMIT 10")
+        self.assertEqual(operations[-1], {"type": "limit", "limit": 10})
+
+    def test_the_limit_comes_after_the_ordering_that_decides_which_rows(self):
+        """Order then cut. The other way round is a different ten rows."""
+        kinds = [op["type"] for op
+                 in self.operations(self.SQL + " ORDER BY `w`.`Year` DESC LIMIT 10")]
+        self.assertLess(kinds.index("order_by"), kinds.index("limit"))
+
+    def test_metabases_own_export_cap_is_still_not_translated(self):
+        """Nobody asked for it and it is not part of the question. Putting it on
+        every converted query would be noise that reads as a decision."""
+        operations = self.operations(self.SQL + " LIMIT 1048575")
+        self.assertNotIn("limit", [op["type"] for op in operations])
+
+    def test_the_real_captures_carry_an_ordering_and_still_convert(self):
         self.assertIn("ORDER BY", YEAR_LABEL.read_text().upper())
         self.assertTrue(analyze_sql(YEAR_LABEL.read_text())["supported"])
-
-    def test_ordering_a_LIMITED_query_still_refuses_for_the_limit(self):
-        """The proof this rests on. Order plus a cut-off is a different set of
-        rows, and that is refused — by the LIMIT, before the ordering matters."""
-        result = analyze_sql(self.SQL + " ORDER BY `w`.`Year` DESC LIMIT 10")
-        self.assertFalse(result["supported"])
-        self.assertIn("LIMIT 10", " | ".join(result["reasons"]))
 
 
 class TestComputedSelectColumns(unittest.TestCase):
@@ -829,6 +887,8 @@ class TestTheReselectedReportEndToEnd(unittest.TestCase):
                            "data_type": "Decimal", "aggregation": "avg"}],
              "dimensions": [{"dimension_name": "year", "column_name": "year",
                              "data_type": "String"}]},
+            {"type": "order_by", "column": {"type": "column", "column_name": "year"},
+             "direction": "asc"},
         ])
 
     def test_the_wrappers_alias_reaches_nothing(self):
@@ -881,6 +941,8 @@ class TestAComputedWrapperBecomesOperations(unittest.TestCase):
                            "data_type": "Decimal", "aggregation": "avg"}],
              "dimensions": [{"dimension_name": "Year", "column_name": "Year",
                              "data_type": "Integer"}]},
+            {"type": "order_by", "column": {"type": "column", "column_name": "Year"},
+             "direction": "asc"},
         ])
 
     def test_the_computed_column_exists_before_the_step_that_groups_by_it(self):
@@ -902,13 +964,39 @@ class TestAComputedWrapperBecomesOperations(unittest.TestCase):
         text = repr(self.operations())
         self.assertNotIn("__mb_source", text)
 
-    def test_a_function_nobody_has_seen_stored_refuses_by_name(self):
-        """`year` is in the allowlist because a stored Insights expression uses
-        it. `month` is not, however reasonable it looks — the vocabulary widens
-        only to what has been observed."""
-        result = analyze_sql(YEAR_LABEL.read_text().replace("YEAR(", "MONTH("))
+    def test_a_date_part_Insights_does_not_have_refuses_by_name(self):
+        """`year`, `month`, `quarter` and `day` are in the allowlist because
+        `functions.py` at v3.12.2 defines each as the same one-argument
+        extractor MySQL has. WEEK is not: MySQL's takes a mode argument that
+        decides which day starts a week, and `week_of_year` takes none."""
+        result = analyze_sql(YEAR_LABEL.read_text().replace("YEAR(", "WEEK("))
         self.assertFalse(result["supported"])
-        self.assertIn("MONTH", " | ".join(result["reasons"]))
+        self.assertIn("WEEK", " | ".join(result["reasons"]))
+
+    def test_MONTH_QUARTER_and_DAY_all_translate(self):
+        for sql_name, insights_name in [("MONTH", "month"), ("QUARTER", "quarter"),
+                                        ("DAY", "day"), ("DAYOFMONTH", "day")]:
+            with self.subTest(sql_name):
+                result = operations_from_sql(
+                    analyze_sql(YEAR_LABEL.read_text().replace("YEAR(", sql_name + "(")),
+                    self.COLUMNS)
+                self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+                mutate = [op for op in result["operations"]
+                          if op["type"] == "mutate"][0]
+                self.assertEqual(mutate["expression"]["expression"],
+                                 f"{insights_name}(custom_proposed_date)")
+
+    def test_DAYOFWEEK_refuses_because_Insights_NUMBERS_IT_DIFFERENTLY(self):
+        """The one that would have been wrong quietly. Insights has a function
+        called `day_of_week`, so the obvious translation looks available — but
+        it returns ibis's `day_of_week.index()`, which counts 0 = Monday, and
+        MySQL's DAYOFWEEK counts 1 = Sunday. Every row off by a day and a half,
+        nothing failing."""
+        result = analyze_sql(YEAR_LABEL.read_text().replace("YEAR(", "DAYOFWEEK("))
+        self.assertFalse(result["supported"])
+        reasons = " | ".join(result["reasons"])
+        self.assertIn("DAYOFWEEK", reasons)
+        self.assertIn("0 = Monday", reasons)
 
     def test_a_CONCAT_that_actually_concatenates_refuses(self):
         """`CONCAT('', x)` is Metabase making a value into text and is dropped.
@@ -1006,16 +1094,24 @@ class TestAScaleFactorWrapper(unittest.TestCase):
         self.assertFalse(result["supported"])
         self.assertIn("rating_2", " | ".join(result["reasons"]))
 
-    def test_the_real_capture_still_names_its_REMAINING_blocker(self):
-        """Report 1680, the original flagship. Its `* 5` wrapper lifts now, so
-        the refusal has moved on to the outer `CAST(<expression> AS double)` —
-        which ADR-011 refuses for an unchanged reason: `cast` converts a
-        column, and that converts a result which is never one."""
-        result = analyze_sql(SCALE_FACTOR.read_text())
-        self.assertFalse(result["supported"])
-        reasons = " | ".join(result["reasons"])
-        self.assertIn("CAST", reasons)
-        self.assertNotIn("subquery", reasons)
+    def test_the_real_capture_converts_in_full_at_last(self):
+        """Report 1680, the original flagship, end to end. Its `* 5` wrapper
+        lifted from ADR-013; the last blocker was the outer
+        `CAST( AVG(a) + AVG(b) AS double ) / 2.0`, which is dropped now that
+        `functions.py` shows there is no cast to translate it into and that
+        widening a number to a float changes nothing."""
+        columns = {"Survey Tracking": {"name": "String", "survey_name": "String"},
+                   "Survey Tracking List of Surveys Childtable": {
+                       "name": "String", "parent": "String", "survey_entry": "String"},
+                   "Staff Onboarding Survey": {"name": "String", "qn_1": "Integer",
+                                               "qn_5": "Integer"}}
+        result = operations_from_sql(analyze_sql(SCALE_FACTOR.read_text()), columns)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "join", "join", "filter", "mutate", "mutate",
+                          "summarize", "mutate"])
+        self.assertEqual(result["operations"][-1]["expression"]["expression"],
+                         "(avg_of_Q1 + avg_of_Q5) / 2.0")
 
 
 class TestADateDifferenceWrapper(unittest.TestCase):

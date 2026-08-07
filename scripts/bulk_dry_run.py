@@ -69,7 +69,11 @@ def _dry_run():
     # this script exists to answer.
     groups = [
         ("subquery / nested SELECT", "subquery a wrapper rule could not flatten"),
-        ("does not translate a row limit", "row limit (LIMIT)"),
+        ("different LIMITs in one statement", "two row limits in one statement"),
+        # BEFORE the GROUP BY entry below, whose "which is not a plain column"
+        # this message also contains.
+        ("Insights orders by a named column", "ORDER BY an expression"),
+        ("is not a column this query produces", "ORDER BY a column the result drops"),
         ("CASE expression", "CASE expression"),
         ("window function (OVER)", "window function (OVER)"),
         ("HAVING clause", "HAVING clause"),

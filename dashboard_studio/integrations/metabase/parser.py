@@ -487,6 +487,19 @@ _CALL = re.compile(r"^(?P<name>[A-Za-z_]\w*)\s*\((?P<args>.*)\)$",
 # Integer dimension — so the wrapper is dropped and the value keeps its own
 # type. The values are the same years either way.
 _EMPTY_STRING = re.compile(r"^(?:''|\"\")$")
+# MySQL date-part function -> Insights expression function. Read from
+# `functions.py` at v3.12.2, where each is the same one-argument shape as
+# `year`: `def month(column: ir.DateValue): return column.month()`. MySQL's
+# MONTH/QUARTER/DAY return the same numbers, so these carry across unchanged.
+#
+# WEEK is deliberately absent: MySQL's takes a mode argument that decides which
+# day starts a week, and `week_of_year` takes none.
+_DATE_PARTS = {"YEAR": "year", "MONTH": "month", "QUARTER": "quarter",
+               "DAY": "day", "DAYOFMONTH": "day"}
+
+# Functions Insights has under a familiar name that count differently.
+_RENUMBERED_DATE_PARTS = ("DAYOFWEEK", "WEEKDAY")
+
 _CAST_TYPES = {"double": "Decimal", "decimal": "Decimal", "float": "Decimal",
                "real": "Decimal", "signed": "Integer", "integer": "Integer",
                "int": "Integer", "unsigned": "Integer", "char": "String"}
@@ -553,15 +566,23 @@ def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
         if len(parts) == 2 and _EMPTY_STRING.match(parts[0].strip()):
             return _computed_column(parts[1], alias, aliases, reasons)
         return None, "CONCAT"
-    if name == "YEAR":
+    if name in _DATE_PARTS:
         qualifier, column = _split_ref(args)
         if not column:
-            return None, "YEAR of something that is not a column"
+            return None, f"{name} of something that is not a column"
         return {"alias": alias, "kind": "mutate",
                 "columns": [column],
                 "tables": [_resolve(qualifier, aliases, reasons)],
-                "expression": f"year({column})", "data_type": "Integer",
-                "requires": None}, ""
+                "expression": f"{_DATE_PARTS[name]}({column})",
+                "data_type": "Integer", "requires": None}, ""
+    if name in _RENUMBERED_DATE_PARTS:
+        # Refused for a reason worth spelling out, because Insights HAS a
+        # function of this name and using it would be wrong. `day_of_week`
+        # returns ibis's `day_of_week.index()`, which counts 0 = Monday;
+        # MySQL's DAYOFWEEK counts 1 = Sunday. Same idea, different numbers,
+        # and every row would be off by a day and a half with nothing failing.
+        return None, (f"{name} — Insights numbers the days differently "
+                      "(0 = Monday, against MySQL's 1 = Sunday)")
     if name == "DATEDIFF":
         # MySQL: `DATEDIFF(a, b)` is a - b, in whole days. Insights spells the
         # same thing `date_diff(a, b, 'day')` — read from two stored
@@ -759,8 +780,64 @@ _SLOT_ANY = re.compile(r"@@\d+@@")
 _ARITHMETIC_ONLY = re.compile(r"^[\s0-9.+\-*/()]*$")
 
 
+# `CAST(<expression> AS <type>)` around an expression over aggregates. There is
+# no cast FUNCTION in Insights' expression language — `functions.py` at v3.12.2
+# defines 85 of them and none casts — and the `cast` OPERATION converts a named
+# column, so there is nowhere to put this one. It is removable instead, but only
+# where removing it is an identity.
+#
+# To a FLOAT type it is: the thing inside is arithmetic over aggregates, which
+# is numeric by the time it converts, and widening a number to a float leaves it
+# alone. That is the whole of Metabase's `CAST(… AS double)`, which it writes to
+# force float division.
+#
+# To an INTEGER type it is not — `CAST(5/2 AS signed)` is 2 — and to `char` it
+# is not either. Those still refuse.
+_VALUE_PRESERVING_CAST = ("double", "decimal", "float", "real")
+_CAST_TAIL = re.compile(r"\s+AS\s+(?P<type>\w+)\s*$", re.IGNORECASE)
+
+
+def _strip_value_preserving_cast(text: str) -> str:
+    """Replace every `CAST(x AS double)` with `(x)`. Anything else is untouched.
+
+    Metabase does NOT always write the cast outermost — report 1680 has
+    ``CAST( AVG(a) + AVG(b) AS double ) / 2.0``, where it wraps one operand of a
+    division. So this rewrites in place rather than peeling a wrapper off.
+
+    **The parentheses are the whole point.** Dropping them turns that into
+    ``AVG(a) + AVG(b) / 2.0``, which is a perfectly valid expression, converts
+    without complaint, and is a different number. Keeping the brackets the CAST
+    already had makes the rewrite an identity in the arithmetic as well as in
+    the type.
+    """
+    out, index = [], 0
+    while True:
+        found = re.compile(r"\bCAST\s*\(", re.IGNORECASE).search(text, index)
+        if not found:
+            out.append(text[index:])
+            return "".join(out)
+        depth, cursor = 1, found.end()
+        while cursor < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[cursor], 0)
+            cursor += 1
+        if depth:
+            # Unbalanced: not something to rewrite blind.
+            out.append(text[index:])
+            return "".join(out)
+        inner = text[found.end():cursor - 1]
+        tail = _CAST_TAIL.search(inner)
+        if not tail or tail.group("type").lower() not in _VALUE_PRESERVING_CAST:
+            out.append(text[index:cursor])
+            index = cursor
+            continue
+        out.append(text[index:found.start()])
+        out.append("(" + _strip_value_preserving_cast(inner[:tail.start()]).strip() + ")")
+        index = cursor
+
+
 def _expression_from_item(text: str, aliases: dict, reasons: list):
     """``(expression, offending_tokens)`` — exactly one of them is truthy."""
+    text = _strip_value_preserving_cast(text)
     template, aggregates = text, []
     for index, match in enumerate(list(_AGG_PATTERN.finditer(text))):
         aggregates.append(_aggregation_from(match.group(1), match.group(2),
@@ -1092,12 +1169,26 @@ def analyze_sql(sql: str) -> dict:
     # item may be an expression over aggregates, and reading its aggregates
     # needs to know which table each column belongs to.
 
-    for value in _LIMIT.findall(statement):
-        if int(value) != METABASE_ROW_CAP:
-            reasons.append(
-                f"LIMIT {value} — this converter does not translate a row limit, and "
-                "dropping it would count every row instead of that many"
-            )
+    # A row limit IS an operation: `Limit = { type: 'limit'; limit: number }`,
+    # read from `query.types.ts` at v3.12.2. It used to refuse because dropping
+    # it would have counted every row instead of that many — that was the right
+    # answer while there was nowhere to put it, and it is not any more.
+    #
+    # Metabase's own export cap is still dropped rather than translated: nobody
+    # asked for it, it is not part of the question, and putting it on every
+    # converted query would be noise that looks like a decision.
+    limits = [int(value) for value in _LIMIT.findall(statement)
+              if int(value) != METABASE_ROW_CAP]
+    if len(set(limits)) > 1:
+        reasons.append(
+            f"{len(set(limits))} different LIMITs in one statement "
+            f"({', '.join(str(v) for v in sorted(set(limits)))}) — which one bounds "
+            "the result depends on where each one sits, and that is not read here"
+        )
+    limit = limits[0] if limits else None
+
+    order_by, order_problems = _parse_order_by(statement)
+    reasons.extend(order_problems)
 
     join_count = len(_JOIN_PATTERN.findall(statement))
 
@@ -1181,7 +1272,52 @@ def analyze_sql(sql: str) -> dict:
         "filters": filters,
         "group_by": group_by,
         "joins": joins,
+        "order_by": order_by,
+        "limit": limit,
     }
+
+
+_ORDER_ITEM = re.compile(r"^(?P<ref>.+?)(?:\s+(?P<direction>ASC|DESC))?$",
+                         re.IGNORECASE | re.DOTALL)
+
+
+def _parse_order_by(statement: str):
+    """``([{column, direction}], problems)`` for the ORDER BY, if there is one.
+
+    `OrderBy = { type: 'order_by' } & OrderByArgs` and `OrderByArgs =
+    { column: Column; direction: 'asc' | 'desc' }` — read from `query.types.ts`
+    at v3.12.2. Until that was read, an ORDER BY was discarded in silence, which
+    cost a chart its reading order.
+
+    The QUALIFIER is deliberately ignored. By this point a wrapper has been
+    flattened or lifted, so an item may still be written `__mb_source`.`x`, and
+    what has to exist is the output column `x` — which the translator checks
+    against the names the summarize defines, where the ordering actually
+    applies. Anything that is not a plain column refuses: ordering by an
+    expression is a different operation, and guessing at one silently reorders
+    the rows a chart reads.
+    """
+    match = re.search(r"\bORDER\s+BY\b(.+?)(?=\bLIMIT\b|$)", statement,
+                      re.IGNORECASE | re.DOTALL)
+    if not match:
+        return [], []
+    order_by, problems = [], []
+    for item in _split_items(match.group(1)):
+        text = " ".join(item.split())
+        if not text:
+            continue
+        parsed = _ORDER_ITEM.match(text)
+        direction = (parsed.group("direction") or "asc").lower()
+        _, column = _split_ref(parsed.group("ref").strip())
+        if not column:
+            problems.append(
+                f"ORDER BY '{parsed.group('ref').strip()}', which is not a plain "
+                "column — Insights orders by a named column, and translating an "
+                "expression as one would reorder the rows a chart reads"
+            )
+            continue
+        order_by.append({"column": column, "direction": direction})
+    return order_by, problems
 
 
 def _aliases(from_match, source_doctype, join_matches) -> dict:

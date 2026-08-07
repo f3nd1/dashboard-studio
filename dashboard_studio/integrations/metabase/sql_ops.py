@@ -160,6 +160,22 @@ def _summarize(measures, dimensions):
     return {"type": "summarize", "measures": measures, "dimensions": dimensions}
 
 
+def _order_by(column, direction):
+    """``OrderBy = { type: 'order_by' } & { column: Column; direction }``.
+
+    Read from `query.types.ts` at v3.12.2. Before that file was read an ORDER BY
+    was dropped in silence — defensible only while there was nowhere to put it.
+    """
+    return {"type": "order_by",
+            "column": {"type": "column", "column_name": column},
+            "direction": direction}
+
+
+def _limit(limit):
+    """``Limit = { type: 'limit'; limit: number }`` — two keys, no wrapper."""
+    return {"type": "limit", "limit": limit}
+
+
 # Frappe fieldtype -> Insights data_type. Anything unlisted becomes String,
 # which degrades safely: a String dimension is normal, and a String measure is
 # refused by name below rather than charted.
@@ -531,9 +547,45 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     elif group_by and not (aggregations or expressions):
         reasons.append("this query groups without aggregating, which has no chart to draw")
 
+    # An ORDER BY applies to the result, so it goes last — and its column has to
+    # be one the result HAS. After a summarize that is the dimensions and the
+    # measures and nothing else: the source columns are gone by then, so
+    # ordering by one is a query that fails the moment it is opened. Ordering by
+    # a column the query does not produce is the same fault a join carrying a
+    # dropped column was.
+    produced = _produced_columns(operations)
+    for rule in analysis.get("order_by") or []:
+        column = str(rule["column"]).strip()
+        if produced is not None and column not in produced:
+            reasons.append(
+                f"ORDER BY '{column}', which is not a column this query produces — "
+                f"it returns {', '.join(sorted(produced)) or 'nothing'}"
+            )
+            continue
+        operations.append(_order_by(column, rule["direction"]))
+    if analysis.get("limit") is not None:
+        operations.append(_limit(int(analysis["limit"])))
+
     if reasons:
         return {"supported": False, "operations": [], "reasons": reasons}
     return {"supported": True, "operations": operations, "reasons": []}
+
+
+def _produced_columns(operations):
+    """The column names the result carries, or None when that is not knowable.
+
+    Only a `summarize` narrows it to something this can state: after one, the
+    result is exactly its dimensions and measures. Without one the operations
+    carry the source table's columns forward and this returns None, meaning "do
+    not check" — a guess in either direction is worse than no check, and the
+    schema check upstream has already vouched for those names.
+    """
+    for operation in operations:
+        if operation["type"] == "summarize":
+            return ({d["dimension_name"] for d in operation["dimensions"]}
+                    | {m["measure_name"] for m in operation["measures"]}
+                    | {o["new_name"] for o in operations if o["type"] == "mutate"})
+    return None
 
 
 def _add_measure(measures, measure):

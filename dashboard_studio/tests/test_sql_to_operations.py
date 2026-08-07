@@ -648,15 +648,46 @@ class TestWhatAnExpressionRefuses(unittest.TestCase):
     COLUMNS = TestArithmeticOverAggregates.COLUMNS
     refusal = TestArithmeticOverAggregates.refusal
 
-    def test_CAST_refuses_and_says_why_the_cast_operation_is_not_the_answer(self):
-        """The obvious next thought is "there is already a cast operation".
-        There is, and it converts a COLUMN — there is no operation that casts
-        the result of an expression."""
-        reasons = self.refusal(self.SQL.replace(
-            "( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) ) / 2",
-            "CAST( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) AS double ) / 2.0"))
+    def with_expression(self, expression):
+        return self.SQL.replace("( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) ) / 2", expression)
+
+    def test_a_CAST_to_a_FLOAT_type_is_dropped_because_it_changes_nothing(self):
+        """There is no cast function in Insights' expression language — 85 are
+        defined in `functions.py` at v3.12.2 and none casts — and the `cast`
+        OPERATION converts a named column, so an expression's result has
+        nowhere to put one. Widening an already-numeric result to a float
+        leaves every value alone, so the cast is removable instead."""
+        result = run(self.with_expression(
+            "CAST( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) AS double ) / 2.0"),
+            columns=self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        mutate = [op for op in result["operations"] if op["type"] == "mutate"][0]
+        self.assertEqual(mutate["expression"]["expression"],
+                         "(avg_of_qn_1 + avg_of_qn_5) / 2.0")
+
+    def test_the_BRACKETS_the_cast_had_are_kept(self):
+        """The one way this rewrite could return a different number. Dropping
+        `CAST(a + b AS double) / 2` to `a + b / 2` is valid, converts without
+        complaint, and is not the same arithmetic."""
+        result = run(self.with_expression(
+            "CAST( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) AS double ) / 2.0"),
+            columns=self.COLUMNS)
+        expression = [op for op in result["operations"]
+                      if op["type"] == "mutate"][0]["expression"]["expression"]
+        self.assertTrue(expression.startswith("("), expression)
+        self.assertNotEqual(expression, "avg_of_qn_1 + avg_of_qn_5 / 2.0")
+
+    def test_a_CAST_to_an_INTEGER_type_still_refuses(self):
+        """`CAST(5/2 AS signed)` is 2. That is not a widening, it is a
+        truncation, and dropping it would round every value silently."""
+        reasons = self.refusal(self.with_expression(
+            "CAST( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) AS signed ) / 2.0"))
         self.assertIn("CAST", reasons)
-        self.assertIn("converts a column, not the result of an expression", reasons)
+
+    def test_a_CAST_to_char_still_refuses(self):
+        reasons = self.refusal(self.with_expression(
+            "CAST( AVG(`c`.`qn_1`) + AVG(`c`.`qn_5`) AS char ) / 2.0"))
+        self.assertIn("CAST", reasons)
 
     def test_a_date_part_refuses_by_name(self):
         self.assertIn("YEAR", self.refusal(self.SQL.replace(
