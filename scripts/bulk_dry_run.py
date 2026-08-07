@@ -1,6 +1,7 @@
 """Run every exported report's SQL through the converter and group the refusals.
 
     python scripts/bulk_dry_run.py path/to/exported_sql/
+    python scripts/bulk_dry_run.py path/to/exported_sql/ --sole
 
 Under ``bench console`` there is no argv to pass, so set an environment
 variable — do NOT set a `directory` variable before exec(), which cannot work
@@ -8,7 +9,14 @@ because the function declares its own and shadows it:
 
     import os
     os.environ['DASHBOARD_STUDIO_SQL_DIR'] = '/full/path/to/exported_sql'
+    os.environ['DASHBOARD_STUDIO_SOLE'] = '1'      # optional, see below
     exec(open('apps/dashboard_studio/scripts/bulk_dry_run.py').read())
+
+``--sole`` (or ``DASHBOARD_STUDIO_SOLE=1``) additionally lists every report
+FILE each blocker is the sole blocker for. The "e.g." names in the main table
+are drawn from every report a blocker stops, and most of those have several
+blockers — so they are the wrong files to go and capture. The sole list is the
+right one: fix that blocker and exactly those files convert.
 
 argv is read ONLY when this file is run as a script. `bench --site grc console`
 puts "grc" in sys.argv, and under the sites directory that IS a folder, so
@@ -104,6 +112,18 @@ def _dry_run():
         ("does not name one column from", "join condition sides cannot be told apart"),
         ("which this converter does not know", "join attaches to a table not yet in scope"),
         ("is not a table or alias", "qualifier names no table or alias"),
+        # BEFORE the generic "could not be read" below. A WHERE the parser
+        # cannot read is usually ordinary unsupported SQL rather than a parser
+        # bug, and lumping them together made that group look like one thing
+        # worth chasing. Each names what it actually found.
+        ("WHERE condition using a CASE expression", "WHERE contains a CASE"),
+        ("WHERE condition using a subquery", "WHERE contains a subquery"),
+        ("WHERE condition using EXISTS", "WHERE uses EXISTS"),
+        ("WHERE condition using IS NULL", "WHERE uses IS NULL"),
+        ("WHERE condition using BETWEEN", "WHERE uses BETWEEN"),
+        ("WHERE condition using REGEXP", "WHERE uses REGEXP"),
+        ("WHERE condition using NOT", "WHERE uses NOT"),
+        ("WHERE condition using a function call", "WHERE calls a function"),
         ("unparsed WHERE condition", "WHERE condition could not be read"),
         ("is not one this converter translates", "filter operator (LIKE, IN, …)"),
         ("is not translated", "aggregation this converter does not translate"),
@@ -139,6 +159,14 @@ def _dry_run():
     # Where the .sql files are. Resolved in ONE place and PRINTED, because
     # getting it wrong silently reads a different folder and reports a real
     # number for it. Three sources, most deliberate first.
+    # Dump every FILENAME a blocker is the sole blocker for, not just two
+    # examples. The example names are drawn from all the reports a blocker
+    # stops, most of which have other blockers too — so they are the wrong
+    # thing to go and capture. This lists the ones where fixing that blocker
+    # actually converts the report.
+    sole_only = ("--sole" in sys.argv
+                 and os.path.basename(sys.argv[0] or "") == script_name)
+    sole_only = sole_only or os.environ.get("DASHBOARD_STUDIO_SOLE") not in (None, "", "0")
     chosen_from = ""
     if directory:
         chosen_from = "the `directory` variable inside this function"
@@ -146,8 +174,10 @@ def _dry_run():
         directory = os.environ["DASHBOARD_STUDIO_SQL_DIR"]
         chosen_from = "$DASHBOARD_STUDIO_SQL_DIR"
     elif os.path.basename(sys.argv[0] or "") == script_name and len(sys.argv) > 1:
-        directory = sys.argv[1]
-        chosen_from = "the command line"
+        arguments = [a for a in sys.argv[1:] if not a.startswith("--")]
+        if arguments:
+            directory = arguments[0]
+            chosen_from = "the command line"
     # argv is read ONLY when this file was run AS a script. Under `bench
     # console` sys.argv belongs to bench — `bench --site grc console` — and
     # scanning it for anything that happens to be a directory found the site
@@ -250,6 +280,32 @@ def _dry_run():
     print("   fix it and that many convert. A blocker with a high count and a low")
     print("   sole count unblocks nothing by itself. A report with three blockers")
     print("   is counted once in each group, so the counts do not sum to the total.")
+    if sole_only and blocked:
+        print()
+        print("=" * 78)
+        print("Sole-blocker report files — the ones worth capturing")
+        print("=" * 78)
+        print("   Every file where this blocker is the ONLY thing stopping it, so")
+        print("   fixing it converts that file. These are the names to pull, not the")
+        print("   'e.g.' ones above — those are drawn from every report a blocker")
+        print("   stops, and most of those have other blockers too.")
+        for label in sorted(blocked, key=lambda name: (-len(set(blocked[name])), name)):
+            sole = sorted(r for r in set(blocked[label])
+                          if per_report.get(r) == {label})
+            if not sole:
+                continue
+            print()
+            print(f"   {label}  ({len(sole)})")
+            for name in sole:
+                print(f"      {name}")
+        if not any(per_report.get(r) == {label}
+                   for label in blocked for r in set(blocked[label])):
+            print()
+            print("   none — every blocked report has more than one blocker")
+    elif blocked:
+        print()
+        print("   Re-run with --sole (or set DASHBOARD_STUDIO_SOLE=1 under bench")
+        print("   console) to list every file each blocker is the SOLE blocker for.")
     if unreadable_tables:
         print()
         print("=" * 78)

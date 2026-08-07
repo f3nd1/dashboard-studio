@@ -1147,6 +1147,36 @@ def _build_join(scope: list, joined: str, strategy: str, clause: str, aliases: d
     }, None
 
 
+# What a WHERE condition contains when it does not fit `column <op> value`.
+# Named in the refusal rather than left as "unparsed", because a message that
+# says only "could not be read" files every one of these into a single opaque
+# group — and that group then reads as a parser bug worth chasing when most of
+# it is ordinary unsupported SQL. Order matters: the first match wins, so the
+# constructs that carry other constructs inside them come first.
+_WHY_UNPARSED = (
+    (re.compile(r"\(\s*SELECT\b", re.IGNORECASE), "a subquery"),
+    (re.compile(r"\bCASE\b", re.IGNORECASE), "a CASE expression"),
+    (re.compile(r"\bEXISTS\b", re.IGNORECASE), "EXISTS"),
+    (re.compile(r"\bNOT\s+LIKE\b|\bLIKE\b", re.IGNORECASE), "LIKE"),
+    (re.compile(r"\bNOT\s+IN\b|\bIN\s*\(", re.IGNORECASE), "IN"),
+    (re.compile(r"\bBETWEEN\b", re.IGNORECASE), "BETWEEN"),
+    (re.compile(r"\bIS\s+(?:NOT\s+)?NULL\b", re.IGNORECASE), "IS NULL"),
+    (re.compile(r"\bREGEXP\b|\bRLIKE\b", re.IGNORECASE), "REGEXP"),
+    (re.compile(r"^\s*NOT\b", re.IGNORECASE), "NOT"),
+    (re.compile(r"[A-Za-z_]\w*\s*\(", re.IGNORECASE), "a function call"),
+)
+
+
+def _why_unparsed(part: str) -> str:
+    """Name the construct that stopped a WHERE condition being read."""
+    text = " ".join(part.split())
+    for pattern, what in _WHY_UNPARSED:
+        if pattern.search(text):
+            return (f"unparsed WHERE condition using {what}, which this converter "
+                    f"does not translate: {text[:60]}")
+    return f"unparsed WHERE condition: {text[:60]}"
+
+
 def _unwrap_parens(text: str) -> str:
     """`( a = 1 )` -> `a = 1`, repeatedly. Anything else comes back unchanged.
 
@@ -1207,7 +1237,7 @@ def _parse_filters(sql: str, aliases: dict,
         # the lines first would rewrite a multi-line string literal instead.
         cm = _CONDITION.match(part)
         if not cm:
-            problems.append(f"unparsed WHERE condition: {' '.join(part.split())[:60]}")
+            problems.append(_why_unparsed(part))
             continue
         qualifier = _qualifier_of(cm)
         # Lowercase to match the engine's ALLOWED_OPERATORS convention.

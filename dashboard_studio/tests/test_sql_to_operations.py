@@ -926,6 +926,78 @@ class TestAnOrInTheWhere(unittest.TestCase):
         self.assertEqual(result["operations"], [])
 
 
+class TestABracketedWhere(unittest.TestCase):
+    """The reported capture from report --3460's OUTER wrapper:
+
+        WHERE (`__mb_source`.`PH` > 0) AND (`__mb_source`.`Academic Staff Yes` > 0)
+
+    Two plain comparisons, each in brackets, AND-ed. It produced TWO "unparsed
+    WHERE condition" reasons — `_CONDITION` is anchored, so the leading `(`
+    matched nothing at all. Metabase brackets every condition it compiles, so
+    this shape is not unusual; it is the ordinary one.
+
+    Fixed incidentally by ADR-019's per-condition bracket strip, which is why
+    this test exists: the fix arrived while building something else, and
+    nothing pinned the AND case.
+    """
+
+    COLUMNS = {"Student Applicant": {"name": "String", "status": "String",
+                                     "po": "Decimal", "fees": "Decimal"}}
+
+    def test_bracketed_AND_ed_comparisons_parse(self):
+        result = run("SELECT COUNT(*) AS `n` FROM `tabStudent Applicant` "
+                     "WHERE (`po` > 0)\n  AND (`fees` > 0)", columns=self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "filter", "filter", "summarize"])
+
+    def test_a_column_name_with_spaces_in_brackets_parses(self):
+        """`Academic Staff Yes` — a wrapper's computed column, spaces and all."""
+        columns = {"Student Applicant": {"name": "String", "Academic Staff Yes": "Decimal"}}
+        result = run("SELECT COUNT(*) AS `n` FROM `tabStudent Applicant` "
+                     "WHERE (`Academic Staff Yes` > 0)", columns=columns)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["operations"][1]["column"]["column_name"],
+                         "Academic Staff Yes")
+
+
+class TestAnUnreadableWhereSaysWhatItFound(unittest.TestCase):
+    """A refusal that says only "could not be read" files every unsupported
+    WHERE into one opaque group — which then reads as a parser bug worth
+    chasing when most of it is ordinary unsupported SQL. Each one names the
+    construct that stopped it, so `bulk_dry_run.py` can separate them.
+    """
+
+    def reason(self, where):
+        result = analyze_sql("SELECT COUNT(*) AS `n` FROM `tabStudent Applicant` "
+                             "WHERE " + where)
+        self.assertFalse(result["supported"])
+        return " | ".join(result["reasons"])
+
+    def test_a_CASE_in_the_where_is_named(self):
+        """The reported capture from report --3460's inner wrapper. Its real
+        blockers are a CASE and a LIKE, and it was filed under "could not be
+        read" — which is why that group looked like 48 parser bugs."""
+        self.assertIn("using a CASE expression", self.reason(
+            "LOWER( CASE WHEN `status` LIKE 'UCC%' THEN '2025' END ) LIKE '%2026%'"))
+
+    def test_IS_NULL_is_named(self):
+        self.assertIn("using IS NULL", self.reason("`status` IS NOT NULL"))
+
+    def test_BETWEEN_is_named(self):
+        self.assertIn("using BETWEEN", self.reason("`po` BETWEEN 1 AND 2"))
+
+    def test_a_function_call_is_named(self):
+        self.assertIn("using a function call", self.reason("YEAR(`creation`) = 2024"))
+
+    def test_something_genuinely_unrecognised_still_says_so(self):
+        """The generic message survives for what it was for. A construct nobody
+        listed must not be filed under the nearest name."""
+        reason = self.reason("`status` ~~ 3")
+        self.assertIn("unparsed WHERE condition", reason)
+        self.assertNotIn("which this converter does not translate", reason)
+
+
 class TestColumnsFromMeta(unittest.TestCase):
     def test_frappe_fieldtypes_map_to_insights_data_types(self):
         columns = columns_from_meta([

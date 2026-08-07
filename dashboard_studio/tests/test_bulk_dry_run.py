@@ -75,8 +75,12 @@ class _Base(unittest.TestCase):
                 # frappe has to be absent rather than left over from another test.
                 sys.modules.pop("frappe", None)
                 sys.modules.pop("dashboard_studio.api.convert", None)
+            # `<DIR>` in an argv entry is substituted exactly as it is in env,
+            # so a test can put the flag either side of the path.
             sys.argv = (raw_argv if raw_argv is not None
-                        else ["bulk_dry_run.py"] + (argv if argv is not None else [directory]))
+                        else ["bulk_dry_run.py"]
+                        + [a.replace("<DIR>", directory)
+                           for a in (argv if argv is not None else [directory])])
             here = pathlib.Path.cwd()
             if raw_argv is not None:
                 # bench console runs from the sites directory, which is why a
@@ -221,6 +225,45 @@ class TestGroupingByReason(_Base):
     def test_the_examples_name_reports_not_reasons(self):
         text = self.run_script({"enrolment_by_year": ORDER_COUNT})
         self.assertIn("e.g. enrolment_by_year", text)
+
+    def test_the_sole_flag_lists_every_file_a_blocker_is_the_only_one_for(self):
+        """The "e.g." names are drawn from every report a blocker stops, and
+        most of those have other blockers too — so they are the wrong files to
+        go and capture. This lists the ones fixing that blocker converts."""
+        text = self.run_script({"ordered": ORDER_COUNT, "summed": ORDER_SUM,
+                                "both": TWO_FAULTS}, argv=["<DIR>", "--sole"])
+        section = text.split("Sole-blocker report files", 1)[1]
+        self.assertIn("ORDER BY an expression  (2)", section)
+        self.assertIn("ordered", section)
+        self.assertIn("summed", section)
+        # `both` has two blockers, so it is nobody's sole blocker.
+        self.assertNotIn("both", section)
+
+    def test_the_environment_variable_turns_it_on_under_bench_console(self):
+        """argv belongs to bench there, so the flag has to have an env twin —
+        the same reason the directory does."""
+        text = self.run_script({"ordered": ORDER_COUNT},
+                               raw_argv=TestItReadsTheDirectoryItWasGiven.BENCH_ARGV,
+                               extra_dirs=("grc",),
+                               env={"DASHBOARD_STUDIO_SQL_DIR": "<DIR>",
+                                    "DASHBOARD_STUDIO_SOLE": "1"})
+        self.assertIn("Sole-blocker report files", text)
+
+    def test_without_the_flag_it_says_the_flag_exists(self):
+        text = self.run_script({"ordered": ORDER_COUNT})
+        self.assertNotIn("Sole-blocker report files", text)
+        self.assertIn("--sole", text)
+
+    def test_the_flag_is_not_read_as_the_directory(self):
+        """`--sole` before the path, or after it, must not become the folder to
+        read — the class of bug that made this script report on `grc` twice."""
+        text = self.run_script({"ordered": ORDER_COUNT}, argv=["--sole", "<DIR>"])
+        self.assertIn("1 report files under", text)
+        self.assertIn("Sole-blocker report files", text)
+
+    def test_a_clean_run_lists_no_sole_files(self):
+        text = self.run_script({"a": CLEAN}, argv=["<DIR>", "--sole"])
+        self.assertNotIn("Sole-blocker report files", text)
 
     def test_a_clean_run_says_so(self):
         text = self.run_script({"a": CLEAN})
