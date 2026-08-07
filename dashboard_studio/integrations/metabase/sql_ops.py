@@ -10,11 +10,13 @@ with its client and tests.
 and this narrows it further:
 
   works      one table, or any number joined each on a single `a.col = b.col`
-             equality; WHERE with AND-ed comparisons, GROUP BY, any number of
-             COUNT/SUM/AVG/MIN/MAX aggregates, and arithmetic over them
+             equality; a WHERE whose conditions are all AND-ed or all OR-ed,
+             GROUP BY, any number of COUNT/SUM/AVG/MIN/MAX aggregates,
+             arithmetic over them, ORDER BY and a row limit
   refused    subqueries, CROSS joins, the same table joined twice, an ON clause
              that is anything but a single equality of two qualified columns,
-             OR, UNION, HAVING, CASE, DISTINCT, window functions, LIKE and IN
+             AND and OR mixed in one WHERE, UNION, HAVING, CASE, DISTINCT,
+             window functions, LIKE and IN
 
 **A join carries the columns the query READS, not the whole table.** Insights'
 ``select_columns`` was every column of the joined table, which meant any
@@ -105,11 +107,35 @@ def _source(table_name, data_source):
             "table": {"type": "table", "data_source": data_source, "table_name": table_name}}
 
 
-def _filter(column, operator, value):
-    return {"type": "filter",
-            "column": {"type": "column", "column_name": column},
+def _filter_rule(column, operator, value):
+    """``FilterRule = { column: Column; operator: FilterOperator; value }``.
+
+    **No `type` key.** `Filter = { type: 'filter' } & FilterArgs` carries one
+    because it is an Operation; inside a filter group the members are bare
+    `FilterArgs`, which is what `query.types.ts` says at v3.12.2. The caller
+    adds the key when the rule stands alone as an operation.
+    """
+    return {"column": {"type": "column", "column_name": column},
             "operator": operator,
             "value": value}
+
+
+def _filter(column, operator, value):
+    return {"type": "filter", **_filter_rule(column, operator, value)}
+
+
+def _filter_group(logical_operator, rules):
+    """``FilterGroup = { type: 'filter_group' } & { logical_operator; filters }``.
+
+    `LogicalOperator` is 'And' | 'Or' — capitalised, unlike every other string
+    in these shapes — and `filters` is a FLAT list of `FilterArgs`. There is no
+    nested group in the type, which is why a WHERE mixing AND and OR refuses in
+    the parser rather than being flattened into something that reads the same
+    and selects different rows.
+    """
+    return {"type": "filter_group",
+            "logical_operator": logical_operator,
+            "filters": rules}
 
 
 def _join(join_type, table_name, data_source, left, right, select_columns):
@@ -473,6 +499,7 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                                 join["source_column"], join["join_column"],
                                 sorted(referenced.get(join["doctype"], set()))))
 
+    rules = []
     for rule in analysis.get("filters") or []:
         operator = OPERATORS.get(str(rule.get("operator") or "").strip())
         if not operator:
@@ -485,8 +512,15 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
         if problem:
             reasons.append(problem)
             continue
-        operations.append(_filter(str(rule.get("field")).strip(), operator,
+        rules.append(_filter_rule(str(rule.get("field")).strip(), operator,
                                   _value(rule.get("value"), data_type)))
+    if analysis.get("filter_logic") == "Or" and len(rules) > 1:
+        operations.append(_filter_group("Or", rules))
+    else:
+        # AND-ed conditions stay separate operations — that is what Insights'
+        # own editor produces for them, and each one is a row somebody can read
+        # and click. A group of one would be a wrapper around nothing.
+        operations.extend({"type": "filter", **rule} for rule in rules)
 
     aggregations = analysis.get("aggregations") or []
     expressions = analysis.get("expressions") or []

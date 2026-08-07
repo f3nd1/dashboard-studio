@@ -768,10 +768,15 @@ class TestRefusals(unittest.TestCase):
             run("SELECT COUNT(*) FROM (SELECT 1 FROM `tabStudent Applicant`) x"),
             "subquery")
 
-    def test_an_or_clause_is_refused(self):
+    def test_AND_and_OR_in_one_clause_is_refused(self):
+        """`a AND b OR c` means `(a AND b) OR c`. Insights' filter group is one
+        flat list under one operator — `FilterArgs` is a rule or an expression,
+        never another group — so there is nowhere to put that precedence, and
+        flattening it would read the same and select different rows."""
         self.assert_refused(
             run("SELECT COUNT(*) FROM `tabStudent Applicant` "
-                "WHERE `status` = 'A' OR `status` = 'B'"), "OR in WHERE")
+                "WHERE `status` = 'A' AND `academic_year` = '2024' OR `po` > 5"),
+            "AND and OR in one WHERE clause")
 
     def test_distinct_union_having_case_are_all_refused(self):
         for sql, fragment in (
@@ -829,6 +834,96 @@ class TestRefusals(unittest.TestCase):
     def test_non_dict_input_is_a_programming_error(self):
         with self.assertRaises(TypeError):
             operations_from_sql("SELECT 1", COLUMNS)
+
+
+class TestAnOrInTheWhere(unittest.TestCase):
+    """`FilterGroup = { type: 'filter_group' } & { logical_operator; filters }`,
+    with `LogicalOperator = 'And' | 'Or'` — read from `query.types.ts` at
+    v3.12.2. Before that file was read, an OR refused because the converter
+    believed Insights had AND-only conditions. It does not.
+    """
+
+    COLUMNS = {"Student Applicant": {"name": "String", "status": "String",
+                                     "academic_year": "String", "po": "Decimal"}}
+
+    def operations(self, where):
+        result = run("SELECT COUNT(*) AS `n` FROM `tabStudent Applicant` WHERE " + where,
+                     columns=self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def test_an_or_becomes_one_filter_group_in_full(self):
+        operations = self.operations("`status` = 'A' OR `status` = 'B'")
+        self.assertEqual(operations[1], {
+            "type": "filter_group",
+            "logical_operator": "Or",
+            "filters": [
+                {"column": {"type": "column", "column_name": "status"},
+                 "operator": "=", "value": "A"},
+                {"column": {"type": "column", "column_name": "status"},
+                 "operator": "=", "value": "B"},
+            ]})
+
+    def test_the_group_MEMBERS_carry_no_type_key(self):
+        """`Filter = { type: 'filter' } & FilterArgs` has one because it is an
+        Operation. Inside a group the members are bare `FilterArgs`. An
+        unrecognised key is dropped silently, so this is asserted rather than
+        assumed to be harmless."""
+        group = self.operations("`status` = 'A' OR `status` = 'B'")[1]
+        for member in group["filters"]:
+            self.assertNotIn("type", member)
+
+    def test_the_operator_is_capitalised_the_way_the_type_spells_it(self):
+        """'Or', not 'or' — the odd one out among these shapes."""
+        self.assertEqual(self.operations("`status` = 'A' OR `status` = 'B'")[1]
+                         ["logical_operator"], "Or")
+
+    def test_brackets_around_the_whole_clause_are_grouping_and_are_dropped(self):
+        self.assertEqual(self.operations("(`status` = 'A' OR `status` = 'B')"),
+                         self.operations("`status` = 'A' OR `status` = 'B'"))
+
+    def test_brackets_around_EACH_condition_are_dropped_too(self):
+        """A separate strip from the whole-clause one, and it needs its own
+        test: without it `(a) OR (b)` reaches the condition matcher with the
+        brackets still on and refuses as unparsable."""
+        self.assertEqual(
+            self.operations("(`status` = 'A') OR (`status` = 'B')"),
+            self.operations("`status` = 'A' OR `status` = 'B'"))
+
+    def test_three_or_ed_conditions_are_one_group_of_three(self):
+        group = self.operations(
+            "`status` = 'A' OR `status` = 'B' OR `status` = 'C'")[1]
+        self.assertEqual([m["value"] for m in group["filters"]], ["A", "B", "C"])
+
+    def test_values_are_still_TYPED_inside_a_group(self):
+        """The check that keeps a filter comparing like with like — it applies
+        to a group member exactly as it does to a standalone filter."""
+        group = self.operations("`po` > 5 OR `po` < 1")[1]
+        self.assertEqual([m["value"] for m in group["filters"]], [5.0, 1.0])
+
+    def test_AND_ed_conditions_stay_separate_operations(self):
+        """Not a group of one operator each — Insights' own editor produces a
+        row per AND-ed condition, and each row is something somebody can read
+        and click."""
+        operations = self.operations("`status` = 'A' AND `po` > 5")
+        self.assertEqual([op["type"] for op in operations][:3],
+                         ["source", "filter", "filter"])
+
+    def test_one_condition_is_not_wrapped_in_a_group(self):
+        self.assertEqual(self.operations("`status` = 'A'")[1]["type"], "filter")
+
+    def test_a_bad_column_inside_a_group_still_refuses(self):
+        result = run("SELECT COUNT(*) AS `n` FROM `tabStudent Applicant` "
+                     "WHERE `status` = 'A' OR `nonsense` = 'B'", columns=self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+        self.assertIn("nonsense", " | ".join(result["reasons"]))
+
+    def test_an_operator_this_converter_does_not_translate_still_refuses(self):
+        result = run("SELECT COUNT(*) AS `n` FROM `tabStudent Applicant` "
+                     "WHERE `status` = 'A' OR `status` LIKE 'B%'", columns=self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
 
 
 class TestColumnsFromMeta(unittest.TestCase):

@@ -317,6 +317,23 @@ Both are public at the installed tag, `github.com/frappe/insights` at **v3.12.2*
 
 Refused: an ORDER BY of anything that is not a plain column (an expression is a different operation, and guessing at one silently reorders the rows a chart reads), and two different LIMITs in one statement (which one bounds the result depends on where each sits, and that is not read here).
 
+## ADR-019 — An all-OR WHERE becomes a filter group; AND and OR mixed refuses
+
+**Decision.** A WHERE whose conditions are all OR-ed becomes one `filter_group` with `logical_operator: "Or"`. All-AND stays as it was — one `filter` operation per condition. A clause containing both refuses by name.
+
+**The old refusal was based on a belief, not a reading.** The comment said *"OR cannot map to the engine's AND-only conditions"*. `query.types.ts` at v3.12.2 has `FilterGroup = { type: 'filter_group' } & { logical_operator: LogicalOperator; filters: FilterArgs[] }` and `LogicalOperator = 'And' | 'Or'`. It has had one all along; nobody had looked.
+
+**Two details of the shape are asserted in full**, because an unrecognised key is dropped silently and a wrong one fails identically while looking fixed:
+
+- the members are bare `FilterArgs` and carry **no `type` key**. `Filter = { type: 'filter' } & FilterArgs` has one because it is an Operation; a group member is not.
+- `logical_operator` is **capitalised** — `'Or'`, not `'or'`. It is the odd one out among these shapes, where every other string is lowercase.
+
+**Why mixing refuses, and why that is not conservatism.** `filters` is a FLAT list of `FilterArgs`, and `FilterArgs` is a rule or an expression — never another group. So the type can express "all of these" and "any of these" and nothing else. `a AND b OR c` means `(a AND b) OR c` in SQL; flattening it into one group under either operator produces a clause that reads plausibly and selects different rows, which is the exact fault this converter exists to avoid. Nested groups are the thing that would make this translatable, and they are not in the type.
+
+**AND-ed conditions deliberately do NOT become a group of one operator.** Insights' own editor produces a row per AND-ed condition, and each row is something a person can read and click — which is the entire point of converting to operations rather than pasting SQL. A group around them would be a wrapper adding nothing.
+
+Brackets are stripped around the whole clause and around each condition. That is only safe because a mixed clause has already refused: where one operator governs, grouping brackets change nothing.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

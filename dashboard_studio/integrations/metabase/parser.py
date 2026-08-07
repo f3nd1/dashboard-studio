@@ -1011,12 +1011,37 @@ def _build_join(scope: list, joined: str, strategy: str, clause: str, aliases: d
     }, None
 
 
-def _parse_filters(sql: str, aliases: dict, reasons: list) -> tuple[list[dict], list[str]]:
-    """Parse the WHERE clause into filters, plus reasons for anything unparsable.
+def _unwrap_parens(text: str) -> str:
+    """`( a = 1 )` -> `a = 1`, repeatedly. Anything else comes back unchanged.
 
-    Flag-don't-guess: an OR clause or a condition that doesn't fit the simple
-    ``field <op> value`` shape makes the whole query unsupported — a dropped or
-    mangled condition would migrate a metric that counts the wrong rows.
+    Only ever applied where the logical operator is uniform, so the brackets are
+    grouping that changes nothing. A mixed clause refuses before this runs, and
+    that is what makes discarding them safe.
+    """
+    text = text.strip()
+    while text.startswith("(") and text.endswith(")"):
+        depth = 0
+        for index, character in enumerate(text):
+            depth += {"(": 1, ")": -1}.get(character, 0)
+            if depth == 0 and index < len(text) - 1:
+                return text  # the first bracket closes early: not a wrapper
+        text = text[1:-1].strip()
+    return text
+
+
+def _parse_filters(sql: str, aliases: dict,
+                   reasons: list) -> tuple[list[dict], list[str], str]:
+    """``(filters, problems, logic)`` for the WHERE clause; logic is And or Or.
+
+    Flag-don't-guess: a condition that doesn't fit the simple ``field <op>
+    value`` shape makes the whole query unsupported — a dropped or mangled
+    condition would migrate a metric that counts the wrong rows.
+
+    **AND and OR in one clause refuse.** Insights' `FilterGroupArgs` is
+    ``{ logical_operator; filters: FilterArgs[] }`` and `FilterArgs` is a rule
+    or an expression — never another group — so the structure is one flat list
+    under one operator, with no nesting to put a precedence in. `a AND b OR c`
+    means `(a AND b) OR c` in SQL, and there is no shape here that says so.
     """
     m = re.search(
         r"\bWHERE\b(.+?)(?=\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)",
@@ -1024,15 +1049,23 @@ def _parse_filters(sql: str, aliases: dict, reasons: list) -> tuple[list[dict], 
         re.IGNORECASE | re.DOTALL,
     )
     if not m:
-        return [], []
+        return [], [], "And"
     clause = _clause_text(m.group(1))
-    # OR cannot map to the engine's AND-only conditions. Checked textually, so a
-    # literal " OR " inside a string value also flags — conservative by design.
-    if re.search(r"\bOR\b", clause, re.IGNORECASE):
-        return [], ["OR in WHERE clause"]
+    # Textual, so a literal " OR " inside a string value counts too —
+    # conservative by design, and it refuses rather than mis-grouping.
+    has_or = bool(re.search(r"\bOR\b", clause, re.IGNORECASE))
+    has_and = bool(re.search(r"\bAND\b", clause, re.IGNORECASE))
+    if has_or and has_and:
+        return [], ["AND and OR in one WHERE clause — Insights' filter group is one "
+                    "flat list under one operator, with nowhere to put the precedence "
+                    "that decides which conditions bind together"], "And"
+    logic = "Or" if has_or else "And"
+    clause = _unwrap_parens(clause)
     filters, problems = [], []
-    # Naive split on AND — sufficient for the simple flat WHERE clauses in scope.
-    for part in re.split(r"\bAND\b", clause, flags=re.IGNORECASE):
+    # Naive split on the one operator in play — sufficient for the flat WHERE
+    # clauses in scope, and a mixed clause has already refused above.
+    for part in re.split(r"\bOR\b" if has_or else r"\bAND\b", clause, flags=re.IGNORECASE):
+        part = _unwrap_parens(part)
         # NOT whitespace-normalised. `\s*` around the operator already spans a
         # newline, so a condition wrapped across lines parses as it is; joining
         # the lines first would rewrite a multi-line string literal instead.
@@ -1046,7 +1079,7 @@ def _parse_filters(sql: str, aliases: dict, reasons: list) -> tuple[list[dict], 
         op, value = cm.group("operator").lower(), cm.group("value").strip()
         filters.append({"field": field, "operator": op, "value": value.strip("'\""),
                         "table": _resolve(qualifier, aliases, reasons)})
-    return filters, problems
+    return filters, problems, logic
 
 
 def _parse_group_by(sql: str, aliases: dict, reasons: list) -> tuple[list[dict], list[str]]:
@@ -1237,7 +1270,7 @@ def analyze_sql(sql: str) -> dict:
     # "'__mb_source' is not a table or alias" three times buries the one line
     # that says what is actually wrong under an internal name nobody typed.
     alias_reasons: list[str] = []
-    filters, filter_problems = _parse_filters(statement, aliases, alias_reasons)
+    filters, filter_problems, filter_logic = _parse_filters(statement, aliases, alias_reasons)
     reasons.extend(filter_problems)
     aggregations = _parse_aggregations(statement, aliases, alias_reasons)
     group_by, group_problems = _parse_group_by(statement, aliases, alias_reasons)
@@ -1270,6 +1303,7 @@ def analyze_sql(sql: str) -> dict:
         "expressions": expressions,
         "computed": computed,
         "filters": filters,
+        "filter_logic": filter_logic,
         "group_by": group_by,
         "joins": joins,
         "order_by": order_by,
