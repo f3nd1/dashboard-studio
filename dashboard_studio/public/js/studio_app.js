@@ -150,16 +150,14 @@
       });
       tabs.appendChild(tab);
     });
+    // ABOVE the tabs, so it is there whichever one is open. Inside the Ask tab
+    // it was invisible while the SQL tab was active, and somebody went looking
+    // for a settings gear that does not exist. It still disappears entirely
+    // when the site has its own key, so a site that is set up sees nothing.
+    left.appendChild(this.buildKeyField());
     left.appendChild(tabs);
-    if (this.state.tab === "sql") {
-      left.appendChild(this.buildSqlInput());
-    } else {
-      // A SIBLING of the question box, not a child: nested, every "the input
-      // inside the question box" selector resolved to the key field instead,
-      // which is a trap for anything reading this page later.
-      left.appendChild(this.buildKeyField());
-      left.appendChild(this.buildQuestionBox());
-    }
+    left.appendChild(this.state.tab === "sql"
+      ? this.buildSqlInput() : this.buildQuestionBox());
     paths.appendChild(left);
 
     // The one output region. Every result from either tab lands here and
@@ -403,11 +401,13 @@
   App.prototype.buildKeyField = function () {
     var self = this;
     var wrap = el("div", "dss-keyfield");
+    wrap.hidden = true;
     if (this.state.siteHasKey === null) {
       this.loadKeyState();
       return wrap;
     }
     if (this.state.siteHasKey) return wrap;
+    wrap.hidden = false;
     wrap.appendChild(el("label", "dss-field-label", "API key (this session only)"));
     var input = el("input", "dss-input");
     input.type = "password";

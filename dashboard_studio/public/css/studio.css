@@ -858,19 +858,31 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
 .dss-path { min-width: 0; }
 
 /* Two buttons and a class toggle. No library, and no ARIA tablist plumbing for
-   two controls that each just re-render the pane beside them. */
-.dss-tabs { display: flex; gap: 4px; margin-bottom: 12px;
-  border-bottom: 1px solid var(--dss-line); }
+   two controls that each just re-render the pane beside them.
+   A SEGMENTED control, not two underlined words: as plain text with a hairline
+   under the active one, a real user did not recognise them as clickable at all.
+   The tray is visible, the selected tab is filled and raised, and the other one
+   fills on hover — all three before any interaction. */
+.dss-tabs { display: inline-flex; gap: 3px; margin-bottom: 14px; padding: 3px;
+  border-radius: var(--dss-r-sm); background: var(--dss-surface-3);
+  border: 1px solid var(--dss-line); }
 .dss-tab {
-  padding: 7px 11px; font-size: 12px; font-weight: 700; cursor: pointer;
-  border: 0; background: none; color: var(--dss-muted);
-  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  padding: 6px 13px; font-size: 12px; font-weight: 700; cursor: pointer;
+  border: 1px solid transparent; border-radius: 6px; background: none;
+  color: var(--dss-ink-700);
 }
-.dss-tab:hover { color: var(--dss-ink-700); }
-.dss-tab.is-on { color: var(--dss-ink); border-bottom-color: var(--dss-ink); }
+.dss-tab:hover { background: var(--dss-surface); color: var(--dss-ink); }
+.dss-tab.is-on { background: var(--dss-surface); border-color: var(--dss-line-dark);
+  color: var(--dss-ink); box-shadow: var(--dss-shadow-sm); }
 
-.dss-keyfield { margin-bottom: 13px; }
-.dss-keyfield .dss-hint { margin-top: 5px; }
+/* Above the tabs and outside both, so it is reachable from either one. Boxed so
+   it reads as configuration rather than as part of whichever tab is open. */
+.dss-keyfield { margin-bottom: 14px; padding: 10px 11px;
+  border: 1px solid var(--dss-line); border-radius: var(--dss-r-sm);
+  background: var(--dss-surface-2); }
+.dss-keyfield[hidden] { display: none; }
+.dss-keyfield .dss-input { margin-top: 5px; }
+.dss-keyfield .dss-hint { margin-top: 6px; }
 
 /* The ONE output region. Beside the input on a wide screen, under it on a
    narrow one — never a second surface inside the input pane, which is what put
