@@ -55,7 +55,17 @@
   //
   // A missing `message` is NOT an error: get_migration_project returns null for
   // an empty project. Only an explicit refusal marker counts.
+  // `silent` suppresses Frappe's own msgprint DIALOG while leaving
+  // `_server_messages` in the payload, so the refusal still reaches
+  // core.refusalMessage and is shown inline. Read from Frappe's request.js at
+  // version-14 and version-15, which both guard the dialog with
+  // `if (messages && !opts.silent)` — not guessed, and not a client-side hack
+  // around a server that has not changed.
+  //
+  // Every refusal in this app belongs next to the control it is about. A
+  // missing API key is a configuration state, not an interruption.
   function dsCall(opts) {
+    opts.silent = true;
     return root.frappe.call(opts).then(function (r) {
       r = r || {};
       if (r.exc_type || r.exc || r.exception || r._server_messages || r.errors) {
@@ -101,14 +111,36 @@
     // sit here was explanation, and the controls are the explanation.
     var card = el("section", "dss-vizstep");
     var body = el("div", "dss-vizstep-body");
-    body.appendChild(this.buildQuestionBox());
+
+    // The two ways in, side by side rather than stacked. Neither is the
+    // primary one, and stacking them read as "ask, and if that fails, paste".
+    var paths = el("div", "dss-paths");
+
+    var ask = el("div", "dss-path");
+    ask.appendChild(el("h2", "dss-path-head", "Ask a question"));
+    ask.appendChild(this.buildQuestionBox());
+    paths.appendChild(ask);
+
+    var paste = el("div", "dss-path");
+    paste.appendChild(el("h2", "dss-path-head", "Or paste the SQL"));
+    paste.appendChild(this.buildSqlInput());
+    paths.appendChild(paste);
+    body.appendChild(paths);
+
+    // Everything that describes the OUTPUT, below both actions that produce
+    // it. Title and workbook used to sit under both buttons that consume them,
+    // so the query was named after it had already been created.
+    var out = el("div", "dss-output");
     var proposal = this.buildProposal();
-    if (proposal) body.appendChild(proposal);
-    body.appendChild(this.buildSqlInput());
-    body.appendChild(this.buildTitleField());
-    body.appendChild(this.buildWorkbookPicker());
+    if (proposal) out.appendChild(proposal);
     var result = this.buildConversionResult();
-    if (result) body.appendChild(result);
+    if (result) out.appendChild(result);
+    var fields = el("div", "dss-output-fields");
+    fields.appendChild(this.buildTitleField());
+    fields.appendChild(this.buildWorkbookPicker());
+    out.appendChild(fields);
+    body.appendChild(out);
+
     card.appendChild(body);
     wrap.appendChild(card);
 
@@ -210,6 +242,12 @@
   App.prototype.buildSqlInput = function () {
     var self = this;
     var wrap = el("div", "dss-vizimport");
+    // ABOVE the textarea: it is what you need before typing, not after
+    // pressing Convert. It doubles as the surface every refusal is written
+    // into, so the server's own sentence lands next to the box it is about.
+    var note = el("div", "dss-vizimport-note",
+      "One table, or two joined on a single a.column = b.column.");
+    wrap.appendChild(note);
     var box = el("textarea", "dss-input dss-sqlbox");
     box.placeholder =
       "SELECT `academic_year`, COUNT(*) FROM `tabStudent Applicant` GROUP BY `academic_year`";
@@ -226,12 +264,6 @@
     row.appendChild(go);
     wrap.appendChild(row);
 
-    // Also the surface every refusal is written into, so the server's own
-    // sentence lands next to the box it is about.
-    var note = el("div", "dss-vizimport-note",
-      "One table, or two joined on a single a.column = b.column.");
-    wrap.appendChild(note);
-
     go.addEventListener("click", function () {
       var sql = (box.value || "").trim();
       if (!sql) { note.textContent = "Paste a query first."; return; }
@@ -245,14 +277,26 @@
   };
 
   // ------------------------------------------------------------------ ask ---
-  // A question, and three examples to show the shape that works.
+  // The examples exist to show the SHAPE of a question that works. The input
+  // starts EMPTY and its placeholder is not one of them: prefilling the box
+  // with an example made the first chip a no-op, and a placeholder repeating a
+  // chip wastes one of the three.
+  var EXAMPLES = [
+    "which agent brought in the most sales income, and in which year",
+    "how many invoices were raised each month last year",
+    "average invoice value per customer, highest first",
+  ];
+
+  // A question, and the examples that still say something.
   App.prototype.buildQuestionBox = function () {
     var self = this;
     var wrap = el("div", "dss-field dss-questionbox");
-    wrap.appendChild(el("label", "dss-field-label", "Ask a question"));
+    // No label element: the column heading above already says "Ask a question",
+    // and two of them stacked was what the screenshot caught. The input keeps
+    // its aria-label, so nothing is lost to a screen reader.
     var box = el("input", "dss-input");
     box.type = "text";
-    box.placeholder = "which agent brought in the most sales income, and in which year";
+    box.placeholder = "Ask in plain English, or press an example below";
     box.value = this.state.question || "";
     box.setAttribute("aria-label", "Ask a question");
     // Updated WITHOUT re-rendering — a re-render per keystroke replaces the
@@ -261,9 +305,12 @@
     wrap.appendChild(box);
 
     var chips = el("div", "dss-chips");
-    ["which agent brought in the most sales income, and in which year",
-      "how many invoices were raised each month last year",
-      "average invoice value per customer, highest first"].forEach(function (text) {
+    var typed = (this.state.question || "").trim();
+    EXAMPLES.filter(function (text) {
+      // A chip carrying exactly what is already in the box does nothing when
+      // pressed, which is the same rule that kept the chart-type picker out.
+      return text !== typed;
+    }).forEach(function (text) {
       var chip = el("button", "dss-chip", text);
       chip.type = "button";
       chip.addEventListener("click", function () {
@@ -318,18 +365,23 @@
     var self = this;
     var box = el("div", "dss-saveresult" + (proposal.supported ? "" : " is-bad"));
 
-    var head = el("div", "dss-saveresult-title", "Proposed setup");
-    head.appendChild(el("span", "dss-badge", "Not created yet"));
-    box.appendChild(head);
-
     if (!proposal.supported) {
+      // NO "Not created yet" badge here. That badge means "a proposal exists
+      // and is waiting for you", and on a refusal there is no proposal — it
+      // would promise something pending that does not exist. A refusal is an
+      // empty state carrying the server's own sentence, nothing more.
+      box.appendChild(el("div", "dss-saveresult-title", "No setup proposed"));
       (proposal.reasons || []).forEach(function (reason) {
         box.appendChild(el("div", "dss-saveresult-detail", reason));
       });
       box.appendChild(el("div", "dss-hint",
-        "Nothing was created. Try asking differently, or paste the SQL below."));
+        "Nothing was created. Try asking differently, or paste the SQL instead."));
       return box;
     }
+
+    var head = el("div", "dss-saveresult-title", "Proposed setup");
+    head.appendChild(el("span", "dss-badge", "Not created yet"));
+    box.appendChild(head);
 
     // The summary FIRST: it is what the user reads to judge whether the
     // proposal understood the question.
