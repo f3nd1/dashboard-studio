@@ -397,6 +397,38 @@ Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN
 
 **The reported query still refuses, on something else.** `AVG(CAST(col AS double))` alongside a second aggregate reads as an expression-over-aggregates rather than a plain aggregate, so the two collide as "two questions in one query". That reproduces with none of this code and is ADR-009's problem in a different spelling: the column is text and the CAST is doing real work, so dropping it under ADR-017 would turn a working report into a refusal rather than fixing it. Not built — it needs the cast-operation path, which is its own decision.
 
+## ADR-023 — The user chooses the DocTypes; `propose_from_question` cannot
+
+**Decision.** `doctypes` is a **required** argument of `propose_from_question`, with no default. A separate `propose_tables` returns DocType **names only**, and the page shows them as an editable confirm step **before** any query exists. Manual mode skips the picker entirely. A model that names a table outside the confirmed set is refused by name.
+
+**What went wrong.** A question about recruitment agents converted cleanly against ERPNext's sales-commission tables — `tabSales Team` and `tabSales Invoice`. Every column real, every type right, every join legal. UCC's recruitment agents live in `tabAgent`, which the query never touched. Nothing in the referential validation could object, because nothing was referentially wrong.
+
+**Why the table is the one decision that cannot be verified here.** The rest of the pipeline checks a column exists and is the right type. There is no check for "this is the table you meant" — it is not a fact about the schema, it is a fact about the organisation. So it is the one choice a person makes.
+
+**Names only, and before the query.** A rationale would describe the model's *intention*, and the intention is exactly what needs checking, so the picker shows bare names. It comes before a query exists because a table confirmed underneath a finished-looking result gets rubber-stamped — the same reason ADR-021 composes its summary from the operations rather than the model's prose.
+
+**The server half is the one that bites.** Columns used to be re-typed from whatever tables the emitted SQL mentioned, so a model widening past the confirmed set was silently accepted. It now refuses, naming the table it was not given.
+
+## ADR-024 — `YEAR()` in a GROUP BY is a dimension GRANULARITY; a date part in a WHERE is a mutate before the filter
+
+**Decision.** Two capabilities that had to ship together, because both turn on *where* a lifted operation is emitted.
+
+1. Every `mutate` is now emitted **before** the filters. ADR-009's `cast` stays where it was, immediately before the summarize.
+2. `WHERE YEAR(`d`) = 2025` lifts into a mutate the filter then names — ADR-022's lift, extended to the WHERE it previously left alone.
+3. `GROUP BY YEAR(`d`)` emits **no mutate at all**: the dimension is the date column carrying `granularity: "year"`.
+
+**What made (1) safe, read rather than recalled.** `ibis_utils.py` at v3.12.2 applies operations in list order — `perform_operation` in a loop, its errors naming "the operation at position N" — and `apply_mutate` returns `query.mutate(...)` while `apply_filter` returns `query.filter(...)` on the query *so far*. So a filter may name a mutated column, provided the mutate comes first. ADR-022's note that "a WHERE is deliberately not rewritten" was correct about the code as it stood and is now superseded by moving the mutate.
+
+**Why the cast did not move with them.** ADR-009 puts it immediately before the summarize because that is where `* 1` sat in the SQL — scoped to the aggregate, not to the WHERE. Moving it up would retype the column the filters were already compared against. So `computed` entries now split by kind into two positions rather than one.
+
+**The decisive fact behind (3), and it is the reason MONTH does not follow.** `Dimension` in `query.types.ts` carries `granularity?: GranularityType`, and `translate_dimension` applies it as `column.truncate(unit)` cast back to the column's own date type. `truncate("Y")` partitions rows by calendar year exactly as `YEAR()` does — same rows, same count, only the label differs, so the two are equivalent. `truncate("M")` is month **within** year, while `MONTH()` pools every January across every year: twelve rows against forty-odd. Those are different questions, so `_GRANULARITY_OF` contains **only** `YEAR`, and MONTH, QUARTER and DAY keep the numeric mutate.
+
+**The named limitation, said out loud rather than worked around.** A numeric month-of-year is not a date, and Insights' chart X axis only offers date-compatible columns — so a MONTH grouping is correct and cannot be charted. `describeOperation` says so on the operation itself, because otherwise the unchartable result reads as a converter fault. Regrouping to `truncate("M")` to satisfy the axis would answer a question nobody asked, which is the trade this project always refuses.
+
+**Two refusals guard the granularity route.** A granularity on a column that is not Date/Datetime refuses — `truncate` needs a date, and grouping the raw column instead would convert cleanly and answer something else. And a granularity the parser lifted that never reached a dimension refuses too: the parser has by then rewritten `YEAR(`d`)` to a bare `` `d` ``, so a dropped granularity is a grouping by every distinct **day**.
+
+**The bug the tests caught, which is the whole reason both halves needed the same round.** `WHERE YEAR(d) = 2025 GROUP BY YEAR(d)` needs the granularity *and* the mutate from one call. De-duplicating the two routes against a shared record dropped the mutate, and the WHERE rewrite then left a filter comparing the raw date column against `2025` — supported, runnable, and returning nothing. Each route now de-duplicates against its own record, and the WHERE region is rewritten with the mutate name even where the GROUP BY took the granularity: a granularity is a property of a dimension, and a filter has none.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

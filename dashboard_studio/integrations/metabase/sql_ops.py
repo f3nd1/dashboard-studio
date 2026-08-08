@@ -510,6 +510,21 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                                 join["source_column"], join["join_column"],
                                 sorted(referenced.get(join["doctype"], set()))))
 
+    # COMPUTED COLUMNS THAT A FILTER MAY NAME come before the filters.
+    #
+    # `ibis_utils.py` at v3.12.2 applies operations in list order —
+    # `perform_operation` in a loop, its error naming "the operation at position
+    # N" — and `apply_mutate` returns `query.mutate(...)` while `apply_filter`
+    # returns `query.filter(...)` on the query so far. So a filter naming a
+    # mutated column works, which is what lets `WHERE year(d) = 2025` translate.
+    #
+    # A `cast` deliberately does NOT move up here. ADR-009 puts it immediately
+    # before the summarize because that is where `* 1` sat in the SQL: casting
+    # earlier would retype the column the filters were already compared against.
+    for entry in computed:
+        if entry["kind"] != "cast":
+            operations.append(_mutate(str(entry["alias"]), entry["expression"]))
+
     rules = []
     for rule in analysis.get("filters") or []:
         operator = OPERATORS.get(str(rule.get("operator") or "").strip())
@@ -558,25 +573,42 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                 _add_measure(measures, measure)
     if measures:
         dimensions = []
+        attached = set()
         for reference in group_by:
             data_type, problem = _type_of(reference, available, tables)
             if problem:
                 reasons.append(problem)
                 continue
             column = str(reference.get("field")).strip()
-            dimensions.append({"dimension_name": column, "column_name": column,
-                               "data_type": data_type})
+            dimension = {"dimension_name": column, "column_name": column,
+                         "data_type": data_type}
+            # A YEAR() lifted out of the GROUP BY groups by the DATE column
+            # with a granularity, so it stays a Date and can be charted. The
+            # granularity is what makes it a year rather than a day, so if it
+            # cannot be attached the grouping would silently become every
+            # distinct date — refuse instead.
+            granularity = (analysis.get("granularities") or {}).get(column)
+            if granularity:
+                if data_type not in DATE_DATA_TYPES:
+                    reasons.append(
+                        f"'{column}' is grouped by {granularity} but is "
+                        f"{data_type}, not a date"
+                    )
+                    continue
+                dimension["granularity"] = granularity
+                attached.add(column)
+            dimensions.append(dimension)
         # A computed column comes first of all: the summarize below groups by
         # it and aggregates over it, so it has to exist by then. Insights
         # stores exactly this ordering — `source -> mutate -> summarize` on
         # query `s39rc7j648` — which is what made this translatable.
+        # The mutates are already emitted, above the filters. Only the casts
+        # belong here — see the note there.
         for entry in computed:
             if entry["kind"] == "cast":
                 # A cast converts one column in place; the parser refuses any
                 # other shape, so there is exactly one here.
                 operations.append(_cast(str(entry["columns"][0]), entry["data_type"]))
-            else:
-                operations.append(_mutate(str(entry["alias"]), entry["expression"]))
         # The ADR-009 cast goes AFTER the filters and immediately before the
         # summarize, which is where `* 1` sat in the original SQL: scoped to
         # the aggregate, not to the WHERE. Casting earlier would retype the
@@ -584,6 +616,16 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
         for measure in measures:
             if measure.get("coerced_from"):
                 operations.append(_cast(measure["column_name"], measure["data_type"]))
+        # Every granularity the parser lifted has to have landed on a
+        # dimension. One that did not means the grouping is a bare date column
+        # — every distinct day instead of every year, which is a different
+        # question that would convert without a word.
+        missed = set((analysis.get("granularities") or {})) - attached
+        if missed:
+            reasons.append(
+                f"the grouping by year on {', '.join(sorted(missed))} could not be "
+                "applied, so the query would group by every distinct date instead"
+            )
         operations.append(_summarize(measures, dimensions))
         # …and the mutate AFTER the summarize, because its expression refers to
         # the measure names by the names that step defines. Before it, they do

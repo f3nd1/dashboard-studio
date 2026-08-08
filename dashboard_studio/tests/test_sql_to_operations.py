@@ -988,7 +988,9 @@ class TestAnUnreadableWhereSaysWhatItFound(unittest.TestCase):
         self.assertIn("using BETWEEN", self.reason("`po` BETWEEN 1 AND 2"))
 
     def test_a_function_call_is_named(self):
-        self.assertIn("using a function call", self.reason("YEAR(`creation`) = 2024"))
+        """A date part in a WHERE is lifted now (ADR-024), so this needs a call
+        that is not — `LOWER` is not in the allowlist and never was."""
+        self.assertIn("using a function call", self.reason("LOWER(`status`) = 'x'"))
 
     def test_something_genuinely_unrecognised_still_says_so(self):
         """The generic message survives for what it was for. A construct nobody
@@ -1061,6 +1063,109 @@ class TestACastInsideAnAggregate(unittest.TestCase):
         result = self.run_it("SELECT AVG(CAST(`v` AS signed)) AS `avg` "
                              "FROM `tabQuality Action`")
         self.assertFalse(result["supported"])
+
+
+class TestADatePartInAWhereAndAYearInAGroupBy(unittest.TestCase):
+    """ADR-024. Two capabilities that had to ship together, because both turn
+    on WHERE the lifted operation is emitted.
+
+    `ibis_utils.py` applies operations in list order and `apply_filter` filters
+    the query so far, so a filter may name a mutated column — provided the
+    mutate comes first. Moving the mutates above the filters is what makes
+    `WHERE YEAR(d) = 2025` translatable, and it is why ADR-009's cast had to be
+    split off and left where it was.
+
+    A `YEAR()` in a GROUP BY takes the other route entirely: it is the date
+    column carrying `granularity: "year"`, which stays a Date and can be a
+    chart's X axis. Only YEAR — see `_GRANULARITY_OF` for why MONTH is a
+    different question rather than a different label.
+    """
+
+    COLUMNS = {"Quality Action": {"name": "String", "d": "Date", "v": "Decimal",
+                                  "status": "String"}}
+
+    def run_it(self, sql):
+        return run(sql, columns=self.COLUMNS)
+
+    def test_a_YEAR_in_a_WHERE_is_a_mutate_and_it_comes_BEFORE_the_filter(self):
+        result = self.run_it("SELECT COUNT(*) AS `c` FROM `tabQuality Action` "
+                             "WHERE YEAR(`d`) = 2025")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["operations"][1:3], [
+            {"type": "mutate", "new_name": "year_of_d", "data_type": "Auto",
+             "expression": {"type": "expression", "expression": "year(d)"}},
+            {"type": "filter", "column": {"type": "column",
+                                          "column_name": "year_of_d"},
+             "operator": "=", "value": 2025},
+        ])
+
+    def test_a_YEAR_in_a_GROUP_BY_is_a_GRANULARITY_and_emits_no_mutate(self):
+        result = self.run_it("SELECT YEAR(`d`) AS `y`, COUNT(*) AS `c` "
+                             "FROM `tabQuality Action` GROUP BY YEAR(`d`)")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "summarize"])
+        self.assertEqual(result["operations"][1]["dimensions"],
+                         [{"dimension_name": "d", "column_name": "d",
+                           "data_type": "Date", "granularity": "year"}])
+
+    def test_MONTH_QUARTER_and_DAY_keep_the_numeric_mutate(self):
+        """`truncate("M")` is month-within-year; `MONTH()` pools every January
+        across every year. Twelve rows against forty-odd — a different
+        question, so these stay mutates and stay unchartable."""
+        for name in ("MONTH", "QUARTER", "DAY"):
+            with self.subTest(name):
+                result = self.run_it(
+                    f"SELECT {name}(`d`) AS `p`, COUNT(*) AS `c` "
+                    f"FROM `tabQuality Action` GROUP BY {name}(`d`)")
+                self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+                self.assertEqual([op["type"] for op in result["operations"]],
+                                 ["source", "mutate", "summarize"])
+                self.assertEqual(result["operations"][1]["new_name"],
+                                 f"{name.lower()}_of_d")
+                self.assertNotIn("granularity",
+                                 result["operations"][2]["dimensions"][0])
+
+    def test_a_granularity_on_a_column_that_is_not_a_date_refuses(self):
+        """`truncate` needs a date. Grouping the raw string instead would
+        convert cleanly and answer something else."""
+        result = self.run_it("SELECT COUNT(*) AS `c` FROM `tabQuality Action` "
+                             "GROUP BY YEAR(`status`)")
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+        self.assertIn("'status' is grouped by year but is String, not a date",
+                      result["reasons"])
+
+    def test_a_granularity_that_never_reached_a_dimension_refuses_by_name(self):
+        """The parser rewrote `YEAR(`nope`)` to a bare column. If the dimension
+        is then dropped for any reason, the grouping silently becomes every
+        distinct date — so an unattached granularity is its own refusal."""
+        result = self.run_it("SELECT COUNT(*) AS `c` FROM `tabQuality Action` "
+                             "GROUP BY YEAR(`nope`)")
+        self.assertFalse(result["supported"])
+        self.assertTrue(any("the grouping by year on nope could not be applied"
+                            in reason for reason in result["reasons"]),
+                        result["reasons"])
+
+    def test_a_YEAR_in_a_WHERE_is_NOT_turned_into_a_granularity(self):
+        """A granularity is a property of a DIMENSION. A filter has none, so
+        the WHERE side keeps the mutate even for the one function that would
+        otherwise take the granularity route."""
+        result = self.run_it("SELECT YEAR(`d`) AS `y`, COUNT(*) AS `c` "
+                             "FROM `tabQuality Action` WHERE YEAR(`d`) = 2025 "
+                             "GROUP BY YEAR(`d`)")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "mutate", "filter", "summarize"])
+        # The filter must name the MUTATED column. Pointed at `d` it would
+        # compare a date against 2025 — supported, runnable, no rows.
+        self.assertEqual(result["operations"][2],
+                         {"type": "filter",
+                          "column": {"type": "column", "column_name": "year_of_d"},
+                          "operator": "=", "value": 2025})
+        self.assertEqual(result["operations"][3]["dimensions"],
+                         [{"dimension_name": "d", "column_name": "d",
+                           "data_type": "Date", "granularity": "year"}])
 
 
 class TestTheDialectTheParserAccepts(unittest.TestCase):

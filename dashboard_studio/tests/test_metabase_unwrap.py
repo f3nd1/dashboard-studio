@@ -934,13 +934,16 @@ class TestAComputedWrapperBecomesOperations(unittest.TestCase):
             {"type": "source",
              "table": {"type": "table", "data_source": "Site DB",
                        "table_name": "tabQuality Action"}},
+            # The mutate comes FIRST now: a computed column has to exist before
+            # a filter could name it, so every mutate is emitted above the
+            # filters. The cast stays where ADR-009 put it.
+            {"type": "mutate", "new_name": "Year", "data_type": "Auto",
+             "expression": {"type": "expression",
+                            "expression": "year(custom_proposed_date)"}},
             {"type": "cast",
              "column": {"type": "column",
                         "column_name": "custom_aggregated_performance_index_api"},
              "data_type": "Decimal"},
-            {"type": "mutate", "new_name": "Year", "data_type": "Auto",
-             "expression": {"type": "expression",
-                            "expression": "year(custom_proposed_date)"}},
             {"type": "summarize",
              "measures": [{"measure_name":
                            "avg_of_custom_aggregated_performance_index_api",
@@ -1115,8 +1118,11 @@ class TestAScaleFactorWrapper(unittest.TestCase):
                                                "qn_5": "Integer"}}
         result = operations_from_sql(analyze_sql(SCALE_FACTOR.read_text()), columns)
         self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        # The two scale-factor mutates now sit ABOVE the filter, so a filter
+        # could name one. The expression mutate still follows the summarize
+        # that defines the measure names it reads.
         self.assertEqual([op["type"] for op in result["operations"]],
-                         ["source", "join", "join", "filter", "mutate", "mutate",
+                         ["source", "join", "join", "mutate", "mutate", "filter",
                           "summarize", "mutate"])
         self.assertEqual(result["operations"][-1]["expression"]["expression"],
                          "(avg_of_Q1 + avg_of_Q5) / 2.0")
@@ -1275,7 +1281,7 @@ class TestACaseThatMapsValuesToLabels(unittest.TestCase):
 
     def test_the_reported_capture_converts_in_full(self):
         self.assertEqual([op["type"] for op in self.operations()],
-                         ["source", "cast", "mutate", "mutate", "mutate",
+                         ["source", "mutate", "mutate", "mutate", "cast",
                           "summarize", "order_by", "order_by", "order_by"])
 
     def test_the_twelve_branches_all_survive_in_order(self):
@@ -1477,14 +1483,22 @@ class TestAnInlineGroupByExpression(unittest.TestCase):
             "MONTH(`tabQuality Action`.`custom_proposed_date`) "))
         self.assertEqual(len([op for op in operations if op["type"] == "mutate"]), 1)
 
-    def test_two_DIFFERENT_expressions_are_two_mutates(self):
+    def test_a_YEAR_beside_it_becomes_a_GRANULARITY_not_a_second_mutate(self):
+        """ADR-024: YEAR in a GROUP BY is the date column with
+        `granularity: "year"`, which stays chartable. MONTH cannot be, so it
+        keeps its mutate — the two live side by side."""
         operations = self.operations(self.SQL.replace(
             "GROUP BY MONTH(`tabQuality Action`.`custom_proposed_date`) ",
             "GROUP BY MONTH(`tabQuality Action`.`custom_proposed_date`), "
             "YEAR(`tabQuality Action`.`custom_proposed_date`) "))
         self.assertEqual(
-            sorted(op["new_name"] for op in operations if op["type"] == "mutate"),
-            ["month_of_custom_proposed_date", "year_of_custom_proposed_date"])
+            [op["new_name"] for op in operations if op["type"] == "mutate"],
+            ["month_of_custom_proposed_date"])
+        dimensions = [op for op in operations
+                      if op["type"] == "summarize"][0]["dimensions"]
+        self.assertIn({"dimension_name": "custom_proposed_date",
+                       "column_name": "custom_proposed_date",
+                       "data_type": "Date", "granularity": "year"}, dimensions)
 
     def test_the_grouping_and_the_ordering_both_name_it(self):
         operations = self.operations()

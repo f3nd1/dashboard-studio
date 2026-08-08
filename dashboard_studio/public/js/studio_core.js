@@ -31,10 +31,20 @@
         (op.data_type || "?");
     }
     if (op.type === "mutate") {
-      // The expression is a plain text math string over the measure names the
-      // summarize just defined, so it reads back as itself.
-      return (op.new_name || "?") + " = " +
-        ((op.expression || {}).expression || "?");
+      // A month-of-year, quarter-of-year or day-of-month value is a NUMBER, and
+      // Insights' chart X axis only offers date-compatible columns — so this
+      // grouping is correct and cannot be charted. Said out loud here so nobody
+      // reads an unchartable result as a converter fault. A YEAR grouping does
+      // not appear as a mutate at all: it is the date column with a
+      // granularity, which stays chartable.
+      //
+      // Otherwise the expression is a plain text math string over the measure
+      // names the summarize just defined, so it reads back as itself.
+      var text = (op.expression || {}).expression || "?";
+      return (op.new_name || "?") + " = " + text +
+        (/^(month|quarter|day)\(/.test(text)
+          ? " — a number, not a date, so it cannot be a chart's X axis in Insights"
+          : "");
     }
     if (op.type === "summarize") {
       var by = (op.dimensions || []).map(function (d) { return d.column_name; });

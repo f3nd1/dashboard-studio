@@ -171,3 +171,29 @@ assert.strictEqual(core.labelForOperation({ type: "summarize" }), "Summarise");
 assert.strictEqual(core.labelForOperation({ type: "order_by" }), "Sort");
 
 console.log("studio_core.test.js — proposal read-back assertions passed");
+
+// ---------------------------------------------------------------------------
+// The unchartable-dimension disclosure (ADR-024).
+//
+// MONTH/QUARTER/DAY keep the numeric mutate on purpose: month-of-year pools
+// every January and genuinely is not a date, so regrouping it to satisfy a
+// chart would answer a different question. It IS unchartable though, and that
+// is Insights' limit rather than a converter fault — so the read-back says so.
+// ---------------------------------------------------------------------------
+var monthly = core.describeOperation(
+  { type: "mutate", new_name: "month_of_d", expression: { expression: "month(d)" } });
+assert.ok(monthly.indexOf("cannot be a chart's X axis") !== -1, monthly);
+assert.ok(monthly.indexOf("month_of_d = month(d)") !== -1, monthly);
+["quarter(d)", "day(d)"].forEach(function (expression) {
+  assert.ok(core.describeOperation({ type: "mutate", new_name: "x",
+    expression: { expression: expression } }).indexOf("X axis") !== -1, expression);
+});
+// A YEAR grouping never appears as a mutate — it is a granularity — and any
+// other mutate reads back plainly, with no warning attached.
+["year(d)", "rating_1 * 5", "date_diff(a, b, 'day')", "(avg_of_a + avg_of_b) / 2"]
+  .forEach(function (expression) {
+    assert.strictEqual(core.describeOperation({ type: "mutate", new_name: "x",
+      expression: { expression: expression } }), "x = " + expression);
+  });
+
+console.log("studio_core.test.js — unchartable-dimension disclosure asserted");

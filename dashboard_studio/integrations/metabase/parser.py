@@ -812,14 +812,38 @@ def _clause_span(statement: str, keyword: str):
     return (match.start(1), match.end(1)) if match else None
 
 
-def lift_group_by_expressions(sql: str, aliases: dict | None = None):
-    """``(statement, computed)`` — name each GROUP BY expression, point at it.
+# YEAR() in a GROUP BY is a DIMENSION GRANULARITY, not a computed column.
+#
+# `Dimension` in `query.types.ts` carries `granularity?: GranularityType`, and
+# `ibis_utils.translate_dimension` applies it with `column.truncate("Y")` and
+# then casts the result back to the column's own date type. So the dimension
+# stays a Date and can be a chart's X axis, which a numeric year cannot: the
+# axis only offers date-compatible columns.
+#
+# It is only equivalent for YEAR. `truncate("Y")` partitions rows by calendar
+# year exactly as `YEAR()` does — same rows, same count, only the label differs.
+# `truncate("M")` groups month-WITHIN-year, while `MONTH()` pools every January
+# across every year: 12 rows against forty-odd. Those are different questions,
+# so MONTH, QUARTER and DAY keep the numeric mutate and stay unchartable. That
+# is Insights' limit — a month-of-year genuinely is not a date — and regrouping
+# to satisfy a chart would answer something nobody asked.
+_GRANULARITY_OF = {"YEAR": "year"}
 
-    Only expressions that appear in the GROUP BY are lifted, and each is then
-    rewritten in the SELECT list and the ORDER BY as well, so all three read the
-    same column. A WHERE is deliberately left alone: the mutate is emitted after
-    the filters, so a filter naming it would reference a column that does not
-    exist yet.
+
+def lift_group_by_expressions(sql: str, aliases: dict | None = None):
+    """``(statement, computed, granularities)`` — name each expression, point at it.
+
+    Expressions in the GROUP BY **and in the WHERE** are lifted, and each is
+    then rewritten in the SELECT list and the ORDER BY too, so every clause
+    reads the same column. The WHERE is included because `ibis_utils.py` applies
+    operations in list order and `apply_filter` filters the query *so far* — so
+    a filter naming a mutated column works, provided the mutate is emitted
+    first, which `sql_ops` now does.
+
+    A `YEAR()` in the GROUP BY comes back in `granularities` instead: the
+    grouping is the plain date column with `granularity: "year"`, which stays a
+    Date and can therefore be charted. A `YEAR()` in a WHERE still becomes a
+    mutate — a granularity is a property of a dimension, and a filter has none.
 
     The new name is `<function>_of_<column>` rather than whatever the SELECT
     list called it. Metabase names the item after the column it reads —
@@ -830,45 +854,86 @@ def lift_group_by_expressions(sql: str, aliases: dict | None = None):
     if not isinstance(sql, str):
         raise TypeError("sql must be a string")
     grouping = _clause_span(sql, r"\bGROUP\s+BY")
-    if not grouping:
-        return sql, []
+    where = _clause_span(sql, r"\bWHERE")
+    if not grouping and not where:
+        return sql, [], {}
     reasons: list[str] = []
-    computed, names = [], {}
-    for match in _INLINE_CALL.finditer(sql[grouping[0]:grouping[1]]):
-        _, column = _split_ref(match.group("arg"))
-        if not column:
-            continue
-        key = (match.group("name").upper(), column)
-        if key in names:
-            continue
-        alias = f"{match.group('name').lower()}_of_{column}"
-        built, _offending = _computed_column(match.group(0), alias,
-                                             aliases or {}, reasons)
-        # Not translatable: leave it exactly as it was. The GROUP BY reader
-        # then refuses it by name, with the message it has always had.
-        if not built:
-            continue
-        names[key] = alias
-        computed.append(built)
-    if not names:
-        return sql, []
+    computed, names, granularities = [], {}, {}
 
-    def rewrite(text: str) -> str:
+    def scan(span, as_granularity):
+        if not span:
+            return
+        for match in _INLINE_CALL.finditer(sql[span[0]:span[1]]):
+            _, column = _split_ref(match.group("arg"))
+            if not column:
+                continue
+            name = match.group("name").upper()
+            key = (name, column)
+            # The two routes are tracked SEPARATELY, and the same call may take
+            # both. `WHERE YEAR(d) = 2025 GROUP BY YEAR(d)` needs a granularity
+            # on the dimension AND a mutate for the filter to compare against;
+            # de-duplicating across both dropped the mutate and left the filter
+            # comparing the raw date column to 2025 — a query that converts,
+            # runs, and returns nothing. So each route de-duplicates against
+            # its own record, and the route is decided first.
+            granular = as_granularity and name in _GRANULARITY_OF
+            if key in (granularities if granular else names):
+                continue
+            # The grouping route: no mutate, no new column, just the date
+            # column carrying a granularity.
+            if granular:
+                granularities[key] = {"column": column,
+                                      "table": _resolve(match.group("arg").split(".")[0]
+                                                        .strip().strip("`"), aliases or {},
+                                                        reasons)
+                                      if "." in match.group("arg") else None,
+                                      "granularity": _GRANULARITY_OF[name]}
+                continue
+            alias = f"{match.group('name').lower()}_of_{column}"
+            built, _offending = _computed_column(match.group(0), alias,
+                                                 aliases or {}, reasons)
+            # Not translatable: leave it exactly as it was. The reader for that
+            # clause then refuses it by name, with the message it always had.
+            if not built:
+                continue
+            names[key] = alias
+            computed.append(built)
+
+    scan(grouping, True)
+    scan(where, False)
+    if not names and not granularities:
+        return sql, [], {}
+
+    def rewrite(text: str, as_granularity: bool) -> str:
         def one(match):
             _, column = _split_ref(match.group("arg"))
-            alias = names.get((match.group("name").upper(), column))
+            key = (match.group("name").upper(), column)
+            if as_granularity and key in granularities:
+                # `YEAR(`t`.`d`)` -> `` `d` ``. The grouping is the column
+                # itself; the granularity is what makes it a year, and `sql_ops`
+                # refuses if it cannot attach one.
+                return "`" + column + "`"
+            alias = names.get(key)
             return f"`{alias}`" if alias else match.group(0)
         return _INLINE_CALL.sub(one, text)
 
-    # The three regions that may name it, rebuilt back to front so the earlier
-    # spans keep their offsets.
-    spans = [span for span in (_clause_span(sql, r"\bSELECT"),
-                               _clause_span(sql, r"\bGROUP\s+BY"),
-                               _clause_span(sql, r"\bORDER\s+BY")) if span]
+    # Every region that may name it, rebuilt back to front so the earlier spans
+    # keep their offsets. The WHERE takes the mutate even where the GROUP BY
+    # took a granularity: a granularity is a property of a dimension, and a
+    # filter has none.
+    spans = [(span, region != "WHERE")
+             for span, region in ((_clause_span(sql, r"\bSELECT"), "SELECT"),
+                                  (_clause_span(sql, r"\bWHERE"), "WHERE"),
+                                  (_clause_span(sql, r"\bGROUP\s+BY"), "GROUP BY"),
+                                  (_clause_span(sql, r"\bORDER\s+BY"), "ORDER BY"))
+             if span]
     statement = sql
-    for start, end in sorted(spans, reverse=True):
-        statement = statement[:start] + rewrite(statement[start:end]) + statement[end:]
-    return statement, computed
+    for (start, end), as_granularity in sorted(spans, reverse=True):
+        statement = (statement[:start]
+                     + rewrite(statement[start:end], as_granularity)
+                     + statement[end:])
+    return statement, computed, {entry["column"]: entry["granularity"]
+                                 for entry in granularities.values()}
 
 
 def lift_renaming_wrapper(sql: str, aliases: dict | None = None):
@@ -1473,7 +1538,7 @@ def analyze_sql(sql: str) -> dict:
     reasons.extend(lift_reasons)
     # AFTER the wrapper rules: a wrapped query's expression is the wrapper's
     # business, and only what is left flat at this point is inline.
-    statement, inline = lift_group_by_expressions(statement, provisional)
+    statement, inline, granularities = lift_group_by_expressions(statement, provisional)
     computed = list(computed) + inline
 
     # Subquery / nested SELECT: more than one SELECT keyword.
@@ -1597,6 +1662,7 @@ def analyze_sql(sql: str) -> dict:
         "joins": joins,
         "order_by": order_by,
         "limit": limit,
+        "granularities": granularities,
     }
 
 
