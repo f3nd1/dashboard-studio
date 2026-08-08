@@ -2,6 +2,7 @@
 
     python scripts/bulk_dry_run.py path/to/exported_sql/
     python scripts/bulk_dry_run.py path/to/exported_sql/ --sole
+    python scripts/bulk_dry_run.py path/to/exported_sql/ --dedupe
 
 Under ``bench console`` there is no argv to pass, so set an environment
 variable — do NOT set a `directory` variable before exec(), which cannot work
@@ -10,6 +11,7 @@ because the function declares its own and shadows it:
     import os
     os.environ['DASHBOARD_STUDIO_SQL_DIR'] = '/full/path/to/exported_sql'
     os.environ['DASHBOARD_STUDIO_SOLE'] = '1'      # optional, see below
+    os.environ['DASHBOARD_STUDIO_DEDUPE'] = '1'    # optional, see below
     exec(open('apps/dashboard_studio/scripts/bulk_dry_run.py').read())
 
 ``--sole`` (or ``DASHBOARD_STUDIO_SOLE=1``) additionally lists every report
@@ -17,6 +19,17 @@ FILE each blocker is the sole blocker for. The "e.g." names in the main table
 are drawn from every report a blocker stops, and most of those have several
 blockers — so they are the wrong files to go and capture. The sole list is the
 right one: fix that blocker and exactly those files convert.
+
+``--dedupe`` (or ``DASHBOARD_STUDIO_DEDUPE=1``) prints a DISTINCT report count
+beside every raw one. This export names the same report several times over —
+"Academic Staff Performance - Objective 6" is four files: ``- delete--1808``,
+``- retain--2041``, ``- retain - Duplicate--2188`` and ``-Average- - retain -
+Duplicate--2156`` — so a blocker stopping 92 files may be stopping far fewer
+actual reports, and "92" is the wrong size to plan against.
+
+**It is a COUNTING mode and it drops nothing.** Every file is still read, still
+grouped and still listed; the raw count keeps its place first, because the file
+count is a fact and the base name is an inference from a naming convention.
 
 argv is read ONLY when this file is run as a script. `bench --site grc console`
 puts "grc" in sys.argv, and under the sites directory that IS a folder, so
@@ -59,6 +72,7 @@ def _dry_run():
     # import, and a blank line here breaks the piped-paste form.
     import os  # noqa: I001
     import pathlib
+    import re
     import sys
     # INSIDE the function on purpose — see the note above about bench console's
     # split namespaces. Edit this when running somewhere argv cannot be passed.
@@ -167,6 +181,11 @@ def _dry_run():
     sole_only = ("--sole" in sys.argv
                  and os.path.basename(sys.argv[0] or "") == script_name)
     sole_only = sole_only or os.environ.get("DASHBOARD_STUDIO_SOLE") not in (None, "", "0")
+    # Count the same report once however many times the export named it. See
+    # the module docstring: this DROPS NOTHING, it only counts a second way.
+    dedupe = ("--dedupe" in sys.argv
+              and os.path.basename(sys.argv[0] or "") == script_name)
+    dedupe = dedupe or os.environ.get("DASHBOARD_STUDIO_DEDUPE") not in (None, "", "0")
     chosen_from = ""
     if directory:
         chosen_from = "the `directory` variable inside this function"
@@ -200,9 +219,47 @@ def _dry_run():
     if not files:
         print(f"No .sql files under {folder.resolve()}   (from {chosen_from})")
         return
+    # The variant suffixes this export actually uses, lower-cased for matching.
+    # Exactly the observed ones and no more: a marker list that guesses would
+    # collapse two genuinely different reports into one and UNDERSTATE the size
+    # of the work, which is the same class of wrong answer as overstating it.
+    # `Test - ` is the one that appears at the FRONT.
+    # `-Average-` is listed WITHOUT its trailing dash: stripping the `- retain`
+    # after it takes that dash with it (`.strip(" -")` below), so a marker
+    # spelled `-average-` matches on its own and never in company — which is
+    # every real case, since it is always followed by something.
+    variant_suffixes = ("- delete", "- retain", "- duplicate", "-average")
+    variant_prefixes = ("test - ",)
+    def base_name(report):
+        """``(base, carries_a_variant_suffix)``. The trailing ``--NNNN`` is the
+        Metabase card id `metabase_export_sql.py` appends to every file, so
+        stripping it is not a variant and does not set the flag."""
+        text = re.sub(r"--\d+$", "", report).strip()
+        # A run of x's is a placeholder somebody typed; the observed one is
+        # seven, and no real report name contains four in a row. Removed
+        # wherever it sits, unlike the suffixes, which are stripped from the end.
+        found = bool(re.search(r"(?i)x{4,}", text))
+        text = re.sub(r"(?i)x{4,}", "", text).strip(" -").strip()
+        changed = True
+        while changed:
+            changed = False
+            for marker in variant_prefixes:
+                if text.lower().startswith(marker):
+                    text = text[len(marker):].strip(" -").strip()
+                    changed = found = True
+            for marker in variant_suffixes:
+                if text.lower().endswith(marker):
+                    text = text[:-len(marker)].strip(" -").strip()
+                    changed = found = True
+        # Never return nothing: a name that is entirely markers is still one
+        # report, and an empty key would merge every such file into one.
+        return (text or report), found
+    def distinct(reports):
+        return len({base_name(r)[0] for r in reports})
     clean, blocked, ungrouped = [], {}, {}
     unreadable_tables = {}
     per_report = {}
+    variant_named = set()
     for path in files:
         report = path.stem
         try:
@@ -230,6 +287,8 @@ def _dry_run():
         if not reasons:
             clean.append(report)
             continue
+        if base_name(report)[1]:
+            variant_named.add(report)
         found = set()
         for reason in reasons:
             label = next((name for text, name in groups if text in reason), None)
@@ -244,6 +303,20 @@ def _dry_run():
     print("=" * 78)
     print(f"{len(files)} report files under {folder.resolve()}")
     print(f"   directory came from {chosen_from}")
+    if dedupe:
+        stems = [p.stem for p in files]
+        refusing = [r for r in stems if r not in set(clean)]
+        print(f"   dedupe: {distinct(stems)} distinct reports across those "
+              f"{len(files)} files")
+        print(f"           {len(refusing)} refuse, and they are "
+              f"{distinct(refusing)} distinct reports")
+        print(f"           {len(variant_named)} of the {len(refusing)} refusing "
+              "files carry a variant")
+        print("           suffix at all — the rest are named once")
+        print("   Nothing was dropped. Every file below is still counted, still")
+        print("   grouped and still listed; this is a second way of counting the")
+        print("   same set, and the raw file count stays first because it is the")
+        print("   fact and the base name is read off a naming convention.")
     if typed:
         print(f"   {len(clean)} convert cleanly")
         print(f"   {len(files) - len(clean)} refuse")
@@ -272,6 +345,11 @@ def _dry_run():
         reports = sorted(set(blocked[label]))
         sole = [r for r in reports if per_report.get(r) == {label}]
         print(f"   {len(reports):>7}  {len(sole):>4}  {label}")
+        # On its own line rather than as two more columns: the labels already
+        # run wide, and a wrapped table is one nobody reads.
+        if dedupe:
+            print(f"                    distinct: {distinct(reports)} reports, "
+                  f"{distinct(sole)} sole")
         print(f"                    e.g. {', '.join(reports[:examples_per_group])}")
     if not blocked:
         print("   nothing — every report converted")
@@ -295,9 +373,21 @@ def _dry_run():
             if not sole:
                 continue
             print()
-            print(f"   {label}  ({len(sole)})")
+            if not dedupe:
+                print(f"   {label}  ({len(sole)})")
+                for name in sole:
+                    print(f"      {name}")
+                continue
+            # Same files, grouped under the report they are variants of, so the
+            # repetition is visible rather than something to count by eye.
+            print(f"   {label}  ({len(sole)} files, {distinct(sole)} reports)")
+            by_base = {}
             for name in sole:
-                print(f"      {name}")
+                by_base.setdefault(base_name(name)[0], []).append(name)
+            for base in sorted(by_base):
+                print(f"      {base}  ({len(by_base[base])})")
+                for name in sorted(by_base[base]):
+                    print(f"         {name}")
         if not any(per_report.get(r) == {label}
                    for label in blocked for r in set(blocked[label])):
             print()
@@ -306,6 +396,11 @@ def _dry_run():
         print()
         print("   Re-run with --sole (or set DASHBOARD_STUDIO_SOLE=1 under bench")
         print("   console) to list every file each blocker is the SOLE blocker for.")
+    if not dedupe and blocked:
+        print()
+        print("   Re-run with --dedupe (or DASHBOARD_STUDIO_DEDUPE=1) to count the")
+        print("   same report once however many times the export named it. Nothing")
+        print("   is dropped — the raw counts stay, a distinct count joins them.")
     if unreadable_tables:
         print()
         print("=" * 78)

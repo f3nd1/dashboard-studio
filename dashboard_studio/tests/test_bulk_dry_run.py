@@ -270,6 +270,107 @@ class TestGroupingByReason(_Base):
         self.assertIn("nothing — every report converted", text)
 
 
+class TestTheDedupeMode(_Base):
+    """One report exported four times is one report, and the raw count says four.
+
+    The export names the same report several ways, so a blocker stopping 92
+    FILES may be stopping a dozen reports. Both numbers are printed: the file
+    count is a fact, the base name is read off a naming convention.
+
+    Nothing is dropped, and that is asserted rather than described — a mode
+    that quietly filtered would report a smaller total and look like progress.
+    """
+
+    # The reported case, verbatim: four files, one report. The last one is the
+    # awkward member — `-Average-` sits before two more suffixes, and stripping
+    # those takes its trailing dash with them.
+    OBJECTIVE_6 = ["Academic Staff Performance - Objective 6 - delete--1808",
+                   "Academic Staff Performance - Objective 6 - retain--2041",
+                   "Academic Staff Performance - Objective 6 - retain - Duplicate--2188",
+                   "Academic Staff Performance - Objective 6 "
+                   "-Average- - retain - Duplicate--2156"]
+
+    def files(self, extra=()):
+        return {name: ORDER_COUNT for name in list(self.OBJECTIVE_6) + list(extra)}
+
+    def test_four_variants_of_one_report_count_as_one(self):
+        text = self.run_script(self.files(), argv=["<DIR>", "--dedupe"])
+        self.assertIn("4 report files under", text)
+        self.assertIn("dedupe: 1 distinct reports across those 4 files", text)
+
+    def test_the_blocker_line_carries_both_counts(self):
+        text = self.run_script(self.files(), argv=["<DIR>", "--dedupe"])
+        rows = [ln for ln in text.splitlines() if "ORDER BY an expression" in ln]
+        self.assertRegex(rows[0], r"^\s+4\s+4\s+ORDER BY an expression")
+        self.assertIn("distinct: 1 reports, 1 sole", text)
+
+    def test_the_card_id_alone_is_not_a_variant(self):
+        """Every file carries `--NNNN`; `metabase_export_sql.py` puts it there.
+        Counting that as a variant would report every report as one."""
+        text = self.run_script({"Plain Report--1902": ORDER_COUNT},
+                               argv=["<DIR>", "--dedupe"])
+        self.assertIn("0 of the 1 refusing files carry a variant", text)
+        self.assertIn("dedupe: 1 distinct reports across those 1 files", text)
+
+    def test_it_counts_how_many_refusing_files_carry_a_variant_at_all(self):
+        text = self.run_script(self.files(extra=["Plain Report--1902"]),
+                               argv=["<DIR>", "--dedupe"])
+        self.assertIn("4 of the 5 refusing files carry a variant", text)
+
+    def test_the_prefix_and_the_x_placeholder_are_variants_too(self):
+        text = self.run_script({"Test - Enrolment by Year--1900": ORDER_COUNT,
+                                "Enrolment by Year--1901": ORDER_COUNT,
+                                "Withdrawals xxxxxxx--1902": ORDER_COUNT,
+                                "Withdrawals--1903": ORDER_COUNT},
+                               argv=["<DIR>", "--dedupe"])
+        self.assertIn("dedupe: 2 distinct reports across those 4 files", text)
+
+    def test_two_DIFFERENT_reports_are_not_collapsed(self):
+        """The failure that would understate the work rather than overstate it.
+        Only the observed markers are stripped, so nothing else merges."""
+        text = self.run_script({"Objective 6--1": ORDER_COUNT,
+                                "Objective 7--2": ORDER_COUNT},
+                               argv=["<DIR>", "--dedupe"])
+        self.assertIn("dedupe: 2 distinct reports across those 2 files", text)
+
+    def test_it_DROPS_nothing(self):
+        """A counting mode, not a filter. Every file is still read, still
+        grouped, and still listed under --sole."""
+        text = self.run_script(self.files(), argv=["<DIR>", "--dedupe", "--sole"])
+        self.assertIn("4 report files under", text)
+        rows = [ln for ln in text.splitlines() if "ORDER BY an expression" in ln]
+        self.assertRegex(rows[0], r"^\s+4\s+4\s+")
+        for name in self.OBJECTIVE_6:
+            self.assertIn(name, text)
+
+    def test_the_sole_list_groups_the_files_under_the_report(self):
+        text = self.run_script(self.files(), argv=["<DIR>", "--dedupe", "--sole"])
+        section = text.split("Sole-blocker report files", 1)[1]
+        self.assertIn("ORDER BY an expression  (4 files, 1 reports)", section)
+        self.assertIn("Academic Staff Performance - Objective 6  (4)", section)
+
+    def test_without_the_flag_the_counts_are_unchanged_and_it_says_the_flag_exists(self):
+        text = self.run_script(self.files())
+        self.assertNotIn("distinct reports across", text)
+        self.assertNotIn("distinct: ", text)
+        rows = [ln for ln in text.splitlines() if "ORDER BY an expression" in ln]
+        self.assertRegex(rows[0], r"^\s+4\s+4\s+")
+        self.assertIn("--dedupe", text)
+
+    def test_the_environment_variable_turns_it_on_under_bench_console(self):
+        text = self.run_script(self.files(),
+                               raw_argv=TestItReadsTheDirectoryItWasGiven.BENCH_ARGV,
+                               extra_dirs=("grc",),
+                               env={"DASHBOARD_STUDIO_SQL_DIR": "<DIR>",
+                                    "DASHBOARD_STUDIO_DEDUPE": "1"})
+        self.assertIn("dedupe: 1 distinct reports", text)
+
+    def test_the_flag_is_not_read_as_the_directory(self):
+        text = self.run_script({"ordered": ORDER_COUNT}, argv=["--dedupe", "<DIR>"])
+        self.assertIn("1 report files under", text)
+        self.assertIn("dedupe: 1 distinct reports", text)
+
+
 class TestItDoesNotOverstateWhatItChecked(_Base):
     """A shape-only pass that reads as a verdict is worse than no pass."""
 
