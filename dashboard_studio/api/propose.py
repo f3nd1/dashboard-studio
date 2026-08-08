@@ -89,6 +89,55 @@ def llm_key_is_configured():
     return {"configured": bool(frappe.conf.get("llm_api_key"))}
 
 
+@frappe.whitelist()
+def propose_tables(question: str, api_key: str = None, model: str = None):
+    """Which DocTypes a question is about. **Proposes only; creates nothing.**
+
+    This step existed already and was INVISIBLE, which is how a question about
+    recruitment agents was answered from ERPNext's sales-commission tables:
+    every column existed, every type checked, and the referential validator had
+    nothing to object to. The choice of table is the one decision this
+    converter can never verify, so it is the one decision a person has to make.
+
+    Returns NAMES ONLY. No rationale from the model — a sentence explaining why
+    it picked a table would describe its intention, and it is the choice, not
+    the reasoning, that has to be checked. Same rule as the summary.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    question = (question or "").strip()
+    if not question:
+        frappe.throw("Type a question first.")
+    model = _model(model)
+    names = frappe.get_all("DocType", pluck="name")
+    return {"doctypes": doctypes_from_response(
+        _ask(pick_doctypes_request(question, names, model), api_key), names)}
+
+
+def _model(model: str = None):
+    """Request value, then site_config, then the module default."""
+    return (model or "").strip() or frappe.conf.get("llm_model") or None
+
+
+def _confirmed(doctypes) -> list[str]:
+    """The DocTypes the user settled on, each one real.
+
+    A name typed by hand that is not a DocType refuses here rather than
+    reaching `_table_columns`, where it would come back as a true message about
+    the wrong thing.
+    """
+    if isinstance(doctypes, str):
+        doctypes = [part.strip() for part in doctypes.replace("\n", ",").split(",")]
+    out = []
+    for name in doctypes or []:
+        name = str(name).strip()
+        if not name or name in out:
+            continue
+        if not frappe.db.exists("DocType", name):
+            frappe.throw(f"There is no DocType called '{name}' on this site.")
+        out.append(name)
+    return out
+
+
 def _ask(payload: dict, api_key: str = None) -> dict:
     """The one HTTP call in this app, and the only one that leaves the server.
 
@@ -152,13 +201,22 @@ def _referenced_names(operations) -> set:
     return names
 
 
-@frappe.whitelist()
-def propose_from_question(question: str, api_key: str = None, model: str = None):
-    """Propose an Insights setup for a question. **Creates nothing.**
+def _refused(reasons, doctypes, sql: str = "") -> dict:
+    """One shape for every refusal, so the reply keys cannot drift apart."""
+    return {"supported": False, "sql": sql, "doctypes": list(doctypes),
+            "operations": [], "reasons": list(reasons), "checked": [],
+            "not_checked": NOT_CHECKED, "multiplied": []}
 
-    Returns the SQL the model wrote, the operations it translated into, what the
-    validator verified, what it did not, and any join that multiplies rows. The
-    caller renders the summary from the operations.
+
+@frappe.whitelist()
+def propose_from_question(question: str, doctypes, api_key: str = None,
+                         model: str = None):
+    """Propose an Insights setup, over DocTypes the USER confirmed. Creates nothing.
+
+    `doctypes` is required and is the whole point: the tables are settled by a
+    person before a query is built, whether they came from `propose_tables` and
+    were confirmed, or were typed by hand. There is no path here that picks a
+    table on its own.
 
     `api_key`, when the page supplies one, is used for this request's outbound
     calls and then goes out of scope. It is never stored, logged or echoed.
@@ -169,45 +227,44 @@ def propose_from_question(question: str, api_key: str = None, model: str = None)
     question = (question or "").strip()
     if not question:
         frappe.throw("Type a question first.")
-
-    model = (model or "").strip() or frappe.conf.get("llm_model") or None
-    names = frappe.get_all("DocType", pluck="name")
-    chosen = doctypes_from_response(
-        _ask(pick_doctypes_request(question, names, model), api_key), names)
+    chosen = _confirmed(doctypes)
     if not chosen:
-        return {"supported": False, "sql": "", "operations": [],
-                "reasons": ["No table on this site looks like it answers that. "
-                            "Try naming the record type you mean."],
-                "checked": [], "not_checked": NOT_CHECKED, "multiplied": []}
+        frappe.throw("Choose at least one DocType before building a query.")
 
+    model = _model(model)
     columns = {doctype: _table_columns(doctype) for doctype in chosen}
     sql, refusal = sql_from_response(
         _ask(write_sql_request(question, columns, model), api_key))
     if refusal:
-        return {"supported": False, "sql": "", "operations": [], "reasons": [refusal],
-                "checked": [], "not_checked": NOT_CHECKED, "multiplied": []}
+        return _refused([refusal], chosen)
 
     analysis = analyze_sql(sql)
     if not analysis["supported"]:
-        return {"supported": False, "sql": sql, "operations": [],
-                "reasons": analysis["reasons"], "checked": [],
-                "not_checked": NOT_CHECKED, "multiplied": []}
+        return _refused(analysis["reasons"], chosen, sql)
 
-    # The DocTypes the SQL actually reads may not be the ones it was given —
-    # so they are typed from the query, exactly as the paste path does it.
-    columns = {doctype: _table_columns(doctype)
-               for doctype in (analysis.get("doctypes") or [])}
+    # The SQL may name a table it was never given. Before, this typed whatever
+    # the query mentioned — so a model that widened past the confirmed set was
+    # accepted, which is exactly the failure the confirm step exists to stop.
+    # Widening now refuses by name instead of being quietly honoured.
+    widened = [doctype for doctype in (analysis.get("doctypes") or [])
+               if doctype not in chosen]
+    if widened:
+        return _refused(
+            [f"the query reads {', '.join(sorted(widened))}, which "
+             f"{'is' if len(widened) == 1 else 'are'} not among the tables you "
+             f"chose ({', '.join(chosen)}). Add it above if you meant it."],
+            chosen, sql)
+
     result = operations_from_sql(analysis, columns)
     if not result["supported"]:
-        return {"supported": False, "sql": sql, "operations": [],
-                "reasons": result["reasons"], "checked": [],
-                "not_checked": NOT_CHECKED, "multiplied": []}
+        return _refused(result["reasons"], chosen, sql)
 
     children = {doctype for doctype in columns
                 if getattr(frappe.get_meta(doctype), "istable", 0)}
     return {
         "supported": True,
         "sql": sql,
+        "doctypes": chosen,
         "operations": result["operations"],
         "reasons": [],
         "checked": _checked(result["operations"], columns),

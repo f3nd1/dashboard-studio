@@ -880,6 +880,8 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
 
 /* Its own tab now, so it needs no box of its own — it is tab content like the
    question box and the textarea. */
+.dss-modes { display: flex; flex-direction: column; gap: 4px; margin-bottom: 9px; }
+.dss-mode { font-size: 12px; color: var(--dss-ink-700); cursor: pointer; }
 .dss-keyfield .dss-input { margin-top: 5px; }
 .dss-keyfield .dss-hint { margin-top: 6px; }
 

@@ -71,6 +71,7 @@ class TestEndpointsReachable(unittest.TestCase):
             "dashboard_studio.api.convert.convert_sql",
             "dashboard_studio.api.propose.propose_from_question",
             "dashboard_studio.api.propose.llm_key_is_configured",
+            "dashboard_studio.api.propose.propose_tables",
         }, "the front end's call sites changed — has the call shape changed too?")
 
     def test_every_method_the_browser_calls_is_whitelisted(self):

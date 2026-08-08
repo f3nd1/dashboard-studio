@@ -254,18 +254,72 @@ class TestTheModuleThatCreatesNothing(unittest.TestCase):
         checkable, `reasons` are this converter's own words. Adding a key
         holding the model's prose is what would let a summary describe its
         intention while the operations did something else — so it fails here."""
-        endpoint = [node for node in ast.walk(self.TREE)
-                    if isinstance(node, ast.FunctionDef)
-                    and node.name == "propose_from_question"]
-        self.assertEqual(len(endpoint), 1)
-        returns = [node for node in ast.walk(endpoint[0])
+        # Both the success shape and the shared refusal shape. `_refused` exists
+        # so every refusal returns one set of keys; walking only the endpoint
+        # would stop checking the moment a return moved into it.
+        wanted = {"propose_from_question", "_refused"}
+        endpoints = [node for node in ast.walk(self.TREE)
+                     if isinstance(node, ast.FunctionDef) and node.name in wanted]
+        self.assertEqual({n.name for n in endpoints}, wanted)
+        returns = [node for endpoint in endpoints
+                   for node in ast.walk(endpoint)
                    if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)]
         self.assertTrue(returns, "expected the endpoint to return dicts")
-        allowed = {"supported", "sql", "operations", "reasons", "checked",
-                   "not_checked", "multiplied"}
+        # `doctypes` is the tables the USER confirmed, echoed back so the page
+        # can show what the query was built over. Names, not prose.
+        allowed = {"supported", "sql", "doctypes", "operations", "reasons",
+                   "checked", "not_checked", "multiplied"}
         for node in returns:
             keys = {k.value for k in node.value.keys if isinstance(k, ast.Constant)}
             self.assertEqual(keys, allowed, f"unexpected reply keys: {keys ^ allowed}")
+
+    def test_the_endpoint_REQUIRES_the_tables_and_never_picks_them(self):
+        """The wrong-DocType failure in one assertion: there is no path through
+        `propose_from_question` that chooses a table. `doctypes` has no default,
+        so a caller cannot omit it, and the picking call lives in its own
+        read-only endpoint whose answer a person confirms."""
+        signatures = {node.name: node for node in ast.walk(self.TREE)
+                      if isinstance(node, ast.FunctionDef)}
+        args = signatures["propose_from_question"].args
+        required = args.args[:len(args.args) - len(args.defaults)]
+        self.assertEqual([a.arg for a in required], ["question", "doctypes"])
+        # And it does not call the picker itself. Scoped to this function's own
+        # body: the module DOES call it, from `propose_tables`, which is the
+        # point — the picking lives where a person confirms it.
+        own = [ast.unparse(n.func) for n in ast.walk(signatures["propose_from_question"])
+               if isinstance(n, ast.Call)]
+        self.assertNotIn("pick_doctypes_request", own)
+        self.assertNotIn("doctypes_from_response", own)
+
+    def test_the_picking_step_is_its_own_read_only_endpoint(self):
+        source = self.PATH.read_text()
+        self.assertIn("def propose_tables(", source)
+        picker = [node for node in ast.walk(self.TREE)
+                  if isinstance(node, ast.FunctionDef) and node.name == "propose_tables"]
+        self.assertEqual(len(picker), 1)
+        returns = [n for n in ast.walk(picker[0])
+                   if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)]
+        # Names only. A rationale from the model would describe its intention,
+        # and it is the choice that has to be checked.
+        self.assertEqual(
+            [{k.value for k in n.value.keys} for n in returns], [{"doctypes"}])
+
+    def test_widening_past_the_confirmed_tables_refuses_by_name(self):
+        """The server half, and the half that actually bites. Before this, the
+        columns were re-typed from whatever tables the SQL mentioned, so a model
+        that reached past the confirmed set was accepted."""
+        source = self.PATH.read_text()
+        self.assertIn("if doctype not in chosen", source)
+        self.assertIn("not among the tables you", source)
+        # And the columns are typed from the CONFIRMED set, never from whatever
+        # the SQL mentioned — that re-typing was the gap.
+        self.assertIn("columns = {doctype: _table_columns(doctype) for doctype in chosen}",
+                      source)
+        self.assertEqual(source.count("_table_columns(doctype)"), 1)
+
+    def test_a_doctype_that_does_not_exist_refuses_before_it_is_used(self):
+        source = self.PATH.read_text()
+        self.assertIn('frappe.db.exists("DocType", name)', source)
 
     def test_the_strip_states_what_it_did_NOT_check(self):
         """A strip that reports "checked" without saying what it did NOT check

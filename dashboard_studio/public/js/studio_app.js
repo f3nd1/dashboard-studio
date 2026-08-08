@@ -116,6 +116,14 @@
       // Same rules as the key: state only, gone on refresh, blank = default.
       model: "",
       siteHasKey: null,
+      // WHICH TABLES the question is about. The model used to decide this
+      // silently, which is how a question about recruitment agents was answered
+      // from ERPNext's sales-commission tables — every column real, every type
+      // right, nothing to object to. `tableMode` is the user's choice of who
+      // decides; `tables` is what they settled on, awaiting confirmation.
+      tableMode: "auto",
+      tables: "",
+      confirming: false,
     };
   }
 
@@ -175,7 +183,8 @@
     // the key, the title or the workbook. Somebody who clears a refusal is
     // usually about to try again with the same inputs, and wiping those would
     // make this a reset button wearing an X.
-    if (this.state.proposal || this.state.conversion || this.state.notice) {
+    if (this.state.proposal || this.state.conversion || this.state.notice
+        || this.state.confirming) {
       var clear = el("button", "dss-dismiss", "\u00d7");
       clear.type = "button";
       clear.title = "Clear this result";
@@ -184,6 +193,7 @@
         self.state.proposal = null;
         self.state.conversion = null;
         self.state.notice = "";
+        self.state.confirming = false;
         self.render();
       });
       out.appendChild(clear);
@@ -196,6 +206,8 @@
       notice.appendChild(el("div", "dss-saveresult-detail", this.state.notice));
       out.appendChild(notice);
     }
+    var confirm = this.buildTableConfirm();
+    if (confirm) out.appendChild(confirm);
     var proposal = this.buildProposal();
     if (proposal) out.appendChild(proposal);
     var result = this.buildConversionResult();
@@ -379,6 +391,41 @@
     box.addEventListener("input", function () { self.state.question = box.value; });
     wrap.appendChild(box);
 
+    // Automatic or manual, before anything is built. Neither hides the choice:
+    // automatic still shows what the model picked and waits.
+    var modes = el("div", "dss-modes");
+    [["auto", "Let the model suggest tables"],
+     ["manual", "I'll name the tables"]].forEach(function (pair) {
+      var id = "dss-mode-" + pair[0];
+      var label = el("label", "dss-mode");
+      var radio = el("input");
+      radio.type = "radio";
+      radio.name = "dss-tablemode";
+      radio.id = id;
+      radio.checked = self.state.tableMode === pair[0];
+      radio.addEventListener("change", function () {
+        self.state.tableMode = pair[0];
+        self.render();
+      });
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(" " + pair[1]));
+      modes.appendChild(label);
+    });
+    wrap.appendChild(modes);
+
+    if (this.state.tableMode === "manual") {
+      var tables = el("input", "dss-input");
+      tables.type = "text";
+      tables.placeholder = "DocTypes, comma separated — e.g. Agent";
+      tables.setAttribute("aria-label", "DocTypes to build the query over");
+      tables.value = this.state.tables || "";
+      tables.addEventListener("input", function () { self.state.tables = tables.value; });
+      wrap.appendChild(tables);
+      wrap.appendChild(el("p", "dss-hint",
+        "The query is built over these and nothing else. A question they cannot " +
+        "answer is refused rather than widened to another table."));
+    }
+
     var chips = el("div", "dss-chips");
     var typed = (this.state.question || "").trim();
     EXAMPLES.filter(function (text) {
@@ -404,10 +451,16 @@
       if (!question) { toast("Type a question first."); return; }
       go.disabled = true;
       go.textContent = "Thinking…";
-      self.propose(question).then(function () {
+      var done = function () {
         go.disabled = false;
         go.textContent = "Propose a setup";
-      });
+      };
+      // Manual: the tables are already settled, so go straight to the query.
+      // Automatic: ask which tables FIRST and stop, so the answer can be read
+      // and changed before a query exists to rubber-stamp.
+      (self.state.tableMode === "manual"
+        ? self.propose(question)
+        : self.proposeTables(question)).then(done, done);
     });
     wrap.appendChild(go);
     return wrap;
@@ -475,13 +528,80 @@
       });
   };
 
+  App.prototype.proposeTables = function (question) {
+    var self = this;
+    self.state.proposal = null;
+    self.state.conversion = null;
+    self.state.notice = "";
+    return dsCall({
+      method: "dashboard_studio.api.propose.propose_tables",
+      args: { question: question, api_key: this.state.apiKey || null,
+              model: this.state.model || null },
+    }).then(function (r) {
+      var names = (r.message || {}).doctypes || [];
+      self.state.tables = names.join(", ");
+      self.state.confirming = true;
+      if (!names.length) {
+        self.state.confirming = false;
+        self.state.notice = "No table on this site looks like it answers that. " +
+          "Name the record type yourself with \u201cI'll name the tables\u201d.";
+      }
+      self.render();
+    }).catch(function (err) {
+      self.state.notice = core.refusalMessage(err, "Could not suggest any tables.");
+      self.render();
+    });
+  };
+
+  // The confirm step. It sits in the output pane, BEFORE any query exists —
+  // a table confirmed underneath a finished-looking result gets rubber-stamped,
+  // which is the failure this whole step is for.
+  App.prototype.buildTableConfirm = function () {
+    if (!this.state.confirming) return null;
+    var self = this;
+    var box = el("div", "dss-saveresult");
+    var head = el("div", "dss-saveresult-title", "Tables to build over");
+    head.appendChild(el("span", "dss-badge", "Confirm first"));
+    box.appendChild(head);
+    box.appendChild(el("div", "dss-saveresult-detail",
+      "The model suggests these. Check them — this is the one choice nothing " +
+      "downstream can verify: a query over the wrong table returns real " +
+      "numbers about the wrong thing."));
+    var input = el("input", "dss-input");
+    input.type = "text";
+    input.setAttribute("aria-label", "DocTypes to build the query over");
+    input.value = this.state.tables || "";
+    input.addEventListener("input", function () { self.state.tables = input.value; });
+    box.appendChild(input);
+
+    var actions = el("div", "dss-insights-links");
+    var build = el("button", "dss-btn dss-btn-primary", "Build the query");
+    build.type = "button";
+    build.addEventListener("click", function () {
+      build.disabled = true;
+      self.state.confirming = false;
+      self.propose((self.state.question || "").trim());
+    });
+    actions.appendChild(build);
+    var cancel = el("button", "dss-btn", "Cancel");
+    cancel.type = "button";
+    cancel.addEventListener("click", function () {
+      self.state.confirming = false;
+      self.render();
+    });
+    actions.appendChild(cancel);
+    box.appendChild(actions);
+    return box;
+  };
+
   App.prototype.propose = function (question) {
     var self = this;
     return dsCall({
       method: "dashboard_studio.api.propose.propose_from_question",
       // Sent with this request and used for this request. The server passes it
       // to the outbound call and lets it go out of scope.
-      args: { question: question, api_key: this.state.apiKey || null,
+      args: { question: question, doctypes: this.state.tables || "",
+              api_key: this.state.apiKey || null,
               model: this.state.model || null },
     }).then(function (r) {
       self.state.notice = "";
