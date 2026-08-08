@@ -213,7 +213,11 @@ class TestTheModuleThatCreatesNothing(unittest.TestCase):
         checkable, `reasons` are this converter's own words. Adding a key
         holding the model's prose is what would let a summary describe its
         intention while the operations did something else — so it fails here."""
-        returns = [node for node in ast.walk(self.TREE)
+        endpoint = [node for node in ast.walk(self.TREE)
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "propose_from_question"]
+        self.assertEqual(len(endpoint), 1)
+        returns = [node for node in ast.walk(endpoint[0])
                    if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)]
         self.assertTrue(returns, "expected the endpoint to return dicts")
         allowed = {"supported", "sql", "operations", "reasons", "checked",
@@ -233,14 +237,43 @@ class TestTheModuleThatCreatesNothing(unittest.TestCase):
         self.assertIn("whether these are the columns you meant",
                       ast.literal_eval(assigned[0].value))
 
-    def test_the_key_is_read_from_site_config_and_never_echoed(self):
+    def test_the_key_is_read_from_the_request_then_site_config(self):
+        """A key typed into the page wins; the site's setting is the fallback."""
         source = self.PATH.read_text()
         self.assertIn('frappe.conf.get("llm_api_key")', source)
-        # No f-string or format anywhere puts the key into a message.
+        self.assertIn('(api_key or "").strip() or frappe.conf.get("llm_api_key")', source)
+
+    def test_NEITHER_key_can_reach_a_message(self):
+        """Covers the site key AND the one the request supplies. Both are bound
+        to names containing "key", and no f-string anywhere in the module may
+        mention one — a thrown message travels to the browser."""
+        bound = set()
+        for node in ast.walk(self.TREE):
+            if isinstance(node, ast.arg) and "key" in node.arg:
+                bound.add(node.arg)
+            if isinstance(node, ast.Name) and "key" in node.id:
+                bound.add(node.id)
+        # The guard is worthless if nothing is bound to a key-shaped name.
+        self.assertIn("api_key", bound)
+        self.assertIn("key", bound)
         for node in ast.walk(self.TREE):
             if isinstance(node, ast.JoinedStr):
                 text = ast.unparse(node)
-                self.assertNotIn("key", text, f"the key may reach a message: {text}")
+                for name in bound:
+                    self.assertNotIn(name, text,
+                                     f"the key may reach a message: {text}")
+
+    def test_the_configured_check_returns_a_boolean_and_nothing_else(self):
+        """It exists so the page can hide the field. It must never hand back the
+        key, part of it, or its length."""
+        for node in ast.walk(self.TREE):
+            if isinstance(node, ast.FunctionDef) and node.name == "llm_key_is_configured":
+                returns = [n for n in ast.walk(node) if isinstance(n, ast.Return)]
+                self.assertEqual(len(returns), 1)
+                self.assertEqual(ast.unparse(returns[0].value),
+                                 "{'configured': bool(frappe.conf.get('llm_api_key'))}")
+                return
+        self.fail("llm_key_is_configured is missing")
 
 
 if __name__ == "__main__":

@@ -99,6 +99,21 @@
       // never sit on screen next to a query it did not produce.
       question: "",
       proposal: null,
+      // Which input is showing. Switching it never touches the output — a
+      // result stays put until something replaces it.
+      tab: "ask",
+      // Whatever the last action produced, when it is not a proposal or a
+      // created query: a refusal, or "working on it". ONE output region means
+      // one place this can be shown.
+      notice: "",
+      // The API key, if the site has none and the user pasted one.
+      //
+      // A plain property on this object, which lives as long as the page does.
+      // NOT localStorage, NOT sessionStorage, NOT a cookie, NOT a record — a
+      // refresh loses it, and the label says so. It is sent with the propose
+      // request and nowhere else.
+      apiKey: "",
+      siteHasKey: null,
     };
   }
 
@@ -112,25 +127,52 @@
     var card = el("section", "dss-vizstep");
     var body = el("div", "dss-vizstep-body");
 
-    // The two ways in, side by side rather than stacked. Neither is the
-    // primary one, and stacking them read as "ask, and if that fails, paste".
+    // Two panes: the input on the left, the ONE output region on the right.
+    //
+    // Side by side, the two inputs each grew their own result surface — a SQL
+    // refusal appeared above its textarea while the shared panel below showed
+    // the other path's state, and neither was tied to the button just pressed.
+    // Tabs mean one input is visible at a time and there is one place to look.
     var paths = el("div", "dss-paths");
 
-    var ask = el("div", "dss-path");
-    ask.appendChild(el("h2", "dss-path-head", "Ask a question"));
-    ask.appendChild(this.buildQuestionBox());
-    paths.appendChild(ask);
+    var left = el("div", "dss-path");
+    var tabs = el("div", "dss-tabs");
+    var self = this;
+    [["ask", "Ask a question"], ["sql", "Paste SQL"]].forEach(function (pair) {
+      var tab = el("button", "dss-tab" + (self.state.tab === pair[0] ? " is-on" : ""),
+                   pair[1]);
+      tab.type = "button";
+      tab.setAttribute("aria-selected", self.state.tab === pair[0] ? "true" : "false");
+      tab.addEventListener("click", function () {
+        // Only the input changes. The output is left exactly as it was.
+        self.state.tab = pair[0];
+        self.render();
+      });
+      tabs.appendChild(tab);
+    });
+    left.appendChild(tabs);
+    if (this.state.tab === "sql") {
+      left.appendChild(this.buildSqlInput());
+    } else {
+      // A SIBLING of the question box, not a child: nested, every "the input
+      // inside the question box" selector resolved to the key field instead,
+      // which is a trap for anything reading this page later.
+      left.appendChild(this.buildKeyField());
+      left.appendChild(this.buildQuestionBox());
+    }
+    paths.appendChild(left);
 
-    var paste = el("div", "dss-path");
-    paste.appendChild(el("h2", "dss-path-head", "Or paste the SQL"));
-    paste.appendChild(this.buildSqlInput());
-    paths.appendChild(paste);
-    body.appendChild(paths);
-
-    // Everything that describes the OUTPUT, below both actions that produce
-    // it. Title and workbook used to sit under both buttons that consume them,
-    // so the query was named after it had already been created.
+    // The one output region. Every result from either tab lands here and
+    // nowhere else, with the fields that describe it underneath.
     var out = el("div", "dss-output");
+    if (this.state.notice) {
+      // Wrapped in -detail so a refusal is set in the same type as every other
+      // result. Rendered bare it came out at body size and read as a different
+      // kind of thing from the refusals inside a proposal card.
+      var notice = el("div", "dss-saveresult is-bad");
+      notice.appendChild(el("div", "dss-saveresult-detail", this.state.notice));
+      out.appendChild(notice);
+    }
     var proposal = this.buildProposal();
     if (proposal) out.appendChild(proposal);
     var result = this.buildConversionResult();
@@ -139,7 +181,8 @@
     fields.appendChild(this.buildTitleField());
     fields.appendChild(this.buildWorkbookPicker());
     out.appendChild(fields);
-    body.appendChild(out);
+    paths.appendChild(out);
+    body.appendChild(paths);
 
     card.appendChild(body);
     wrap.appendChild(card);
@@ -266,12 +309,19 @@
 
     go.addEventListener("click", function () {
       var sql = (box.value || "").trim();
-      if (!sql) { note.textContent = "Paste a query first."; return; }
-      if (!hasFrappe()) { note.textContent = "Converting needs the server."; return; }
-      note.textContent = "Translating that query…";
-      go.disabled = true;
-      var done = function () { go.disabled = false; };
-      self.convertSql(sql, note).then(done, done);
+      // Every one of these lands in the OUTPUT region. The helper line above
+      // the textarea used to double as the refusal surface, which put a long
+      // refusal in a narrow column where it read as cropped, next to a shared
+      // panel showing the other tab's state.
+      if (!sql) { self.state.notice = "Paste a query first."; self.render(); return; }
+      if (!hasFrappe()) {
+        self.state.notice = "Converting needs the server."; self.render(); return;
+      }
+      self.state.proposal = null;
+      self.state.conversion = null;
+      self.state.notice = "Translating that query…";
+      self.render();
+      self.convertSql(sql);
     });
     return wrap;
   };
@@ -296,7 +346,9 @@
     // its aria-label, so nothing is lost to a screen reader.
     var box = el("input", "dss-input");
     box.type = "text";
-    box.placeholder = "Ask in plain English, or press an example below";
+    // Short enough not to clip in the tab pane, which is narrower than the
+    // column this used to sit in. The chips below it are the examples.
+    box.placeholder = "Ask in plain English…";
     box.value = this.state.question || "";
     box.setAttribute("aria-label", "Ask a question");
     // Updated WITHOUT re-rendering — a re-render per keystroke replaces the
@@ -338,12 +390,68 @@
     return wrap;
   };
 
+  // The API key, when the SITE has none.
+  //
+  // It lives in `this.state.apiKey` — a property of a JS object, for as long as
+  // the page is open. It is NOT written to localStorage, sessionStorage, a
+  // cookie, a record or a file by any path, and a refresh loses it. The label
+  // says exactly that, because a password box that silently persisted would be
+  // the worst version of this.
+  //
+  // Hidden entirely when site_config already carries a key: a field that must
+  // not be filled in is noise.
+  App.prototype.buildKeyField = function () {
+    var self = this;
+    var wrap = el("div", "dss-keyfield");
+    if (this.state.siteHasKey === null) {
+      this.loadKeyState();
+      return wrap;
+    }
+    if (this.state.siteHasKey) return wrap;
+    wrap.appendChild(el("label", "dss-field-label", "API key (this session only)"));
+    var input = el("input", "dss-input");
+    input.type = "password";
+    input.autocomplete = "off";
+    input.placeholder = "Paste a key to use the question box";
+    input.setAttribute("aria-label", "API key, kept for this browser session only");
+    input.value = this.state.apiKey || "";
+    // No re-render on input: it would replace the box mid-type and take the
+    // caret with it, which this app has fixed twice already.
+    input.addEventListener("input", function () { self.state.apiKey = input.value; });
+    wrap.appendChild(input);
+    wrap.appendChild(el("p", "dss-hint",
+      "Kept in this page only — never saved, and gone when you refresh. " +
+      "Set `llm_api_key` in site_config.json to stop being asked."));
+    return wrap;
+  };
+
+  App.prototype.loadKeyState = function () {
+    var self = this;
+    if (this._keyLoading || !hasFrappe()) { return; }
+    this._keyLoading = true;
+    dsCall({ method: "dashboard_studio.api.propose.llm_key_is_configured" })
+      .then(function (r) {
+        self.state.siteHasKey = !!((r.message || {}).configured);
+        self._keyLoading = false;
+        self.render();
+      }).catch(function () {
+        // Cannot tell: show the field. Offering it needlessly is a smaller
+        // fault than hiding the only way to use the tab.
+        self.state.siteHasKey = false;
+        self._keyLoading = false;
+        self.render();
+      });
+  };
+
   App.prototype.propose = function (question) {
     var self = this;
     return dsCall({
       method: "dashboard_studio.api.propose.propose_from_question",
-      args: { question: question },
+      // Sent with this request and used for this request. The server passes it
+      // to the outbound call and lets it go out of scope.
+      args: { question: question, api_key: this.state.apiKey || null },
     }).then(function (r) {
+      self.state.notice = "";
       self.state.proposal = r.message || null;
       self.state.conversion = null;
       self.render();
@@ -424,11 +532,7 @@
     create.type = "button";
     create.addEventListener("click", function () {
       create.disabled = true;
-      var note = el("div", "dss-hint");
-      box.appendChild(note);
-      self.convertSql(proposal.sql, note).then(function () {
-        create.disabled = false;
-      });
+      self.convertSql(proposal.sql);
     });
     actions.appendChild(create);
 
@@ -453,7 +557,10 @@
     return box;
   };
 
-  App.prototype.convertSql = function (sql, note) {
+  // Always reports through state, so there is exactly one place a result can
+  // appear. The refusal TEXT is the server's own, unchanged — only where it
+  // renders has moved.
+  App.prototype.convertSql = function (sql) {
     var self = this;
     return dsCall({
       method: "dashboard_studio.api.convert.convert_sql",
@@ -462,14 +569,18 @@
     }).then(function (r) {
       var made = r.message;
       if (!made || !made.name) {
-        note.textContent = "The server reported no query. Nothing was created.";
+        self.state.notice = "The server reported no query. Nothing was created.";
+        self.render();
         return null;
       }
+      self.state.notice = "";
+      self.state.proposal = null;
       self.state.conversion = made;
       self.render();
       return made;
     }).catch(function (err) {
-      note.textContent = core.refusalMessage(err, "Could not convert that query.");
+      self.state.notice = core.refusalMessage(err, "Could not convert that query.");
+      self.render();
     });
   };
 

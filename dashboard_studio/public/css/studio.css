@@ -454,8 +454,8 @@ textarea.dss-sqlbox { min-height: 190px; font-family: ui-monospace, SFMono-Regul
 /* Above the textarea now, so the spacing goes under it rather than over. */
 .dss-vizimport-note { margin: 0 0 8px; font-size: 11px; line-height: 1.5;
   color: var(--dss-muted); }
-/* The two paths are columns, so the SQL half no longer needs the dashed rule
-   that separated it from what used to sit below it. */
+/* Inside the tab pane the SQL box needs no dashed rule under it — nothing
+   follows it there any more. */
 .dss-paths .dss-vizimport { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
 
 .dss-field { margin-bottom: 15px; }
@@ -852,17 +852,37 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
  * in the DOM at every width: collapsing to one column stacks them, it never
  * hides one. A path you cannot reach on a laptop is a path that does not exist.
  */
-.dss-paths { display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+.dss-paths { display: grid; grid-template-columns: 1fr 2fr; gap: 18px;
   align-items: start; }
 @media (max-width: 900px) { .dss-paths { grid-template-columns: 1fr; } }
 .dss-path { min-width: 0; }
-.dss-path-head { margin: 0 0 9px; font-size: 11px; font-weight: 800;
-  letter-spacing: .06em; text-transform: uppercase; color: var(--dss-muted); }
 
-/* Everything about the OUTPUT, below both actions that produce it. */
-.dss-output { margin-top: 16px; padding-top: 15px;
-  border-top: 1px dashed var(--dss-line); }
+/* Two buttons and a class toggle. No library, and no ARIA tablist plumbing for
+   two controls that each just re-render the pane beside them. */
+.dss-tabs { display: flex; gap: 4px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--dss-line); }
+.dss-tab {
+  padding: 7px 11px; font-size: 12px; font-weight: 700; cursor: pointer;
+  border: 0; background: none; color: var(--dss-muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.dss-tab:hover { color: var(--dss-ink-700); }
+.dss-tab.is-on { color: var(--dss-ink); border-bottom-color: var(--dss-ink); }
+
+.dss-keyfield { margin-bottom: 13px; }
+.dss-keyfield .dss-hint { margin-top: 5px; }
+
+/* The ONE output region. Beside the input on a wide screen, under it on a
+   narrow one — never a second surface inside the input pane, which is what put
+   a long SQL refusal in a narrow column where it read as cropped. */
+.dss-output { min-width: 0; }
+@media (max-width: 900px) {
+  .dss-output { margin-top: 16px; padding-top: 15px;
+    border-top: 1px dashed var(--dss-line); }
+}
 .dss-output-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
   margin-top: 13px; }
+/* A refusal is prose, so it wraps rather than being clipped or scrolled. */
+.dss-saveresult, .dss-saveresult-detail { overflow-wrap: anywhere; }
 @media (max-width: 900px) { .dss-output-fields { grid-template-columns: 1fr; } }
 .dss-output-fields .dss-field { margin-bottom: 0; }

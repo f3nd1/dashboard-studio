@@ -57,24 +57,40 @@ NOT_CHECKED = (
 )
 
 
-def _api_key() -> str:
-    """From site_config, server-side, and never repeated back.
+def _api_key(api_key: str = None) -> str:
+    """The request's key first, then site_config. Never repeated back.
 
-    Same handling as the Metabase key: per-site, outside the repo, read here and
-    nowhere else. The failure message names the setting, never the value — a
+    A key typed into the page is used for THAT call and nothing else: it is not
+    written to a record, a file, a log or a cache, and it does not outlive the
+    request. Falling back to `llm_api_key` in site_config keeps the arrangement
+    a site can already have — same handling as the Metabase key.
+
+    The failure message names the field and the setting, never the value: a
     thrown message travels to the browser in `_server_messages`.
     """
-    key = frappe.conf.get("llm_api_key")
+    key = (api_key or "").strip() or frappe.conf.get("llm_api_key")
     if not key:
         frappe.throw(
-            "No LLM API key is configured on this site. Set `llm_api_key` in "
-            "site_config.json to use the question box. Pasting SQL does not "
-            "need it."
+            "No LLM API key. Paste one into the key field on the Ask a question "
+            "tab — it is kept in the page for this browser session only and is "
+            "never saved — or set `llm_api_key` in site_config.json for the "
+            "whole site. Pasting SQL does not need a key."
         )
     return key
 
 
-def _ask(payload: dict) -> dict:
+@frappe.whitelist()
+def llm_key_is_configured():
+    """Whether the SITE has a key, so the page can hide the field when it does.
+
+    Returns a boolean and nothing else. It must never return the key, or any
+    part of it, or its length.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    return {"configured": bool(frappe.conf.get("llm_api_key"))}
+
+
+def _ask(payload: dict, api_key: str = None) -> dict:
     """The one HTTP call in this app, and the only one that leaves the server.
 
     Structural, in the shape `metabase_export_sql.py` uses: exactly one
@@ -87,7 +103,7 @@ def _ask(payload: dict) -> dict:
         frappe.throw("Refusing to call anything but the messages endpoint.")
     response = requests.post(
         API_URL,
-        headers={"x-api-key": _api_key(), "anthropic-version": API_VERSION,
+        headers={"x-api-key": _api_key(api_key), "anthropic-version": API_VERSION,
                  "content-type": "application/json"},
         json=payload,
         timeout=60,
@@ -138,12 +154,15 @@ def _referenced_names(operations) -> set:
 
 
 @frappe.whitelist()
-def propose_from_question(question: str):
+def propose_from_question(question: str, api_key: str = None):
     """Propose an Insights setup for a question. **Creates nothing.**
 
     Returns the SQL the model wrote, the operations it translated into, what the
     validator verified, what it did not, and any join that multiplies rows. The
     caller renders the summary from the operations.
+
+    `api_key`, when the page supplies one, is used for this request's outbound
+    calls and then goes out of scope. It is never stored, logged or echoed.
     """
     frappe.only_for(DS_WRITE_ROLES)
     question = (question or "").strip()
@@ -151,7 +170,8 @@ def propose_from_question(question: str):
         frappe.throw("Type a question first.")
 
     names = frappe.get_all("DocType", pluck="name")
-    chosen = doctypes_from_response(_ask(pick_doctypes_request(question, names)), names)
+    chosen = doctypes_from_response(
+        _ask(pick_doctypes_request(question, names), api_key), names)
     if not chosen:
         return {"supported": False, "sql": "", "operations": [],
                 "reasons": ["No table on this site looks like it answers that. "
@@ -159,7 +179,8 @@ def propose_from_question(question: str):
                 "checked": [], "not_checked": NOT_CHECKED, "multiplied": []}
 
     columns = {doctype: _table_columns(doctype) for doctype in chosen}
-    sql, refusal = sql_from_response(_ask(write_sql_request(question, columns)))
+    sql, refusal = sql_from_response(
+        _ask(write_sql_request(question, columns), api_key))
     if refusal:
         return {"supported": False, "sql": "", "operations": [], "reasons": [refusal],
                 "checked": [], "not_checked": NOT_CHECKED, "multiplied": []}
