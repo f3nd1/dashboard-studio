@@ -169,6 +169,23 @@
     // The one output region. Every result from either tab lands here and
     // nowhere else, with the fields that describe it underneath.
     var out = el("div", "dss-output");
+    // Dismiss. Clears the RESULT and nothing else — not the question, the SQL,
+    // the key, the title or the workbook. Somebody who clears a refusal is
+    // usually about to try again with the same inputs, and wiping those would
+    // make this a reset button wearing an X.
+    if (this.state.proposal || this.state.conversion || this.state.notice) {
+      var clear = el("button", "dss-dismiss", "\u00d7");
+      clear.type = "button";
+      clear.title = "Clear this result";
+      clear.setAttribute("aria-label", "Clear this result");
+      clear.addEventListener("click", function () {
+        self.state.proposal = null;
+        self.state.conversion = null;
+        self.state.notice = "";
+        self.render();
+      });
+      out.appendChild(clear);
+    }
     if (this.state.notice) {
       // Wrapped in -detail so a refusal is set in the same type as every other
       // result. Rendered bare it came out at body size and read as a different

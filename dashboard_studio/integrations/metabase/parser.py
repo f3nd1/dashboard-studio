@@ -767,6 +767,99 @@ def _computed_column(text: str, alias: str, aliases: dict, reasons: list):
     return None, name
 
 
+# --------------------------------------------------------------------------
+# An inline GROUP BY expression, lifted into a named column
+#
+# Metabase compiles the same question two ways. Wrapped, the expression is a
+# named column inside a subquery and the outer query groups by that name —
+# `lift_renaming_wrapper` handles that one. FLAT, the function sits inline in
+# the SELECT list, the GROUP BY and the ORDER BY at once:
+#
+#   SELECT MONTH(`t`.`d`) AS `d`, AVG(...) FROM `tabT`
+#   GROUP BY MONTH(`t`.`d`) ORDER BY MONTH(`t`.`d`) ASC
+#
+# Three refusals, one cause. Naming the expression once and pointing all three
+# at that name turns it into the shape this converter already emits: a mutate,
+# then a summarize grouping by it, then an order_by on it.
+#
+# **Position, not vocabulary.** Only a call `_computed_column` already accepts
+# is lifted, so the allowlist is untouched — DAYOFWEEK and WEEK refuse here for
+# exactly the reasons they refuse anywhere else, by name.
+# --------------------------------------------------------------------------
+
+# One call over one qualified-or-quoted column. Deliberately NOT anchored: it
+# has to find the same expression wherever it appears.
+_INLINE_CALL = re.compile(
+    r"\b(?P<name>[A-Za-z_]\w*)\s*\(\s*"
+    r"(?P<arg>(?:`[^`]+`|\b[A-Za-z_]\w*)\s*\.\s*`[^`]+`|`[^`]+`)\s*\)")
+
+
+def _clause_span(statement: str, keyword: str):
+    """``(start, end)`` of one clause's body, or None."""
+    match = re.search(keyword + r"\b(.+?)(?=\bGROUP\s+BY\b|\bORDER\s+BY\b"
+                      r"|\bLIMIT\b|$)", statement, re.IGNORECASE | re.DOTALL)
+    return (match.start(1), match.end(1)) if match else None
+
+
+def lift_group_by_expressions(sql: str, aliases: dict | None = None):
+    """``(statement, computed)`` — name each GROUP BY expression, point at it.
+
+    Only expressions that appear in the GROUP BY are lifted, and each is then
+    rewritten in the SELECT list and the ORDER BY as well, so all three read the
+    same column. A WHERE is deliberately left alone: the mutate is emitted after
+    the filters, so a filter naming it would reference a column that does not
+    exist yet.
+
+    The new name is `<function>_of_<column>` rather than whatever the SELECT
+    list called it. Metabase names the item after the column it reads —
+    `MONTH(`t`.`d`) AS `d`` — and a mutate creating `d` from `d` is either
+    self-referential or shadows the source. The generated name cannot collide
+    with the column it reads; `sql_ops` refuses if it collides with any other.
+    """
+    if not isinstance(sql, str):
+        raise TypeError("sql must be a string")
+    grouping = _clause_span(sql, r"\bGROUP\s+BY")
+    if not grouping:
+        return sql, []
+    reasons: list[str] = []
+    computed, names = [], {}
+    for match in _INLINE_CALL.finditer(sql[grouping[0]:grouping[1]]):
+        _, column = _split_ref(match.group("arg"))
+        if not column:
+            continue
+        key = (match.group("name").upper(), column)
+        if key in names:
+            continue
+        alias = f"{match.group('name').lower()}_of_{column}"
+        built, _offending = _computed_column(match.group(0), alias,
+                                             aliases or {}, reasons)
+        # Not translatable: leave it exactly as it was. The GROUP BY reader
+        # then refuses it by name, with the message it has always had.
+        if not built:
+            continue
+        names[key] = alias
+        computed.append(built)
+    if not names:
+        return sql, []
+
+    def rewrite(text: str) -> str:
+        def one(match):
+            _, column = _split_ref(match.group("arg"))
+            alias = names.get((match.group("name").upper(), column))
+            return f"`{alias}`" if alias else match.group(0)
+        return _INLINE_CALL.sub(one, text)
+
+    # The three regions that may name it, rebuilt back to front so the earlier
+    # spans keep their offsets.
+    spans = [span for span in (_clause_span(sql, r"\bSELECT"),
+                               _clause_span(sql, r"\bGROUP\s+BY"),
+                               _clause_span(sql, r"\bORDER\s+BY")) if span]
+    statement = sql
+    for start, end in sorted(spans, reverse=True):
+        statement = statement[:start] + rewrite(statement[start:end]) + statement[end:]
+    return statement, computed
+
+
 def lift_renaming_wrapper(sql: str, aliases: dict | None = None):
     """Fold a renaming wrapper into the query it wraps.
 
@@ -1352,6 +1445,10 @@ def analyze_sql(sql: str) -> dict:
                            list(_JOIN_TABLE.finditer(flattened)))
     statement, lift_reasons, computed = lift_renaming_wrapper(flattened, provisional)
     reasons.extend(lift_reasons)
+    # AFTER the wrapper rules: a wrapped query's expression is the wrapper's
+    # business, and only what is left flat at this point is inline.
+    statement, inline = lift_group_by_expressions(statement, provisional)
+    computed = list(computed) + inline
 
     # Subquery / nested SELECT: more than one SELECT keyword.
     subquery = len(re.findall(r"\bSELECT\b", statement, re.IGNORECASE)) > 1

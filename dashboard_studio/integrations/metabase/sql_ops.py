@@ -449,6 +449,17 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                        "A difference between things that are not dates is not a "
                        "count of days")
                 )
+        if str(entry["alias"]) in available and entry["alias"] not in entry["columns"]:
+            # A generated name landing on a real column would have the mutate
+            # and the table both claiming it. `<function>_of_<column>` cannot
+            # collide with the column it reads, but nothing stops a table
+            # having a column of that name already.
+            reasons.append(
+                f"the computed column '{entry['alias']}' has the same name as a "
+                "real column of a table this query reads, so the two cannot be "
+                "told apart"
+            )
+            continue
         if entry.get("data_type") is None:
             # Decimal rather than the column's own type: a scale factor may
             # divide, and a Decimal groups and aggregates the same values.

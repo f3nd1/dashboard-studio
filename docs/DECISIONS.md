@@ -381,6 +381,22 @@ Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN
 
 **Not verified live.** The HTTP call is injected and unit-tested against fakes; there is no network route or Bench here. Nobody has yet run a real question against a real site — that is the user's step, and the first thing to watch is whether the model's SQL lands inside the supported subset often enough to be worth the round trip.
 
+## ADR-022 — Lift an inline GROUP BY expression into a named column
+
+**Decision.** `GROUP BY MONTH(`t`.`d`)` in a FLAT query becomes a `mutate` named `month_of_d`, with the SELECT list, the GROUP BY and the ORDER BY all rewritten to that name. Nothing is added to the function allowlist.
+
+**Why it is a different shape from the one already solved.** Wrapped, Metabase names the expression inside a subquery and the outer query groups by that name — ADR-012, `lift_renaming_wrapper`. Flat, the same function appears inline in three clauses at once, and the converter produced three refusals for one cause: an unreadable ORDER BY, a GROUP BY that is not a plain column, and a SELECT item with no aggregate in it.
+
+**One expression, one mutate.** Only the GROUP BY is scanned; each expression found there is then rewritten wherever it appears in the SELECT list and the ORDER BY. Two mutates would be two columns holding the same number with the summarize grouping by one of them. A repeat within one GROUP BY collapses too, and that has its own test — the first version of it passed for a structural reason rather than because the guard worked, which the mutation run caught.
+
+**A WHERE is deliberately not rewritten.** The mutate is emitted after the filters, so a filter naming it would reference a column that does not exist yet. Left alone, such a WHERE refuses with the message it always had.
+
+**The generated name is not Metabase's.** It writes `MONTH(`d`) AS `d`` — naming the result after the column it reads. A mutate creating `d` from `d` either reads itself or shadows the source, so the name is `<function>_of_<column>`, which cannot collide with the column it reads. `sql_ops` refuses when it collides with any other real column. The output column is therefore named differently from the original report; renaming output columns is already what the wrapper lift does.
+
+**Position, not vocabulary.** Only calls `_computed_column` already accepts are lifted. `DAYOFWEEK` (0 = Monday against MySQL's 1 = Sunday), `WEEK` and anything else refuse by name, unchanged, and a test asserts it.
+
+**The reported query still refuses, on something else.** `AVG(CAST(col AS double))` alongside a second aggregate reads as an expression-over-aggregates rather than a plain aggregate, so the two collide as "two questions in one query". That reproduces with none of this code and is ADR-009's problem in a different spelling: the column is text and the CAST is doing real work, so dropping it under ADR-017 would turn a working report into a refusal rather than fixing it. Not built — it needs the cast-operation path, which is its own decision.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

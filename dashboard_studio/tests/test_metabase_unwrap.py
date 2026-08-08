@@ -1431,6 +1431,106 @@ class TestWhatACaseRefuses(unittest.TestCase):
         self.assertIn("not a column or a date part", " | ".join(result["reasons"]))
 
 
+class TestAnInlineGroupByExpression(unittest.TestCase):
+    """The FLAT shape, as against the wrapped one `lift_renaming_wrapper` takes.
+
+    Metabase compiles the same question both ways. Wrapped, the expression is a
+    named column in a subquery. Flat, the function sits inline in the SELECT
+    list, the GROUP BY and the ORDER BY at once — three refusals with one cause.
+
+    Position, not vocabulary: only calls `_computed_column` already accepts are
+    lifted, so the allowlist is exactly what it was.
+    """
+
+    COLUMNS = {"Quality Action": {"name": "String", "custom_proposed_date": "Date",
+                                  "score": "Decimal"}}
+    SQL = ("SELECT MONTH(`tabQuality Action`.`custom_proposed_date`) AS "
+           "`custom_proposed_date`, AVG(`tabQuality Action`.`score`) AS `avg`, "
+           "COUNT(*) AS `count` FROM `tabQuality Action` "
+           "GROUP BY MONTH(`tabQuality Action`.`custom_proposed_date`) "
+           "ORDER BY MONTH(`tabQuality Action`.`custom_proposed_date`) ASC")
+
+    def operations(self, sql=None):
+        result = operations_from_sql(analyze_sql(sql or self.SQL), self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def test_it_converts_in_full(self):
+        self.assertEqual([op["type"] for op in self.operations()],
+                         ["source", "mutate", "summarize", "order_by"])
+
+    def test_the_three_references_resolve_to_ONE_mutate(self):
+        """The SELECT item, the GROUP BY and the ORDER BY are the same function
+        on the same column. Two mutates would be two columns holding the same
+        number, and the summarize would group by one of them."""
+        mutates = [op for op in self.operations() if op["type"] == "mutate"]
+        self.assertEqual(len(mutates), 1)
+        self.assertEqual(mutates[0]["expression"]["expression"],
+                         "month(custom_proposed_date)")
+
+    def test_the_same_expression_twice_in_one_GROUP_BY_is_one_mutate(self):
+        """Odd but legal SQL. Two identical mutates would be two columns
+        holding the same number, and the summarize would group by both."""
+        operations = self.operations(self.SQL.replace(
+            "GROUP BY MONTH(`tabQuality Action`.`custom_proposed_date`) ",
+            "GROUP BY MONTH(`tabQuality Action`.`custom_proposed_date`), "
+            "MONTH(`tabQuality Action`.`custom_proposed_date`) "))
+        self.assertEqual(len([op for op in operations if op["type"] == "mutate"]), 1)
+
+    def test_two_DIFFERENT_expressions_are_two_mutates(self):
+        operations = self.operations(self.SQL.replace(
+            "GROUP BY MONTH(`tabQuality Action`.`custom_proposed_date`) ",
+            "GROUP BY MONTH(`tabQuality Action`.`custom_proposed_date`), "
+            "YEAR(`tabQuality Action`.`custom_proposed_date`) "))
+        self.assertEqual(
+            sorted(op["new_name"] for op in operations if op["type"] == "mutate"),
+            ["month_of_custom_proposed_date", "year_of_custom_proposed_date"])
+
+    def test_the_grouping_and_the_ordering_both_name_it(self):
+        operations = self.operations()
+        summarize = [op for op in operations if op["type"] == "summarize"][0]
+        self.assertEqual([d["column_name"] for d in summarize["dimensions"]],
+                         ["month_of_custom_proposed_date"])
+        self.assertEqual(operations[-1]["column"]["column_name"],
+                         "month_of_custom_proposed_date")
+
+    def test_the_new_name_is_NOT_the_one_metabase_gave_it(self):
+        """Metabase names the item after the column it reads —
+        `MONTH(`d`) AS `d`` — and a mutate creating `d` from `d` either reads
+        itself or shadows the source."""
+        mutate = [op for op in self.operations() if op["type"] == "mutate"][0]
+        self.assertEqual(mutate["new_name"], "month_of_custom_proposed_date")
+        self.assertNotEqual(mutate["new_name"], "custom_proposed_date")
+
+    def test_a_generated_name_that_collides_with_a_real_column_refuses(self):
+        columns = {"Quality Action": dict(self.COLUMNS["Quality Action"],
+                                          month_of_custom_proposed_date="Integer")}
+        result = operations_from_sql(analyze_sql(self.SQL), columns)
+        self.assertFalse(result["supported"])
+        self.assertIn("cannot be told apart", " | ".join(result["reasons"]))
+
+    def test_a_function_off_the_allowlist_still_refuses_by_name(self):
+        """Lifting is about POSITION. DAYOFWEEK numbers the days differently
+        from MySQL and WEEK takes a mode argument; neither becomes acceptable
+        by moving."""
+        for name in ("DAYOFWEEK", "WEEK", "TRIM"):
+            with self.subTest(name):
+                result = analyze_sql(self.SQL.replace("MONTH(", name + "("))
+                self.assertFalse(result["supported"])
+                self.assertIn(name, " | ".join(result["reasons"]))
+
+    def test_a_wrapped_query_is_still_the_wrappers_business(self):
+        """The inline lift runs AFTER the wrapper rules, so the shape they
+        already handle is untouched."""
+        self.assertTrue(analyze_sql(YEAR_LABEL.read_text())["supported"])
+
+    def test_grouping_by_a_plain_column_is_unchanged(self):
+        operations = self.operations(
+            "SELECT `custom_proposed_date`, COUNT(*) AS `n` FROM `tabQuality Action` "
+            "GROUP BY `custom_proposed_date`")
+        self.assertEqual([op["type"] for op in operations], ["source", "summarize"])
+
+
 class TestACommentIsNotStripped(unittest.TestCase):
     """Known limitation, recorded where it will be found again.
 
