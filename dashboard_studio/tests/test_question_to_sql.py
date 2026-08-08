@@ -19,7 +19,11 @@ SCHEMA = {"Sales Invoice": {"name": "String", "agent_name": "String",
 
 
 def reply(text):
-    return {"content": [{"type": "text", "text": text}]}
+    """OpenAI's chat-completion shape: choices[].message.content.
+
+    Read from `types/chat/chat_completion.py` in openai-python, not recalled."""
+    return {"choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": text}}]}
 
 
 class TestNothingButNamesAndTypesLeaves(unittest.TestCase):
@@ -95,8 +99,22 @@ class TestReadingTheReply(unittest.TestCase):
                 self.assertEqual(sql, "")
                 self.assertTrue(refusal)
 
+    def test_the_request_is_the_shape_openais_own_sdk_documents(self):
+        """Verified against openai-python at main rather than recalled:
+        `max_tokens` is deprecated in favour of `max_completion_tokens`, and the
+        instruction message is role "developer" in the current chat example."""
+        payload = Q.write_sql_request("x", SCHEMA)
+        self.assertEqual(payload["model"], "gpt-5.5")
+        self.assertIn("max_completion_tokens", payload)
+        self.assertNotIn("max_tokens", payload)
+        self.assertEqual([m["role"] for m in payload["messages"]],
+                         ["developer", "user"])
+        self.assertNotIn("system", payload)
+
     def test_a_shape_it_does_not_recognise_refuses_rather_than_raising(self):
-        for response in (None, {}, {"content": "text"}, {"content": [{"type": "tool"}]}):
+        for response in (None, {}, {"choices": "text"}, {"choices": []},
+                         {"choices": [{"message": None}]},
+                         {"content": [{"type": "text", "text": "SELECT 1"}]}):
             with self.subTest(repr(response)):
                 sql, refusal = Q.sql_from_response(response)
                 self.assertEqual(sql, "")
@@ -204,7 +222,7 @@ class TestTheModuleThatCreatesNothing(unittest.TestCase):
         at the call site, so a second endpoint cannot be added quietly."""
         posts = [name for name in self.called_names() if name.endswith(".post")]
         self.assertEqual(posts, ["requests.post"])
-        self.assertIn('if API_URL != "https://api.anthropic.com/v1/messages"',
+        self.assertIn('if API_URL != "https://api.openai.com/v1/chat/completions"',
                       self.PATH.read_text())
 
     def test_the_reply_carries_no_free_text_from_the_model(self):

@@ -32,7 +32,6 @@ import frappe
 from dashboard_studio.api.convert import _table_columns
 from dashboard_studio.integrations.llm.question import (
     API_URL,
-    API_VERSION,
     doctypes_from_response,
     pick_doctypes_request,
     sql_from_response,
@@ -71,10 +70,10 @@ def _api_key(api_key: str = None) -> str:
     key = (api_key or "").strip() or frappe.conf.get("llm_api_key")
     if not key:
         frappe.throw(
-            "No LLM API key. Paste one into the key field on the Ask a question "
-            "tab — it is kept in the page for this browser session only and is "
-            "never saved — or set `llm_api_key` in site_config.json for the "
-            "whole site. Pasting SQL does not need a key."
+            "No LLM API key. Paste one into the API key tab — it is kept in the "
+            "page for this browser session only and is never saved — or set "
+            "`llm_api_key` in site_config.json for the whole site. Pasting SQL "
+            "does not need a key."
         )
     return key
 
@@ -99,11 +98,11 @@ def _ask(payload: dict, api_key: str = None) -> dict:
     """
     import requests
 
-    if API_URL != "https://api.anthropic.com/v1/messages":
-        frappe.throw("Refusing to call anything but the messages endpoint.")
+    if API_URL != "https://api.openai.com/v1/chat/completions":
+        frappe.throw("Refusing to call anything but the chat completions endpoint.")
     response = requests.post(
         API_URL,
-        headers={"x-api-key": _api_key(api_key), "anthropic-version": API_VERSION,
+        headers={"authorization": "Bearer " + _api_key(api_key),
                  "content-type": "application/json"},
         json=payload,
         timeout=60,

@@ -56,32 +56,49 @@ You are given a business question and a list of Frappe DocType names. Reply \
 with the names of up to 4 DocTypes needed to answer it, one per line, exactly \
 as spelled in the list, and nothing else. If none fit, reply with exactly NONE."""
 
-# Read at the top of the file it belongs to rather than guessed: the request
-# shape is Anthropic's Messages API. `anthropic-version` is required and is a
-# date, not the model's version.
-API_URL = "https://api.anthropic.com/v1/messages"
-API_VERSION = "2023-06-01"
-MODEL = "claude-opus-5"
+# Read out of OpenAI's own `openai-python` SDK at main rather than recalled:
+#
+#   _client.py                      base_url is https://api.openai.com/v1
+#   README.md                       the chat example is
+#                                   chat.completions.create(model="gpt-5.5",
+#                                     messages=[{"role": "developer", ...},
+#                                               {"role": "user", ...}])
+#   types/chat/completion_create_params.py
+#                                   `max_tokens` is deprecated in favour of
+#                                   `max_completion_tokens`
+#   types/chat/chat_completion.py   the reply is choices[].message
+#
+# `gpt-5.5` is the model the SDK's own README uses throughout — a current,
+# undated, general one, rather than a name recalled from training.
+#
+# The instruction message is role "developer", not "system". Both exist in
+# `chat_completion_message_param.py`; developer is what the current chat
+# example uses.
+API_URL = "https://api.openai.com/v1/chat/completions"
+MODEL = "gpt-5.5"
 MAX_TOKENS = 1024
 
 
 def _message(system: str, user: str) -> dict:
-    return {"model": MODEL, "max_tokens": MAX_TOKENS, "system": system,
-            "messages": [{"role": "user", "content": user}]}
+    return {"model": MODEL, "max_completion_tokens": MAX_TOKENS,
+            "messages": [{"role": "developer", "content": system},
+                         {"role": "user", "content": user}]}
 
 
 def _text_of(response) -> str:
     """The assistant's text, or "" — never an exception on an odd shape."""
     if not isinstance(response, dict):
         return ""
-    parts = response.get("content")
-    if not isinstance(parts, list):
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
         return ""
-    out = []
-    for part in parts:
-        if isinstance(part, dict) and part.get("type") == "text":
-            out.append(str(part.get("text") or ""))
-    return "\n".join(out).strip()
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return ""
+    return str(message.get("content") or "").strip()
 
 
 def pick_doctypes_request(question: str, doctypes) -> dict:
