@@ -113,6 +113,8 @@
       // refresh loses it, and the label says so. It is sent with the propose
       // request and nowhere else.
       apiKey: "",
+      // Same rules as the key: state only, gone on refresh, blank = default.
+      model: "",
       siteHasKey: null,
     };
   }
@@ -438,6 +440,20 @@
     wrap.appendChild(el("p", "dss-hint",
       "Kept in this page only — never saved, and gone when you refresh. " +
       "Set `llm_api_key` in site_config.json to stop being asked."));
+
+    // Free text, not a list: model names change, and a stale dropdown is worse
+    // than a blank box. Blank means the default, so leaving it alone behaves
+    // exactly as before there was a field. Held in state like the key —
+    // never localStorage, sessionStorage, a cookie or a record.
+    wrap.appendChild(el("label", "dss-field-label", "Model (optional)"));
+    var model = el("input", "dss-input");
+    model.type = "text";
+    model.autocomplete = "off";
+    model.placeholder = "Leave blank for the default";
+    model.setAttribute("aria-label", "Model, kept for this browser session only");
+    model.value = this.state.model || "";
+    model.addEventListener("input", function () { self.state.model = model.value; });
+    wrap.appendChild(model);
     return wrap;
   };
 
@@ -465,7 +481,8 @@
       method: "dashboard_studio.api.propose.propose_from_question",
       // Sent with this request and used for this request. The server passes it
       // to the outbound call and lets it go out of scope.
-      args: { question: question, api_key: this.state.apiKey || null },
+      args: { question: question, api_key: this.state.apiKey || null,
+              model: this.state.model || null },
     }).then(function (r) {
       self.state.notice = "";
       self.state.proposal = r.message || null;

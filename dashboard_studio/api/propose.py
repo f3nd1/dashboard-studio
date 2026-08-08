@@ -153,7 +153,7 @@ def _referenced_names(operations) -> set:
 
 
 @frappe.whitelist()
-def propose_from_question(question: str, api_key: str = None):
+def propose_from_question(question: str, api_key: str = None, model: str = None):
     """Propose an Insights setup for a question. **Creates nothing.**
 
     Returns the SQL the model wrote, the operations it translated into, what the
@@ -162,15 +162,18 @@ def propose_from_question(question: str, api_key: str = None):
 
     `api_key`, when the page supplies one, is used for this request's outbound
     calls and then goes out of scope. It is never stored, logged or echoed.
+    `model` resolves the same way — the request's value, then site_config's
+    `llm_model`, then the default — and is likewise not stored anywhere.
     """
     frappe.only_for(DS_WRITE_ROLES)
     question = (question or "").strip()
     if not question:
         frappe.throw("Type a question first.")
 
+    model = (model or "").strip() or frappe.conf.get("llm_model") or None
     names = frappe.get_all("DocType", pluck="name")
     chosen = doctypes_from_response(
-        _ask(pick_doctypes_request(question, names), api_key), names)
+        _ask(pick_doctypes_request(question, names, model), api_key), names)
     if not chosen:
         return {"supported": False, "sql": "", "operations": [],
                 "reasons": ["No table on this site looks like it answers that. "
@@ -179,7 +182,7 @@ def propose_from_question(question: str, api_key: str = None):
 
     columns = {doctype: _table_columns(doctype) for doctype in chosen}
     sql, refusal = sql_from_response(
-        _ask(write_sql_request(question, columns), api_key))
+        _ask(write_sql_request(question, columns, model), api_key))
     if refusal:
         return {"supported": False, "sql": "", "operations": [], "reasons": [refusal],
                 "checked": [], "not_checked": NOT_CHECKED, "multiplied": []}

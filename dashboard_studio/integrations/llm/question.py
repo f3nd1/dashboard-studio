@@ -34,6 +34,18 @@ _SUPPORTED = """\
 - CASE WHEN <column or date part> = <literal> THEN <literal> ... END
 - ORDER BY a column the query produces, and LIMIT
 
+Write it in THIS dialect. The reader is a parser with the subset above, not a
+person, and idiomatic SQL that a person would prefer is refused:
+- Every column BACKTICKED and qualified by its table:
+  `tabSales Invoice`.`posting_date`. A short table alias is fine
+  (`si`.`posting_date`), but a BARE column name is not — `si.posting_date`
+  and `posting_date` are both refused.
+- ORDER BY names a column the query PRODUCES, never a SELECT-list alias. After
+  a GROUP BY those are the grouped columns and the aggregates, and the
+  aggregates are named `sum_of_<column>`, `avg_of_<column>`, `min_of_<column>`,
+  `max_of_<column>` and `count`. So `ORDER BY `sum_of_sales_income` DESC`,
+  not `ORDER BY `total` DESC`.
+
 NOT supported, do not use: subqueries, UNION, HAVING, DISTINCT, LIKE, IN,
 BETWEEN, IS NULL, window functions, CROSS joins, joining the same table twice,
 AND and OR mixed in one WHERE, DAYOFWEEK, WEEK, CAST to an integer type."""
@@ -79,8 +91,14 @@ MODEL = "gpt-5.5"
 MAX_TOKENS = 1024
 
 
-def _message(system: str, user: str) -> dict:
-    return {"model": MODEL, "max_completion_tokens": MAX_TOKENS,
+def _message(system: str, user: str, model: str = None) -> dict:
+    """`model` empty means MODEL, so a blank field behaves as it always did.
+
+    Free text on purpose: model names change, and a dropdown of them goes stale
+    where a blank box cannot.
+    """
+    return {"model": (model or "").strip() or MODEL,
+            "max_completion_tokens": MAX_TOKENS,
             "messages": [{"role": "developer", "content": system},
                          {"role": "user", "content": user}]}
 
@@ -101,7 +119,7 @@ def _text_of(response) -> str:
     return str(message.get("content") or "").strip()
 
 
-def pick_doctypes_request(question: str, doctypes) -> dict:
+def pick_doctypes_request(question: str, doctypes, model: str = None) -> dict:
     """Step one: which tables. Names only — no columns, no values.
 
     A whole site's schema does not fit in one request, and sending the columns
@@ -111,7 +129,8 @@ def pick_doctypes_request(question: str, doctypes) -> dict:
     if not isinstance(question, str):
         raise TypeError("question must be a string")
     listing = "\n".join(sorted(str(name) for name in doctypes))
-    return _message(_PICK_SYSTEM, f"Question: {question}\n\nDocTypes:\n{listing}")
+    return _message(_PICK_SYSTEM, f"Question: {question}\n\nDocTypes:\n{listing}",
+                    model)
 
 
 def doctypes_from_response(response, known) -> list[str]:
@@ -129,7 +148,7 @@ def doctypes_from_response(response, known) -> list[str]:
             if line.strip() in known][:4]
 
 
-def write_sql_request(question: str, schema: dict) -> dict:
+def write_sql_request(question: str, schema: dict, model: str = None) -> dict:
     """Step two: the SQL. `schema` is ``{DocType: {column: data_type}}``.
 
     That mapping is the same one the converter itself types columns from, so
@@ -146,7 +165,8 @@ def write_sql_request(question: str, schema: dict) -> dict:
         listing = ", ".join(f"{name} ({columns[name]})" for name in sorted(columns))
         blocks.append(f"`tab{doctype}`\n  {listing}")
     tables = "\n\n".join(blocks)
-    return _message(_SYSTEM, f"Question: {question}\n\nTables and columns:\n\n{tables}")
+    return _message(_SYSTEM,
+                    f"Question: {question}\n\nTables and columns:\n\n{tables}", model)
 
 
 def sql_from_response(response) -> tuple[str, str]:

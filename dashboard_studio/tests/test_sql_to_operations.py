@@ -998,6 +998,113 @@ class TestAnUnreadableWhereSaysWhatItFound(unittest.TestCase):
         self.assertNotIn("which this converter does not translate", reason)
 
 
+class TestACastInsideAnAggregate(unittest.TestCase):
+    """`AVG(CAST(col AS double))` — ADR-009's `col * 1` said outright.
+
+    Metabase writes `* 1` to coerce a text column before averaging; ADR-009
+    reads that as a `cast` operation. `CAST(col AS double)` states the same
+    thing, and MySQL agrees on the values — both take a leading numeric prefix
+    and give 0 for anything else — so this emits ADR-009's cast unchanged,
+    disclosure and all.
+    """
+
+    COLUMNS = {"Quality Action": {"name": "String", "custom_proposed_date": "Date",
+                                  "v": "String", "n": "Decimal"}}
+
+    def run_it(self, sql):
+        return run(sql, columns=self.COLUMNS)
+
+    def test_it_is_a_plain_aggregate_beside_another_one(self):
+        """The refusal was "two questions in one query": the CAST made it read
+        as an expression-over-aggregates, which cannot sit beside a COUNT."""
+        result = self.run_it("SELECT AVG(CAST(`v` AS double)) AS `avg`, "
+                             "COUNT(*) AS `count` FROM `tabQuality Action`")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        summarize = [op for op in result["operations"]
+                     if op["type"] == "summarize"][0]
+        self.assertEqual([m["aggregation"] for m in summarize["measures"]],
+                         ["avg", "count"])
+
+    def test_the_cast_operation_carries_ADR_009s_disclosure(self):
+        """A reader has to be able to see the source column is text."""
+        result = self.run_it("SELECT AVG(CAST(`v` AS double)) AS `avg` "
+                             "FROM `tabQuality Action`")
+        self.assertIn({"type": "cast",
+                       "column": {"type": "column", "column_name": "v"},
+                       "data_type": "Decimal"}, result["operations"])
+        measure = [op for op in result["operations"]
+                   if op["type"] == "summarize"][0]["measures"][0]
+        self.assertEqual(measure["coerced_from"], "String")
+
+    def test_a_DOUBLY_nested_call_still_refuses(self):
+        """Exactly one level. `.*` here once read `SUM(a) * 100 / COUNT(*)` as a
+        plain aggregate and dropped the arithmetic in silence, so the pattern
+        admits one nested call and never two."""
+        result = self.run_it("SELECT AVG(CAST(ABS(`v`) AS double)) AS `avg` "
+                             "FROM `tabQuality Action`")
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+
+    def test_arithmetic_over_aggregates_is_still_NOT_a_plain_aggregate(self):
+        """The fault the old pattern caused, pinned again from this side."""
+        result = self.run_it("SELECT SUM(`n`) * 100 / COUNT(*) AS `pct` "
+                             "FROM `tabQuality Action`")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        # It converts as an EXPRESSION — a summarize plus a mutate — not as one
+        # aggregate with its arithmetic thrown away.
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "summarize", "mutate"])
+
+    def test_a_cast_to_an_INTEGER_type_inside_an_aggregate_still_refuses(self):
+        """To `signed` it truncates. That is not a coercion, it is a different
+        number."""
+        result = self.run_it("SELECT AVG(CAST(`v` AS signed)) AS `avg` "
+                             "FROM `tabQuality Action`")
+        self.assertFalse(result["supported"])
+
+
+class TestTheDialectTheParserAccepts(unittest.TestCase):
+    """What an LLM wrote, and what the parser needs — diagnosed, not assumed.
+
+    The reported refusal was blamed on the short table alias. It is not: an
+    alias is fine. The cause is the UNBACKTICKED column inside the function,
+    which ADR-022's inline lift cannot see, plus a second one nobody spotted —
+    ordering by a SELECT-list alias rather than by a column the query produces.
+
+    Both are fixed in the system prompt rather than here, so these pin the
+    parser's side of the contract the prompt now describes.
+    """
+
+    COLUMNS = {"Sales Invoice": {"name": "String", "agent_name": "String",
+                                 "sales_income": "Decimal", "posting_date": "Date"}}
+
+    def run_it(self, select, group, order):
+        return run(f"SELECT {select} FROM `tabSales Invoice` si "
+                   f"GROUP BY {group} ORDER BY {order} DESC", columns=self.COLUMNS)
+
+    def test_a_short_table_alias_is_NOT_the_problem(self):
+        result = self.run_it(
+            "si.`agent_name`, YEAR(si.`posting_date`) AS `y`, "
+            "SUM(si.`sales_income`) AS `total`",
+            "si.`agent_name`, YEAR(si.`posting_date`)", "`sum_of_sales_income`")
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+
+    def test_an_UNBACKTICKED_column_inside_the_function_is(self):
+        result = self.run_it(
+            "si.agent_name, YEAR(si.posting_date) AS `y`, "
+            "SUM(si.sales_income) AS `total`",
+            "si.agent_name, YEAR(si.posting_date)", "`sum_of_sales_income`")
+        self.assertFalse(result["supported"])
+        self.assertIn("not a plain column", " | ".join(result["reasons"]))
+
+    def test_ordering_by_a_SELECT_LIST_alias_is_the_second_cause(self):
+        result = self.run_it(
+            "si.`agent_name`, SUM(si.`sales_income`) AS `total`",
+            "si.`agent_name`", "`total`")
+        self.assertFalse(result["supported"])
+        self.assertIn("ORDER BY 'total'", " | ".join(result["reasons"]))
+
+
 class TestColumnsFromMeta(unittest.TestCase):
     def test_frappe_fieldtypes_map_to_insights_data_types(self):
         columns = columns_from_meta([

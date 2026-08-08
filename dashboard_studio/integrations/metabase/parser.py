@@ -18,7 +18,17 @@ _TAB = r"(?-i:tab)"
 TABLE_PATTERN = re.compile(r"`" + _TAB + r"([^`]+)`")
 
 # Aggregations we can translate into a Dashboard Studio metric today.
-_AGG_PATTERN = re.compile(r"\b(COUNT|SUM|AVG)\s*\(\s*([^)]*?)\s*\)", re.IGNORECASE)
+# An aggregate's argument, admitting EXACTLY ONE nested call — `AVG(CAST(x AS
+# double))` — and never two. Bracketless text, or one call whose own argument
+# is bracketless; `[^()]` cannot cross a bracket, so `AVG(CAST(ABS(x) AS
+# double))` matches nothing and refuses, and `SUM(a) * 100 / COUNT(*)` still
+# cannot pass for a plain aggregate. That last one is why this is written out
+# rather than loosened to `.*`: as `.*` it read a whole expression as one
+# aggregate and dropped the arithmetic in silence.
+_ONE_NESTED_ARG = r"(?:[^()]|[A-Za-z_]\w*\s*\([^()]*\))*"
+
+_AGG_PATTERN = re.compile(r"\b(COUNT|SUM|AVG)\s*\(\s*(" + _ONE_NESTED_ARG +
+                          r")\s*\)", re.IGNORECASE)
 _JOIN_PATTERN = re.compile(r"\bJOIN\b", re.IGNORECASE)
 
 # A table alias is the word after a table name, bare or backticked. Metabase
@@ -135,7 +145,8 @@ _PROJECTED = re.compile(
 # arithmetic was skipped in silence. No nested parentheses either: an
 # aggregate over something this cannot read must reach the expression
 # check, which refuses by name.
-_AGGREGATE_ITEM = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\([^()]*\)$",
+_AGGREGATE_ITEM = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\(" +
+                             _ONE_NESTED_ARG + r"\)$",
                              re.IGNORECASE | re.DOTALL)
 _TRAILING_ALIAS = re.compile(r"\s+AS\s+(?:`(?P<alias_q>[^`]+)`|(?P<alias>\w+))$",
                              re.IGNORECASE)
@@ -1372,6 +1383,17 @@ def _parse_group_by(sql: str, aliases: dict, reasons: list) -> tuple[list[dict],
 # coercion travels with the aggregate instead of being silently unwound into a
 # plain column reference, which would type it as whatever the column is.
 _TIMES_ONE = re.compile(r"^(?P<expr>.+?)\s*\*\s*1$")
+# The other spelling of the same thing. ADR-009 reads `col * 1` on a text
+# column as a cast, because that is what Metabase means by it; `CAST(col AS
+# double)` says so outright. MySQL agrees on the values — both take a leading
+# numeric prefix and give 0 for anything else — so this is ADR-009's argument
+# with the implication removed, and it emits ADR-009's cast operation
+# unchanged, disclosure and all.
+#
+# Only a FLOAT target. To `signed` it truncates and to `char` it stringifies;
+# neither is this, and both keep refusing.
+_CAST_ARG = re.compile(r"^CAST\s*\(\s*(?P<expr>.+?)\s+AS\s+(?P<type>\w+)\s*\)$",
+                       re.IGNORECASE | re.DOTALL)
 
 
 def _aggregation_from(function: str, argument: str, aliases: dict, reasons: list) -> dict:
@@ -1387,6 +1409,10 @@ def _aggregation_from(function: str, argument: str, aliases: dict, reasons: list
         return {"function": function.upper(), "argument": "*", "table": None,
                 "coerced": False}
     coerced = _TIMES_ONE.match(argument)
+    if not coerced:
+        cast = _CAST_ARG.match(argument.strip())
+        if cast and cast.group("type").lower() in _VALUE_PRESERVING_CAST:
+            coerced = cast
     if coerced:
         argument = coerced.group("expr").strip()
     qualifier, column = _split_ref(argument)

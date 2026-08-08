@@ -111,6 +111,29 @@ class TestReadingTheReply(unittest.TestCase):
                          ["developer", "user"])
         self.assertNotIn("system", payload)
 
+    def test_a_supplied_model_is_used_and_blank_means_the_default(self):
+        """Free text, session-only, blank behaves exactly as before the field
+        existed."""
+        self.assertEqual(Q.write_sql_request("x", SCHEMA, "gpt-5.4-mini")["model"],
+                         "gpt-5.4-mini")
+        for blank in (None, "", "   "):
+            with self.subTest(repr(blank)):
+                self.assertEqual(Q.write_sql_request("x", SCHEMA, blank)["model"],
+                                 Q.MODEL)
+        self.assertEqual(Q.pick_doctypes_request("x", ["A"], "gpt-5.4")["model"],
+                         "gpt-5.4")
+
+    def test_the_prompt_states_the_dialect_the_parser_accepts(self):
+        """The model writes SQL for a PARSER, not for a reader. Left to write
+        idiomatically it produced `YEAR(si.posting_date)` and `ORDER BY total`,
+        both of which refuse — so the subset is described rather than the parser
+        widened to every dialect a model might pick."""
+        prompt = Q.write_sql_request("x", SCHEMA)["messages"][0]["content"]
+        self.assertIn("BACKTICKED", prompt)
+        self.assertIn("`si`.`posting_date`", prompt)
+        self.assertIn("sum_of_<column>", prompt)
+        self.assertIn("never a SELECT-list alias", prompt)
+
     def test_a_shape_it_does_not_recognise_refuses_rather_than_raising(self):
         for response in (None, {}, {"choices": "text"}, {"choices": []},
                          {"choices": [{"message": None}]},
