@@ -759,6 +759,12 @@
     });
     box.appendChild(steps);
 
+    // Multiple measures — a prompt to check the chart display, not a claim
+    // that a combo was detected. See `chartDisplayNote` for why the converter
+    // cannot know that.
+    var display = core.chartDisplayNote(made.operations);
+    if (display) box.appendChild(el("div", "dss-validation is-warn", display));
+
     var links = el("div", "dss-insights-links");
     var open = el("a", "dss-link", "Open in Insights");
     open.href = made.insights_url;

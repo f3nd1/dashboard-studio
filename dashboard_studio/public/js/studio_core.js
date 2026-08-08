@@ -129,6 +129,40 @@
     return sentence;
   }
 
+  // Numeric measure result types — the same two `sql_ops.MEASURE_DATA_TYPES`
+  // holds. A `count` is Integer, everything else that survives is Decimal or
+  // the column's own numeric type.
+  var NUMERIC = ["Integer", "Decimal"];
+
+  // "Does this report probably want a bar+line combo?" — a PROMPT, never a
+  // verdict.
+  //
+  // Read the investigation notes before making this say more than it does.
+  // Metabase stores per-series display types only when somebody overrode them;
+  // a genuine combo can store nothing at all, and for a `display: "combo"` card
+  // the split is computed from array POSITION (line first, bar second) rather
+  // than saved. So the converter has no reliable signal that a combo was
+  // intended, and nothing here may claim one was detected — that would be a
+  // guess wearing a finding's clothes.
+  //
+  // What IS knowable is the shape most likely to want one: more than one
+  // numeric measure sharing an X axis. That is a reason for a person to look,
+  // and it is phrased as exactly that.
+  function chartDisplayNote(operations) {
+    var measures = [];
+    (operations || []).forEach(function (op) {
+      if (op && op.type === "summarize") {
+        (op.measures || []).forEach(function (m) {
+          if (m && NUMERIC.indexOf(m.data_type) !== -1) measures.push(m);
+        });
+      }
+    });
+    if (measures.length < 2) return "";
+    return "This report has multiple measures — check whether it needs a " +
+      "bar+line combo chart. Insights defaults every series to Bar on the " +
+      "left axis, and the chart display could not be determined automatically.";
+  }
+
   // What the user is told when the server refuses.
   //
   // Frappe puts a thrown message in one of SEVERAL places, and which one depends
@@ -215,6 +249,6 @@
 
   root.DSStudioCore = { describeOperation: describeOperation,
     labelForOperation: labelForOperation, describeProposal: describeProposal,
-    refusalMessage: refusalMessage };
+    chartDisplayNote: chartDisplayNote, refusalMessage: refusalMessage };
   if (typeof module !== "undefined" && module.exports) module.exports = root.DSStudioCore;
 })(typeof window !== "undefined" ? window : this);

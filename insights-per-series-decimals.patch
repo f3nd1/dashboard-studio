@@ -1,0 +1,116 @@
+diff --git a/frontend/src2/charts/components/YAxisConfig.vue b/frontend/src2/charts/components/YAxisConfig.vue
+index 42f249a..45b7876 100644
+--- a/frontend/src2/charts/components/YAxisConfig.vue
++++ b/frontend/src2/charts/components/YAxisConfig.vue
+@@ -67,6 +67,15 @@ const updateColor = debounce((color: string, idx: number) => {
+ 											:options="['Left', 'Right']"
+ 										/>
+ 									</InlineFormControlLabel>
++									<InlineFormControlLabel label="Decimals">
++										<FormControl
++											type="number"
++											min="0"
++											max="20"
++											v-model="item.decimal"
++											placeholder="Auto"
++										/>
++									</InlineFormControlLabel>
+ 									<InlineFormControlLabel label="Color">
+ 										<ColorInput
+ 											:model-value="item.color?.[0]"
+diff --git a/frontend/src2/charts/helpers.ts b/frontend/src2/charts/helpers.ts
+index eae005f..dfc892d 100644
+--- a/frontend/src2/charts/helpers.ts
++++ b/frontend/src2/charts/helpers.ts
+@@ -104,6 +104,7 @@ export function getLineChartOptions(config: LineChartConfig, result: QueryResult
+ 
+ 		const is_right_axis = serie.align === 'Right'
+ 		const type = serie.type?.toLowerCase() || 'line'
++		const decimal = getSeriesDecimal(serie)
+ 		const smooth = serie.smooth ?? config.y_axis.smooth
+ 		const show_data_points = serie.show_data_points ?? config.y_axis.show_data_points
+ 		const show_area = serie.show_area ?? config.y_axis.show_area
+@@ -133,7 +134,7 @@ export function getLineChartOptions(config: LineChartConfig, result: QueryResult
+ 				show: hide_from_chart ? false : show_data_labels,
+ 				position: labelPosition,
+ 				formatter: (params: any) => {
+-					return getShortNumber(params.value?.[1], 1)
++					return formatSeriesLabel(params.value?.[1], decimal)
+ 				},
+ 			},
+ 			labelLayout: { hideOverlap: true },
+@@ -171,6 +172,27 @@ export function getLineChartOptions(config: LineChartConfig, result: QueryResult
+ 	}
+ }
+ 
++// A per-series decimal setting means "show me the real number", so it also turns
++// OFF compact notation. `getShortNumber` uses `notation: 'compact'`, which
++// renders 1234.56 as "1.2K" — raising its precision only gives "1.23K", never
++// the number the setting asks for. So an explicit decimal switches to
++// `formatNumber`; leaving it unset keeps the previous behaviour exactly.
++//
++// Read defensively because the number input hands back a string: anything that
++// is not a whole number in Intl's own 0..20 range is treated as unset rather
++// than passed on, since `maximumFractionDigits: 21` throws a RangeError that
++// would take the whole chart down with it.
++function getSeriesDecimal(serie: Series): number | null {
++	const raw = serie.decimal as unknown
++	if (raw === undefined || raw === null || raw === '') return null
++	const value = Number(raw)
++	return Number.isInteger(value) && value >= 0 && value <= 20 ? value : null
++}
++
++function formatSeriesLabel(value: number, decimal: number | null) {
++	return decimal === null ? getShortNumber(value, 1) : formatNumber(value, decimal)
++}
++
+ function getAreaStyle(color: string) {
+ 	return {
+ 		color: new graphic.LinearGradient(0, 0, 0, 1, [
+@@ -252,6 +274,7 @@ export function getBarChartOptions(config: BarChartConfig, result: QueryResult,
+ 
+ 		const color = serie.color?.[0] || colors[idx]
+ 		const type = serie.type?.toLowerCase() || 'bar'
++		const decimal = getSeriesDecimal(serie)
+ 		const stack = type === 'bar' && config.y_axis.stack ? 'stack' : undefined
+ 		const show_data_labels = serie.show_data_labels ?? config.y_axis.show_data_labels
+ 		const data = getSeriesData(c.name)
+@@ -279,7 +302,7 @@ export function getBarChartOptions(config: BarChartConfig, result: QueryResult,
+ 				position: labelPosition,
+ 				formatter: (params: any) => {
+ 					const _val = swapAxes ? params.value?.[0] : params.value?.[1]
+-					return getShortNumber(_val, 1)
++					return formatSeriesLabel(_val, decimal)
+ 				},
+ 				fontSize: 11,
+ 			},
+diff --git a/frontend/src2/helpers/index.ts b/frontend/src2/helpers/index.ts
+index 03cd178..0be5c85 100644
+--- a/frontend/src2/helpers/index.ts
++++ b/frontend/src2/helpers/index.ts
+@@ -174,9 +174,11 @@ export function downloadImage(element: HTMLElement, filename: string, scale = 2,
+ 		})
+ }
+ 
+-export function formatNumber(number: number, precision = 0) {
++export function formatNumber(number: number, precision?: number) {
+ 	if (isNaN(number)) return number
+-	precision = precision || guessPrecision(number)
++	// `??`, not `||`: an explicit 0 means "no decimal places", which `||`
++	// swallowed into a guess. Callers passing nothing still guess, as before.
++	precision = precision ?? guessPrecision(number)
+ 	const locale = session.user?.country == 'India' ? 'en-IN' : session.user?.locale
+ 	return new Intl.NumberFormat(locale || 'en-US', {
+ 		minimumFractionDigits: precision,
+diff --git a/frontend/src2/types/chart.types.ts b/frontend/src2/types/chart.types.ts
+index 7baa595..e874564 100644
+--- a/frontend/src2/types/chart.types.ts
++++ b/frontend/src2/types/chart.types.ts
+@@ -38,6 +38,7 @@ export type Series = {
+ 	color?: string[]
+ 	type?: 'line' | 'bar'
+ 	align?: 'Left' | 'Right'
++	decimal?: number
+ 	show_data_labels?: boolean
+ 	hide_from_chart?: boolean
+ }

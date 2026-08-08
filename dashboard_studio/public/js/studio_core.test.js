@@ -197,3 +197,58 @@ assert.ok(monthly.indexOf("month_of_d = month(d)") !== -1, monthly);
   });
 
 console.log("studio_core.test.js — unchartable-dimension disclosure asserted");
+
+// ---------------------------------------------------------------------------
+// The multiple-measure chart-display note (Part 3).
+//
+// The wording matters more than the trigger here. Metabase stores a per-series
+// display type only when somebody overrode it, and a `display: "combo"` card
+// computes the split from array position rather than saving it — so there is
+// no reliable signal that a combo was intended. The note must therefore PROMPT
+// a check and never announce a detection.
+// ---------------------------------------------------------------------------
+var summarize = function (measures) {
+  return [{ type: "source", table: { table_name: "tabQuality Action" } },
+          { type: "summarize", measures: measures, dimensions: [] }];
+};
+var COUNT = { measure_name: "count", column_name: "count",
+              data_type: "Integer", aggregation: "count" };
+var AVG = { measure_name: "avg_of_qipi", column_name: "qipi",
+            data_type: "Decimal", aggregation: "avg" };
+
+var note = core.chartDisplayNote(summarize([COUNT, AVG]));
+assert.ok(note.indexOf("multiple measures") !== -1, note);
+assert.ok(note.indexOf("bar+line combo chart") !== -1, note);
+// It must NOT claim to have found one. "detected", "combo chart detected" and
+// any assertion that Metabase said so are exactly what the data cannot support.
+["detected", "Metabase", "combo chart is", "will be"].forEach(function (banned) {
+  assert.strictEqual(note.indexOf(banned), -1,
+    "the note claims more than it knows: " + banned);
+});
+
+// One measure is the ordinary case and says nothing — a note on every single
+// conversion is a note nobody reads.
+assert.strictEqual(core.chartDisplayNote(summarize([COUNT])), "");
+assert.strictEqual(core.chartDisplayNote(summarize([])), "");
+assert.strictEqual(core.chartDisplayNote([]), "");
+assert.strictEqual(core.chartDisplayNote(undefined), "");
+// No summarize at all — nothing to say.
+assert.strictEqual(
+  core.chartDisplayNote([{ type: "source", table: { table_name: "tabX" } }]), "");
+// A non-numeric measure is not a chartable series, so it does not make a pair.
+assert.strictEqual(core.chartDisplayNote(
+  summarize([COUNT, { measure_name: "m", column_name: "c",
+                      data_type: "String", aggregation: "max" }])), "");
+// Three measures still fires.
+assert.ok(core.chartDisplayNote(summarize([COUNT, AVG, AVG])) !== "");
+
+console.log("studio_core.test.js — multiple-measure display note asserted");
+// It reads the SUMMARIZE's measures, not any operation that happens to carry a
+// `measures` key. No operation Insights emits today does, so this pins the
+// intent rather than an observed shape — without it the check is a coincidence
+// somebody could delete and see nothing fail.
+assert.strictEqual(core.chartDisplayNote(
+  [{ type: "source", table: { table_name: "tabX" }, measures: [COUNT, AVG] },
+   { type: "summarize", measures: [COUNT], dimensions: [] }]), "");
+
+console.log("studio_core.test.js — the note reads the summarize specifically");
