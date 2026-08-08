@@ -825,7 +825,10 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
   background: var(--dss-orange-100); border: 1px solid #f0d19a;
   color: var(--dss-orange);
 }
-.dss-saveresult.is-bad { background: var(--dss-surface); border: 1px solid var(--dss-line); }
+/* A failure must not be white like a success. Same red pair the rest of this
+   file already uses for a rejected state (.dss-preview.is-error,
+   .dss-map-row.is-rejected) rather than a new colour. */
+.dss-saveresult.is-bad { background: var(--dss-red-100); border: 1px solid #f2caca; }
 
 /* The validation strip states BOTH halves. A green tick reporting only what it
    checked implies an assurance nobody can give — the limit line is not
@@ -875,12 +878,8 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
 .dss-tab.is-on { background: var(--dss-surface); border-color: var(--dss-line-dark);
   color: var(--dss-ink); box-shadow: var(--dss-shadow-sm); }
 
-/* Above the tabs and outside both, so it is reachable from either one. Boxed so
-   it reads as configuration rather than as part of whichever tab is open. */
-.dss-keyfield { margin-bottom: 14px; padding: 10px 11px;
-  border: 1px solid var(--dss-line); border-radius: var(--dss-r-sm);
-  background: var(--dss-surface-2); }
-.dss-keyfield[hidden] { display: none; }
+/* Its own tab now, so it needs no box of its own — it is tab content like the
+   question box and the textarea. */
 .dss-keyfield .dss-input { margin-top: 5px; }
 .dss-keyfield .dss-hint { margin-top: 6px; }
 
