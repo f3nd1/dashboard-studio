@@ -952,3 +952,11 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
 @media (prefers-reduced-motion: reduce) {
   .dss-spinner { animation: none; }
 }
+
+
+/* The model browser, on the API key tab beside the Model field. A list rather
+   than a <select>: model names change, so it is asked for, not hardcoded. */
+.dss-modelbrowse { margin-top: 0.5rem; }
+.dss-modelfilter { margin: 0.5rem 0 0.35rem; }
+.dss-modelproblem { margin-top: 0.4rem; }
+.dss-modelbrowse .dss-searchresults { max-height: 11rem; }

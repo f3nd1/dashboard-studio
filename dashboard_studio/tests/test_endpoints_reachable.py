@@ -76,6 +76,9 @@ class TestEndpointsReachable(unittest.TestCase):
             # which could only ever read the CLIENT's disk.
             "dashboard_studio.api.exports.list_exported_reports",
             "dashboard_studio.api.exports.read_exported_report",
+            # The Model field's browse button, which asks the provider what
+            # this key can see rather than shipping a list that goes stale.
+            "dashboard_studio.api.propose.list_models",
         }, "the front end's call sites changed — has the call shape changed too?")
 
     def test_every_method_the_browser_calls_is_whitelisted(self):

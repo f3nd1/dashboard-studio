@@ -80,14 +80,31 @@ as spelled in the list, and nothing else. If none fit, reply with exactly NONE."
 #                                   `max_completion_tokens`
 #   types/chat/chat_completion.py   the reply is choices[].message
 #
-# `gpt-5.5` is the model the SDK's own README uses throughout — a current,
-# undated, general one, rather than a name recalled from training.
-#
 # The instruction message is role "developer", not "system". Both exist in
 # `chat_completion_message_param.py`; developer is what the current chat
 # example uses.
 API_URL = "https://api.openai.com/v1/chat/completions"
-MODEL = "gpt-5.5"
+
+# `gpt-5.4-mini`, read off the SDK's `types/shared/chat_model.py` `ChatModel`
+# literal rather than recalled — it is there beside its dated twin
+# `gpt-5.4-mini-2026-03-17`, and the undated name is the one that keeps working.
+#
+# It is a DELIBERATE step down from `gpt-5.5` to cut cost, made knowing the
+# risk it lands on. The one decision this converter cannot verify is which
+# TABLE a question is about (ADR-023): a real question about recruitment agents
+# was answered from ERPNext's sales-commission tables, every column real and
+# every type right, with a more expensive model. A cheaper one does not make
+# that worse in a way anything here can detect — the referential checks pass
+# either way — so the DocType confirm step is what carries it, and spot-checking
+# real questions is the way back up a tier.
+MODEL = "gpt-5.4-mini"
+
+# `GET /models`, from `resources/models.py`: `self._get_api_list("/models",
+# page=SyncPage[Model], ... security={"bearer_auth": True})`. The envelope is
+# `SyncPage` — `{object: str, data: [...]}` (pagination.py) — and each entry is
+# `Model` = `{id, created, object: "model", owned_by}` (types/model.py). Read,
+# not guessed; `id` is the string the chat endpoint wants.
+MODELS_URL = "https://api.openai.com/v1/models"
 MAX_TOKENS = 1024
 
 

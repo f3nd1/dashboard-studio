@@ -104,7 +104,7 @@ class TestReadingTheReply(unittest.TestCase):
         `max_tokens` is deprecated in favour of `max_completion_tokens`, and the
         instruction message is role "developer" in the current chat example."""
         payload = Q.write_sql_request("x", SCHEMA)
-        self.assertEqual(payload["model"], "gpt-5.5")
+        self.assertEqual(payload["model"], "gpt-5.4-mini")
         self.assertIn("max_completion_tokens", payload)
         self.assertNotIn("max_tokens", payload)
         self.assertEqual([m["role"] for m in payload["messages"]],
@@ -247,6 +247,18 @@ class TestTheModuleThatCreatesNothing(unittest.TestCase):
         self.assertEqual(posts, ["requests.post"])
         self.assertIn('if API_URL != "https://api.openai.com/v1/chat/completions"',
                       self.PATH.read_text())
+
+    def test_the_models_GET_is_the_only_other_call_and_is_checked_too(self):
+        """The picker added a second outbound call, so it gets the same shape:
+        one `requests.get` in the file, its URL asserted at the call site. A
+        GET, because listing models must never be able to become a POST."""
+        source = self.PATH.read_text()
+        gets = [name for name in self.called_names() if name.endswith(".get")
+                and name.startswith("requests")]
+        self.assertEqual(gets, ["requests.get"])
+        self.assertIn('if MODELS_URL != "https://api.openai.com/v1/models"', source)
+        self.assertEqual(source.count("requests.get("), 1)
+        self.assertEqual(source.count("requests.post("), 1)
 
     def test_the_reply_carries_no_free_text_from_the_model(self):
         """The whole safety argument. Every key the endpoint returns is listed

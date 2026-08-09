@@ -178,6 +178,10 @@
       exportsLoading: false,
       // Which round-trip is in flight, or null. Read by `actionButton`.
       busy: null,
+      // The provider's model list, once asked for. Null means "not asked".
+      // Session state like the key: never saved, gone on refresh.
+      models: null,
+      modelSearch: "",
     };
   }
 
@@ -633,12 +637,13 @@
       "Kept in this page only — never saved, and gone when you refresh. " +
       "Set `llm_api_key` in site_config.json to stop being asked."));
 
-    // Free text, not a list: model names change, and a stale dropdown is worse
-    // than a blank box. Blank means the default, so leaving it alone behaves
-    // exactly as before there was a field. Held in state like the key —
-    // never localStorage, sessionStorage, a cookie or a record.
+    // Free TEXT with an optional browse, not a dropdown: model names change,
+    // and a hardcoded list goes stale silently. The browse asks the provider
+    // what THIS key can see, so it cannot be out of date. Blank still means the
+    // default, so leaving it alone behaves exactly as before there was a field.
+    // Held in state like the key — never localStorage, a cookie or a record.
     wrap.appendChild(el("label", "dss-field-label", "Model (optional)"));
-    var model = el("input", "dss-input");
+    var model = el("input", "dss-input dss-modelinput");
     model.type = "text";
     model.autocomplete = "off";
     model.placeholder = "Leave blank for the default";
@@ -646,7 +651,82 @@
     model.value = this.state.model || "";
     model.addEventListener("input", function () { self.state.model = model.value; });
     wrap.appendChild(model);
+
+    var browse = el("div", "dss-modelbrowse");
+    var found = this.state.models;
+    browse.appendChild(actionButton(this, "models", "Browse models",
+                                    "Asking the provider…", function () {
+      begin(self, "models");
+      self.listModels().then(function () { finish(self); self.render(); });
+    }));
+    if (found && !found.available) {
+      // Says WHY — no key yet, a 401, a network failure — rather than an empty
+      // list that reads as "this key has no models".
+      browse.appendChild(el("div", "dss-hint dss-modelproblem", found.problem));
+    }
+    if (found && found.available) {
+      var filter = el("input", "dss-input dss-modelfilter");
+      filter.type = "search";
+      filter.placeholder = "Filter " + found.models.length + " models";
+      filter.setAttribute("aria-label", "Filter the model list");
+      filter.value = this.state.modelSearch || "";
+      var list = el("div", "dss-searchresults");
+      var paint = function () {
+        list.innerHTML = "";
+        var want = (self.state.modelSearch || "").toLowerCase();
+        found.models.filter(function (id) {
+          return id.toLowerCase().indexOf(want) !== -1;
+        }).forEach(function (id) {
+          var row = el("button", "dss-searchresult");
+          row.type = "button";
+          row.appendChild(el("span", "dss-searchresult-name", id));
+          if (id === found.default) {
+            // Which one a blank field would pick, so choosing it explicitly is
+            // visibly the same thing rather than a guess.
+            row.appendChild(el("span", "dss-searchresult-tag is-ok", "default"));
+          }
+          row.addEventListener("click", function () {
+            self.state.model = id;
+            self.render();
+          });
+          list.appendChild(row);
+        });
+        if (!list.childNodes.length) {
+          list.appendChild(el("div", "dss-hint", "Nothing matching that."));
+        }
+      };
+      filter.addEventListener("input", function () {
+        self.state.modelSearch = filter.value;
+        paint();
+      });
+      paint();
+      browse.appendChild(filter);
+      browse.appendChild(list);
+    }
+    wrap.appendChild(browse);
     return wrap;
+  };
+
+  // Ask the provider which models this key can see. The key goes with the
+  // request and nowhere else, exactly as it does for a proposal.
+  App.prototype.listModels = function () {
+    var self = this;
+    if (!hasFrappe()) {
+      this.state.models = { available: false,
+                            problem: "Browsing the models needs the server." };
+      return Promise.resolve();
+    }
+    return dsCall({
+      method: "dashboard_studio.api.propose.list_models",
+      args: { api_key: this.state.apiKey || null },
+    }).then(function (r) {
+      self.state.models = r.message || { available: false,
+        problem: "The server returned no model list." };
+    }).catch(function (err) {
+      // Never stuck and never silent — the same rule the busy states follow.
+      self.state.models = { available: false,
+        problem: core.refusalMessage(err, "The models could not be listed.") };
+    });
   };
 
   App.prototype.loadKeyState = function () {

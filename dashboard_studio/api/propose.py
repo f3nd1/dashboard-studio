@@ -32,6 +32,8 @@ import frappe
 from dashboard_studio.api.convert import _table_columns
 from dashboard_studio.integrations.llm.question import (
     API_URL,
+    MODEL,
+    MODELS_URL,
     doctypes_from_response,
     pick_doctypes_request,
     sql_from_response,
@@ -111,6 +113,68 @@ def propose_tables(question: str, api_key: str = None, model: str = None):
     names = frappe.get_all("DocType", pluck="name")
     return {"doctypes": doctypes_from_response(
         _ask(pick_doctypes_request(question, names, model), api_key), names)}
+
+
+@frappe.whitelist()
+def list_models(api_key: str = None):
+    """The models this key can see — ids only, for the Model field's picker.
+
+    `{available, models, problem}` rather than a throw, because "no key yet" is
+    an ordinary state of the page and not an error: the button says so instead
+    of firing a request that would only come back 401.
+
+    Read-only against OpenAI, and it sends the question, the schema and the row
+    data of exactly nothing — a GET with a key and no body.
+    """
+    frappe.only_for(DS_WRITE_ROLES)
+    key = (api_key or "").strip() or frappe.conf.get("llm_api_key")
+    if not key:
+        return {"available": False, "models": [], "problem":
+                "No API key yet. Paste one into the API key tab first — browsing "
+                "the models needs it, and it is never saved."}
+    try:
+        body, problem = _get_models(key)
+    except Exception as error:  # noqa: BLE001
+        # The exception's TYPE, never its text. An exception's message is
+        # arbitrary — a library is free to quote whatever it was given — and
+        # this reply goes to a browser. Every sentence returned from here is one
+        # this module wrote. The type still says the useful thing: a
+        # ConnectionError and an SSLError are different problems.
+        body, problem = None, ("The models could not be listed "
+                               f"({type(error).__name__}).")
+    if problem:
+        return {"available": False, "models": [], "problem": problem}
+    models = sorted(str(item.get("id") or "") for item in (body.get("data") or [])
+                    if isinstance(item, dict) and item.get("id"))
+    if not models:
+        return {"available": False, "models": [],
+                "problem": "That key returned no models."}
+    return {"available": True, "models": models, "default": MODEL}
+
+
+def _get_models(key: str):
+    """``(body, problem)`` — the one GET that leaves this app.
+
+    Same structural shape as `_ask` below: exactly one `requests.get` in this
+    file, its URL checked at the call site, so a second endpoint cannot be
+    added without editing the check too. `MODELS_URL` is read-only — it lists
+    what a key can see and changes nothing.
+    """
+    import requests
+
+    if MODELS_URL != "https://api.openai.com/v1/models":
+        frappe.throw("Refusing to call anything but the models endpoint.")
+    response = requests.get(
+        MODELS_URL,
+        headers={"authorization": "Bearer " + key},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        # The status ALONE, and returned rather than thrown so the picker can
+        # show it in place. A 401 body can quote the request, and "helpful"
+        # context is how a key reaches `_server_messages` and a browser.
+        return None, f"The LLM provider returned HTTP {response.status_code}."
+    return response.json(), None
 
 
 def _model(model: str = None):
