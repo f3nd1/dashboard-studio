@@ -409,3 +409,23 @@ class TestStudioMakesNoNetworkCall(unittest.TestCase):
                 if marker in text:
                     offenders.append(f"{path.name}: {marker}")
         self.assertEqual(offenders, [], "the convert path made a network call")
+
+
+class TestASimpleChartThroughConvert(_Base):
+    """A scalar card end to end: the chart Convert writes is a Number, and the
+    reply does not pretend it has series."""
+
+    SQL = "SELECT COUNT(*) AS `count` FROM `tabStudent Applicant`"
+
+    def test_a_scalar_card_writes_a_Number_chart(self):
+        result = self.api.convert_sql(self.SQL, workbook="2",
+                                      card={"card_id": 9, "display": "scalar",
+                                            "series_settings": {}})
+        charts = list(self.store.get("Insights Chart v3", {}).values())
+        self.assertEqual(len(charts), 1)
+        self.assertEqual(charts[0]["chart_type"], "Number")
+        config = self.frappe.parse_json(charts[0]["config"])
+        self.assertEqual([m["measure_name"] for m in config["number_columns"]],
+                         ["count"])
+        self.assertEqual(result["chart"]["series"], [])
+        self.assertIsNone(result["chart_not_built"])

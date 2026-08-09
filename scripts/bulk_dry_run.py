@@ -70,7 +70,8 @@ that fault has already cost a round trip twice in this project.
 def _dry_run():
     # noqa on the block: isort wants a blank line before the first-party
     # import, and a blank line here breaks the piped-paste form.
-    import os  # noqa: I001
+    import json  # noqa: I001
+    import os
     import pathlib
     import re
     import sys
@@ -164,9 +165,12 @@ def _dry_run():
         from dashboard_studio.integrations.metabase.parser import analyze_sql
         from dashboard_studio.integrations.metabase.sql_ops import operations_from_sql
     try:
-        from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
+        from dashboard_studio.integrations.metabase.chart_config import (
+            chart_config_from_card,
+            date_part_grouping,
+        )
     except ImportError:
-        date_part_grouping = None
+        chart_config_from_card = date_part_grouping = None
     try:
         from dashboard_studio.api.convert import _table_columns
         typed = True
@@ -265,6 +269,10 @@ def _dry_run():
     # it is neither a refusal nor "converts cleanly", and filing it under either
     # loses it. Keyed by the part so `month` and `day` are counted apart.
     unchartable = {}
+    # Auto-chart coverage: of the reports that CONVERT, how many get their
+    # chart built from the sidecar, and what stops the rest. Only measurable
+    # at site depth — the chart is built from the typed operations.
+    chart_built, chart_fallback, chart_no_sidecar = [], {}, []
     clean, blocked, ungrouped = [], {}, {}
     unreadable_tables = {}
     per_report = {}
@@ -297,6 +305,24 @@ def _dry_run():
                     part = date_part_grouping(converted["operations"])
                     if part:
                         unchartable.setdefault(part["part"], []).append(report)
+                if not reasons and chart_config_from_card:
+                    sidecar = path.with_suffix(".json")
+                    if not sidecar.is_file():
+                        chart_no_sidecar.append(report)
+                    else:
+                        try:
+                            side = json.loads(sidecar.read_text())
+                        except Exception:
+                            side = None
+                        config, _kind, why = (chart_config_from_card(
+                            side, converted["operations"])
+                            if isinstance(side, dict)
+                            else (None, None, "the sidecar is not readable JSON"))
+                        if config:
+                            chart_built.append(report)
+                        else:
+                            chart_fallback.setdefault(
+                                " ".join(str(why).split()), []).append(report)
         except Exception as error:
             # A crash is a finding in its own right: every input here is a real
             # report, and the converter is supposed to refuse, not raise.
@@ -352,6 +378,26 @@ def _dry_run():
         print("   type checks did not run — a LIKE filter, an average over a text")
         print("   column and a column the table no longer has all pass this run and")
         print("   refuse on a site. Run it under `bench console` for the real answer.")
+    if typed and (chart_built or chart_fallback or chart_no_sidecar):
+        covered = len(set(chart_built))
+        eligible = covered + len({r for v in chart_fallback.values() for r in v})
+        print()
+        print("=" * 78)
+        print(f"Auto-chart coverage: {covered} of {eligible} converting reports "
+              "with a sidecar")
+        print("=" * 78)
+        print("   A covered report gets its Insights chart written by Convert —")
+        print("   type, series and labels from the card's own settings. The rest")
+        print("   convert fine and leave the chart for a person, for the reason")
+        print("   shown. Reasons are this converter's own sentences, verbatim.")
+        if chart_no_sidecar:
+            print(f"   ({len(set(chart_no_sidecar))} more convert but have no "
+                  ".json sidecar beside them — re-run")
+            print("   scripts/metabase_export_sql.py, which now writes the pair.)")
+        for why in sorted(chart_fallback, key=lambda k: -len(set(chart_fallback[k]))):
+            reports = sorted(set(chart_fallback[why]))
+            print(f"   {len(reports):>5}  {why}")
+            print(f"          e.g. {', '.join(reports[:examples_per_group])}")
     if unchartable:
         print()
         print("=" * 78)

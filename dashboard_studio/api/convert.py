@@ -180,9 +180,11 @@ def _chart_from(card, operations, workbook, query, title):
         "chart_type": chart_type,
         "config": frappe.as_json(config),
     }).insert()
-    return {"name": chart.name, "chart_type": chart_type,
-            "series": [{"name": s.get("name"), "type": s.get("type"),
-                        "align": s.get("align"),
-                        "measure_name": (s.get("measure") or {}).get("measure_name")}
-                       for s in config["y_axis"]["series"]],
+    # Only an axis chart HAS series; a Number/Donut/Table reply carries an
+    # empty list, which is the truth rather than a reshaped approximation.
+    series = [{"name": s.get("name"), "type": s.get("type"),
+               "align": s.get("align"),
+               "measure_name": (s.get("measure") or {}).get("measure_name")}
+              for s in (config.get("y_axis") or {}).get("series") or []]
+    return {"name": chart.name, "chart_type": chart_type, "series": series,
             "insights_url": f"/insights/workbook/{workbook}/chart/{chart.name}"}, None

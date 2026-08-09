@@ -46,8 +46,11 @@ TABLES = {"Student Applicant": UNCONDITIONAL + ["status", "academic_year"]}
 
 class _Base(unittest.TestCase):
     def run_script(self, files, namespace_split=True, frappe=None, argv=None,
-                   raw_argv=None, env=None, extra_dirs=()):
-        """Write `files` to a temp directory and run the real script over it."""
+                   raw_argv=None, env=None, extra_dirs=(), sidecars=None):
+        """Write `files` to a temp directory and run the real script over it.
+
+        `sidecars` is `{report_name: json_text}`, written as `<name>.json`
+        beside the `.sql` — the pair `metabase_export_sql.py` produces."""
         saved_modules = {k: v for k, v in sys.modules.items()
                          if k == "frappe" or k.startswith("dashboard_studio.")}
         saved_argv = list(sys.argv)
@@ -60,6 +63,8 @@ class _Base(unittest.TestCase):
             pathlib.Path(directory).mkdir()
             for name, sql in files.items():
                 (pathlib.Path(directory) / f"{name}.sql").write_text(sql)
+            for name, text in (sidecars or {}).items():
+                (pathlib.Path(directory) / f"{name}.json").write_text(text)
             for name in extra_dirs:
                 (pathlib.Path(root) / name).mkdir()
                 (pathlib.Path(root) / name / "stray.sql").write_text(CLEAN)
@@ -553,3 +558,54 @@ class TestTheUnchartableGroup(_Base):
         self.assertIn("Converts, but the chart cannot be drawn (2)", text)
         self.assertIn("MONTH  (1 files)", text)
         self.assertIn("DAY  (1 files)", text)
+
+
+class TestAutoChartCoverage(_Base):
+    """Of the reports that convert, how many get their chart auto-built.
+
+    The acceptance number for the display mapping lives here: the corpus run
+    is the user's step, but the section's arithmetic — built vs fallback, the
+    sidecar-less counted apart, reasons verbatim — is pinned on small sets.
+    """
+
+    SCALAR = "SELECT COUNT(*) AS `count` FROM `tabStudent Applicant`"
+
+    def test_built_and_fallback_are_counted_apart(self):
+        frappe, _ = self.with_frappe()
+        text = self.run_script(
+            {"single": self.SCALAR, "gauge": self.SCALAR, "bare": self.SCALAR},
+            frappe=frappe,
+            sidecars={"single": '{"display": "scalar", "series_settings": {}}',
+                      "gauge": '{"display": "gauge", "series_settings": {}}'})
+        self.assertIn("Auto-chart coverage: 1 of 2 converting reports", text)
+        self.assertIn("drew this card as 'gauge'", text)
+        # No sidecar is its own line, not a fallback reason — the fix is
+        # re-running the exporter, not building anything.
+        self.assertIn("1 more convert but have no .json sidecar", text)
+
+    def test_a_refusing_report_is_not_in_the_coverage_arithmetic(self):
+        """Chart coverage is a question about reports that CONVERT — and the
+        refusal has to be a SITE-DEPTH one (LIKE, caught by the operator
+        check), because a shape-level refusal never reaches this code at all
+        and cannot exercise the guard. The first version used UNION and
+        passed with the guard removed."""
+        frappe, _ = self.with_frappe()
+        text = self.run_script(
+            {"likes": LIKE},
+            frappe=frappe,
+            sidecars={"likes": '{"display": "scalar", "series_settings": {}}'})
+        self.assertIn("1 refuse", text)
+        self.assertNotIn("Auto-chart coverage", text)
+
+    def test_an_unreadable_sidecar_is_a_fallback_with_its_own_reason(self):
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"odd": self.SCALAR}, frappe=frappe,
+                               sidecars={"odd": "{not json"})
+        self.assertIn("Auto-chart coverage: 0 of 1", text)
+        self.assertIn("sidecar is not readable JSON", text)
+
+    def test_off_bench_the_section_does_not_appear(self):
+        """No operations off a bench, so nothing honest to count."""
+        text = self.run_script({"single": self.SCALAR},
+                               sidecars={"single": '{"display": "scalar"}'})
+        self.assertNotIn("Auto-chart coverage", text)

@@ -94,16 +94,36 @@ class TestWhatIsNotBuilt(unittest.TestCase):
         self.assert_refused(QIPI_CARD, ops(measures=(AVG, second)),
                             "which of them its display setting belongs to")
 
-    def test_no_series_settings_at_all_changes_nothing(self):
-        """Nothing to copy is not a chart to build — Insights' defaults already
-        do this, and creating a chart to say so would add a record for nothing."""
-        self.assert_refused({"display": "line", "series_settings": {}}, ops(),
-                            "recorded no per-series display settings")
+    def test_EMPTY_series_settings_still_builds_from_the_card_display(self):
+        """Superseded by the display mapping (Fix 1): the chart TYPE alone is
+        Metabase's own statement and picking it is the win — without this
+        chart there is no chart at all, and somebody clicks it by hand 1700
+        times. Series inherit the card display; no labels are invented."""
+        config, chart_type, reason = chart_config_from_card(
+            {"display": "line", "series_settings": {}}, ops())
+        self.assertIsNone(reason)
+        self.assertEqual(chart_type, "Line")
+        self.assertEqual([s["type"] for s in config["y_axis"]["series"]],
+                         ["line", "line"])
+        self.assertNotIn("name", config["y_axis"]["series"][0])
+
+    def test_settings_matching_NOTHING_abandon_the_chart(self):
+        """The 34 corpus cards keyed by custom names (`teacher_1`). Building
+        the chart anyway would silently drop every setting somebody stored —
+        a chart that renders and is not the one they configured."""
+        card = {"display": "line",
+                "series_settings": {"teacher_1": {"display": "bar"},
+                                    "teacher_2": {"title": "T2"}}}
+        config, chart_type, reason = chart_config_from_card(card, ops())
+        self.assertIsNone(config)
+        self.assertIn("names this query does not produce", reason)
+        self.assertIn("teacher_1", reason)
 
     def test_an_untranslated_card_display_falls_back(self):
-        """`area`, `combo`, `scalar`, and whatever Metabase adds next. Insights'
-        Series.type is 'line' | 'bar' and nothing else."""
-        for display in ("area", "combo", "scalar", "table", ""):
+        """`gauge`, `object`, `pivot`, `combo`, `area`, `map` — the ones the
+        corpus scan counted and Fix 1 deliberately left unmapped — plus blank
+        and whatever Metabase adds next."""
+        for display in ("area", "combo", "gauge", "object", "pivot", "map", ""):
             with self.subTest(display):
                 self.assert_refused(dict(QIPI_CARD, display=display), ops(),
                                     "does not translate into a chart type")
@@ -228,3 +248,98 @@ class TestTheUnchartableDatePartDetector(unittest.TestCase):
         from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
         for operations in ([], None, [{"type": "source"}]):
             self.assertIsNone(date_part_grouping(operations))
+
+
+class TestTheSimpleChartFamilies(unittest.TestCase):
+    """scalar/smartscalar -> Number, pie -> Donut, funnel -> Funnel,
+    table -> Table, row -> Row. Every requirement is `chart.ts`'s own
+    validation at v3.12.2, so a config this refuses is one Insights would
+    reject on open — and the config shapes are asserted IN FULL, because a
+    chart that renders and says something else is the failure mode here.
+    """
+
+    def build(self, display, measures=(COUNT,), dimensions=()):
+        return chart_config_from_card({"display": display},
+                                      ops(measures=measures,
+                                          dimensions=dimensions))
+
+    def test_a_scalar_becomes_a_Number_in_full(self):
+        config, chart_type, reason = self.build("scalar", measures=(COUNT, AVG))
+        self.assertIsNone(reason)
+        self.assertEqual(chart_type, "Number")
+        self.assertEqual(config, {"number_columns": [COUNT, AVG],
+                                  "number_column_options": [{}, {}],
+                                  "comparison": False, "sparkline": False})
+
+    def test_smartscalar_is_a_Number_too(self):
+        self.assertEqual(self.build("smartscalar")[1], "Number")
+
+    def test_a_GROUPED_scalar_falls_back_rather_than_dropping_the_grouping(self):
+        """`addNumberChartOperation` summarizes by date_column alone, so a
+        Number chart of a grouped query answers a smaller question."""
+        config, _, reason = self.build("scalar", dimensions=(YEAR,))
+        self.assertIsNone(config)
+        self.assertIn("would drop the grouping", reason)
+
+    def test_a_pie_becomes_a_Donut_in_full(self):
+        config, chart_type, reason = self.build("pie", measures=(COUNT,),
+                                                dimensions=(YEAR,))
+        self.assertIsNone(reason)
+        self.assertEqual(chart_type, "Donut")
+        self.assertEqual(config, {"label_column": YEAR, "value_column": COUNT})
+
+    def test_a_funnel_is_the_same_shape_named_Funnel(self):
+        config, chart_type, reason = self.build("funnel", measures=(COUNT,),
+                                                dimensions=(YEAR,))
+        self.assertIsNone(reason)
+        self.assertEqual(chart_type, "Funnel")
+        self.assertEqual(config, {"label_column": YEAR, "value_column": COUNT})
+
+    def test_a_pie_with_two_measures_falls_back(self):
+        """`DonutChartConfig` has exactly one value_column slot; picking one of
+        two measures would chart half the question."""
+        config, _, reason = self.build("pie", measures=(COUNT, AVG),
+                                       dimensions=(YEAR,))
+        self.assertIsNone(config)
+        self.assertIn("exactly one label column and one value", reason)
+
+    def test_a_table_becomes_a_Table_in_full(self):
+        config, chart_type, reason = self.build("table", measures=(COUNT, AVG),
+                                                dimensions=(YEAR,))
+        self.assertIsNone(reason)
+        self.assertEqual(chart_type, "Table")
+        self.assertEqual(config, {"rows": [YEAR], "columns": [],
+                                  "values": [COUNT, AVG]})
+
+    def test_an_UNGROUPED_table_falls_back(self):
+        """`chart.ts` demands non-empty rows — "Rows are required" — so this
+        config would fail validation the moment the chart opened."""
+        config, _, reason = self.build("table")
+        self.assertIsNone(config)
+        self.assertIn("groups by nothing", reason)
+
+    def test_a_row_card_is_a_Row_chart_with_UNTYPED_series(self):
+        """Metabase hides the per-series display control for row cards (its
+        series.ts admits only line/area/bar/combo), so a stored display there
+        is a leftover Metabase itself does not render — and Insights' Row
+        renderer supplies the series type. Writing one would be inventing."""
+        config, chart_type, reason = chart_config_from_card(
+            {"display": "row",
+             "series_settings": {"count": {"display": "bar", "title": "N"}}},
+            ops(measures=(COUNT,), dimensions=(YEAR,)))
+        self.assertIsNone(reason)
+        self.assertEqual(chart_type, "Row")
+        self.assertNotIn("type", config["y_axis"]["series"][0])
+        # …but the LABEL still applies: Metabase renders titles on row cards.
+        self.assertEqual(config["y_axis"]["series"][0]["name"], "N")
+
+    def test_series_settings_do_not_reach_a_simple_chart(self):
+        """They describe axis series — type and axis side — and a Number has
+        neither, so entries here are neither applied nor a reason to refuse."""
+        config, chart_type, reason = chart_config_from_card(
+            {"display": "scalar",
+             "series_settings": {"count": {"display": "bar"}}},
+            ops(measures=(COUNT,), dimensions=()))
+        self.assertIsNone(reason)
+        self.assertEqual(chart_type, "Number")
+        self.assertNotIn("series", repr(config))
