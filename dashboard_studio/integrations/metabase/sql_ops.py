@@ -50,6 +50,8 @@ at all.
 
 from __future__ import annotations
 
+import re
+
 # ---------------------------------------------------------------------------
 # The Insights v3 side, read from source at the installed version
 # (v3.12.2, ``frontend/src2/types/query.types.ts``). These shapes and the
@@ -655,7 +657,108 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
 
     if reasons:
         return {"supported": False, "operations": [], "reasons": reasons}
+    _promote_year_mutates(operations, columns)
     return {"supported": True, "operations": operations, "reasons": []}
+
+
+# A dimension is promotable when its mutate is EXACTLY `year(<column>)` —
+# a bare column, nothing else combined in. Anything wider is a different value.
+_YEAR_MUTATE = re.compile(r"^year\((\w+)\)$")
+
+
+def _promote_year_mutates(operations, columns):
+    """A grouped `year(col)` mutate becomes the DATE dimension with a granularity.
+
+    ADR-024 built the granularity route for the FLAT shape — `GROUP BY
+    YEAR(col)` — where the parser sees the call. A wrapped or aliased YEAR
+    (`CONCAT('', YEAR(col)) AS Year`, ADR-012) arrives here as a mutate grouped
+    by its own alias instead, so the dimension lands as an Integer and the
+    chart's X axis has nothing date-shaped to offer. Same question, different
+    spelling, worse chart.
+
+    This is the ONE consolidation point: it runs on the final operation list,
+    so it catches every spelling that reduces to "grouped by year(col)" —
+    flat, wrapped, aliased, or produced by the regroup button — without a
+    per-spelling rule. It fires only when the whole story is visible and safe:
+
+    - the mutate's expression is exactly ``year(<column>)`` — nothing else;
+    - the column is a Date/Datetime in exactly one table this query reads
+      (already validated upstream, re-checked here because this pass reads
+      the expression TEXT and a text match must not out-vote the schema);
+    - nothing else references the alias: a filter, cast, join, measure or
+      another mutate naming it would break if the mutate vanished, so any
+      such reference leaves everything exactly as it was;
+    - the date column's name is not already taken by another dimension or a
+      measure, since the promoted dimension adopts it.
+
+    An ORDER BY on the alias is rewritten to the column — ordering by the
+    date orders by the year exactly, which is the same equivalence that makes
+    the promotion itself safe (`truncate("Y")` partitions by calendar year).
+    """
+    summarize = next((op for op in operations if op.get("type") == "summarize"), None)
+    if not summarize:
+        return
+    taken = ({d.get("dimension_name") for d in summarize.get("dimensions") or []}
+             | {m.get("measure_name") for m in summarize.get("measures") or []})
+    for dimension in summarize.get("dimensions") or []:
+        alias = str(dimension.get("dimension_name") or "")
+        mutate = next((op for op in operations if op.get("type") == "mutate"
+                       and op.get("new_name") == alias), None)
+        if not mutate:
+            continue
+        found = _YEAR_MUTATE.match(
+            str((mutate.get("expression") or {}).get("expression") or ""))
+        if not found:
+            continue
+        column = found.group(1)
+        types = {table: fields[column] for table, fields in (columns or {}).items()
+                 if column in (fields or {})}
+        if len(types) != 1 or next(iter(types.values())) not in DATE_DATA_TYPES:
+            continue
+        if column in taken - {alias}:
+            continue
+        if _alias_referenced_outside(operations, alias, mutate, dimension):
+            continue
+        operations.remove(mutate)
+        dimension.update({"dimension_name": column, "column_name": column,
+                          "data_type": next(iter(types.values())),
+                          "granularity": "year"})
+        for op in operations:
+            if (op.get("type") == "order_by"
+                    and (op.get("column") or {}).get("column_name") == alias):
+                op["column"]["column_name"] = column
+
+
+def _alias_referenced_outside(operations, alias, mutate, dimension):
+    """Does anything but the dimension and an ORDER BY read this alias?"""
+    for op in operations:
+        if op is mutate or op.get("type") in ("source", "order_by", "limit"):
+            continue
+        kind = op.get("type")
+        if kind == "filter" and (op.get("column") or {}).get("column_name") == alias:
+            return True
+        if kind == "filter_group":
+            for rule in op.get("filters") or []:
+                if (rule.get("column") or {}).get("column_name") == alias:
+                    return True
+        if kind == "cast" and (op.get("column") or {}).get("column_name") == alias:
+            return True
+        if kind == "join":
+            condition = op.get("join_condition") or {}
+            for side in ("left_column", "right_column"):
+                if (condition.get(side) or {}).get("column_name") == alias:
+                    return True
+        if kind == "mutate" and re.search(
+                r"\b" + re.escape(alias) + r"\b",
+                str((op.get("expression") or {}).get("expression") or "")):
+            return True
+        if kind == "summarize":
+            if any(m.get("column_name") == alias for m in op.get("measures") or []):
+                return True
+            for d in op.get("dimensions") or []:
+                if d is not dimension and d.get("column_name") == alias:
+                    return True
+    return False
 
 
 def rows_multiplied_by(operations, child_doctypes):

@@ -1287,3 +1287,136 @@ class TestJoiningAChildTable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheYearMutatePromotion(unittest.TestCase):
+    """A grouped `year(col)` mutate becomes the Date dimension + granularity.
+
+    One consolidation point on the FINAL operation list, so every spelling that
+    reduces to "grouped by year(col)" — flat, wrapped, aliased, regrouped —
+    lands on ADR-024's chartable shape. The guards matter more than the happy
+    path: firing when anything else reads the alias breaks that reader, and a
+    promotion that grabs a non-date column charts garbage.
+    """
+
+    COLUMNS = {"Quality Action": {"name": "String", "d": "Date",
+                                  "v": "Decimal", "code": "Integer"}}
+
+    def run_it(self, sql, columns=None):
+        return run(sql, columns=columns or self.COLUMNS)
+
+    def wrapped(self, inner_expr="CONCAT('', YEAR(`t`.`d`))", alias="Year"):
+        return ("SELECT `__mb`.`" + alias + "` AS `" + alias + "`, "
+                "AVG(`__mb`.`v`) AS `avg` FROM ( SELECT " +
+                inner_expr.replace("`t`", "`tabQuality Action`") +
+                " AS `" + alias + "`, `tabQuality Action`.`v` AS `v` "
+                "FROM `tabQuality Action` ) AS `__mb` "
+                "GROUP BY `__mb`.`" + alias + "` ORDER BY `__mb`.`" + alias + "` ASC")
+
+    def test_the_wrapped_year_is_promoted_whole(self):
+        result = self.run_it(self.wrapped())
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "summarize", "order_by"])
+        self.assertEqual(
+            [op for op in result["operations"] if op["type"] == "summarize"][0]
+            ["dimensions"],
+            [{"dimension_name": "d", "column_name": "d",
+              "data_type": "Date", "granularity": "year"}])
+        self.assertEqual(result["operations"][2]["column"]["column_name"], "d")
+
+    def test_a_MONTH_mutate_is_left_exactly_alone(self):
+        """Month-of-year is a different question (ADR-024); promoting it would
+        silently regroup twelve pooled months into forty-odd years."""
+        result = self.run_it(self.wrapped("CONCAT('', MONTH(`t`.`d`))", "Month"))
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([op["new_name"] for op in result["operations"]
+                          if op["type"] == "mutate"], ["Month"])
+        dim = [op for op in result["operations"]
+               if op["type"] == "summarize"][0]["dimensions"][0]
+        self.assertEqual(dim["data_type"], "Integer")
+        self.assertNotIn("granularity", dim)
+
+    def test_an_alias_a_FILTER_reads_is_not_promoted(self):
+        """`WHERE year(d) = 2025 GROUP BY YEAR(d)` in the wrapped spelling: the
+        filter names the mutate's alias, so removing the mutate would leave the
+        filter reading a column that no longer exists."""
+        sql = ("SELECT COUNT(*) AS `c` FROM `tabQuality Action` "
+               "WHERE YEAR(`d`) = 2025 GROUP BY MONTH(`d`)")
+        # The WHERE lift makes a `year_of_d` mutate the filter reads. Nothing
+        # groups by it, so the promotion must not even consider it — but pin
+        # the filter's survival, since that is what breaks if this regresses.
+        result = self.run_it(sql)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertIn({"type": "mutate", "new_name": "year_of_d",
+                       "data_type": "Auto",
+                       "expression": {"type": "expression",
+                                      "expression": "year(d)"}},
+                      result["operations"])
+        self.assertEqual(
+            [op for op in result["operations"] if op["type"] == "filter"][0]
+            ["column"]["column_name"], "year_of_d")
+
+    def test_a_year_of_a_NON_DATE_column_is_not_promoted(self):
+        """The upstream check already refuses year() over text; this pins the
+        pass's own re-check so a text match can never out-vote the schema."""
+        from dashboard_studio.integrations.metabase.sql_ops import (
+            _promote_year_mutates,
+        )
+        operations = [
+            {"type": "source", "table": {"table_name": "tabQuality Action"}},
+            {"type": "mutate", "new_name": "Year", "data_type": "Auto",
+             "expression": {"type": "expression", "expression": "year(code)"}},
+            {"type": "summarize", "measures": [{"measure_name": "count",
+                                                "column_name": "count"}],
+             "dimensions": [{"dimension_name": "Year", "column_name": "Year",
+                             "data_type": "Integer"}]},
+        ]
+        _promote_year_mutates(operations, self.COLUMNS)
+        self.assertEqual([op["type"] for op in operations],
+                         ["source", "mutate", "summarize"])
+
+    def test_a_column_in_TWO_tables_is_ambiguous_and_left_alone(self):
+        from dashboard_studio.integrations.metabase.sql_ops import (
+            _promote_year_mutates,
+        )
+        operations = [
+            {"type": "mutate", "new_name": "Year",
+             "expression": {"type": "expression", "expression": "year(d)"}},
+            {"type": "summarize", "measures": [],
+             "dimensions": [{"dimension_name": "Year", "column_name": "Year",
+                             "data_type": "Integer"}]},
+        ]
+        both = {"A": {"d": "Date"}, "B": {"d": "Date"}}
+        _promote_year_mutates(operations, both)
+        self.assertEqual(operations[0]["type"], "mutate")
+
+    def test_an_alias_read_by_ANOTHER_mutate_is_left_alone(self):
+        from dashboard_studio.integrations.metabase.sql_ops import (
+            _promote_year_mutates,
+        )
+        operations = [
+            {"type": "mutate", "new_name": "Year",
+             "expression": {"type": "expression", "expression": "year(d)"}},
+            {"type": "mutate", "new_name": "Shifted",
+             "expression": {"type": "expression", "expression": "Year * 1"}},
+            {"type": "summarize", "measures": [],
+             "dimensions": [{"dimension_name": "Year", "column_name": "Year",
+                             "data_type": "Integer"}]},
+        ]
+        _promote_year_mutates(operations, self.COLUMNS)
+        self.assertEqual([op.get("new_name") for op in operations[:2]],
+                         ["Year", "Shifted"])
+
+    def test_the_regroup_buttons_output_takes_the_same_route(self):
+        """MONTH( substituted for YEAR( by the button, in the WRAPPED spelling,
+        must come out chartable — that is the whole point of the button."""
+        result = self.run_it(self.wrapped("CONCAT('', MONTH(`t`.`d`))", "Month"))
+        regrouped = self.run_it(self.wrapped("CONCAT('', YEAR(`t`.`d`))", "Month"))
+        self.assertNotIn("granularity",
+                         [op for op in result["operations"]
+                          if op["type"] == "summarize"][0]["dimensions"][0])
+        self.assertEqual(
+            [op for op in regrouped["operations"]
+             if op["type"] == "summarize"][0]["dimensions"][0]["granularity"],
+            "year")

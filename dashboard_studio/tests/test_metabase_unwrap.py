@@ -934,42 +934,58 @@ class TestAComputedWrapperBecomesOperations(unittest.TestCase):
             {"type": "source",
              "table": {"type": "table", "data_source": "Site DB",
                        "table_name": "tabQuality Action"}},
-            # The mutate comes FIRST now: a computed column has to exist before
-            # a filter could name it, so every mutate is emitted above the
-            # filters. The cast stays where ADR-009 put it.
-            {"type": "mutate", "new_name": "Year", "data_type": "Auto",
-             "expression": {"type": "expression",
-                            "expression": "year(custom_proposed_date)"}},
             {"type": "cast",
              "column": {"type": "column",
                         "column_name": "custom_aggregated_performance_index_api"},
              "data_type": "Decimal"},
+            # No mutate at all: the grouped `year(d)` mutate is PROMOTED to the
+            # date column carrying a granularity, exactly the shape a flat
+            # `GROUP BY YEAR(d)` produces. One consolidation point, so every
+            # spelling that reduces to "grouped by year(col)" lands here — and
+            # the dimension stays a Date, so it can be a chart's X axis.
             {"type": "summarize",
              "measures": [{"measure_name":
                            "avg_of_custom_aggregated_performance_index_api",
                            "column_name":
                            "custom_aggregated_performance_index_api",
                            "data_type": "Decimal", "aggregation": "avg"}],
-             "dimensions": [{"dimension_name": "Year", "column_name": "Year",
-                             "data_type": "Integer"}]},
-            {"type": "order_by", "column": {"type": "column", "column_name": "Year"},
+             "dimensions": [{"dimension_name": "custom_proposed_date",
+                             "column_name": "custom_proposed_date",
+                             "data_type": "Date", "granularity": "year"}]},
+            # The ORDER BY followed the promotion: ordering by the date orders
+            # by the year exactly, which is the same equivalence that makes the
+            # promotion itself safe.
+            {"type": "order_by",
+             "column": {"type": "column", "column_name": "custom_proposed_date"},
              "direction": "asc"},
         ])
 
-    def test_the_computed_column_exists_before_the_step_that_groups_by_it(self):
-        """The whole reason this needed a live answer: a grouping cannot name a
-        column that does not exist yet."""
-        kinds = [op["type"] for op in self.operations()]
-        self.assertLess(kinds.index("mutate"), kinds.index("summarize"))
+    def test_the_wrapped_year_ends_up_IDENTICAL_to_the_flat_shape(self):
+        """The consolidation claim, asserted directly: `CONCAT('', YEAR(d))`
+        through a wrapper and a bare `GROUP BY YEAR(d)` must produce the same
+        dimension, or the chart works for one spelling of the question and not
+        the other."""
+        flat = operations_from_sql(analyze_sql(
+            "SELECT YEAR(`custom_proposed_date`) AS `Year`, "
+            "AVG(`custom_aggregated_performance_index_api` * 1) AS `avg` "
+            "FROM `tabQuality Action` GROUP BY YEAR(`custom_proposed_date`)"),
+            self.COLUMNS)
+        self.assertTrue(flat["supported"], " | ".join(flat["reasons"]))
+        wrapped_dim = [op for op in self.operations()
+                       if op["type"] == "summarize"][0]["dimensions"][0]
+        flat_dim = [op for op in flat["operations"]
+                    if op["type"] == "summarize"][0]["dimensions"][0]
+        self.assertEqual(wrapped_dim, flat_dim)
+        self.assertEqual(wrapped_dim["granularity"], "year")
 
-    def test_the_CONCAT_wrapper_is_dropped_and_the_year_keeps_its_own_type(self):
+    def test_the_CONCAT_wrapper_is_dropped_and_the_year_stays_a_date(self):
         """Metabase writes `CONCAT('', YEAR(d))` to make the year a text label
-        so the chart axis is categorical. Insights groups by a number quite
-        happily, so the label wrapper goes and the values are the same years."""
-        mutate = [op for op in self.operations() if op["type"] == "mutate"][0]
-        self.assertEqual(mutate["expression"]["expression"],
-                         "year(custom_proposed_date)")
-        self.assertNotIn("concat", mutate["expression"]["expression"])
+        so the chart axis is categorical. Insights charts a Date-with-
+        granularity dimension natively, so both wrappers go — the CONCAT and
+        the year() itself — and the values are the same years."""
+        operations = self.operations()
+        self.assertEqual([op for op in operations if op["type"] == "mutate"], [])
+        self.assertNotIn("concat", repr(operations).lower())
 
     def test_the_wrappers_alias_reaches_nothing(self):
         text = repr(self.operations())
@@ -1280,8 +1296,11 @@ class TestACaseThatMapsValuesToLabels(unittest.TestCase):
                 if op.get("new_name") == "Month Label"][0]
 
     def test_the_reported_capture_converts_in_full(self):
+        """Two mutates now, not three: the `year(d)` one is promoted into the
+        dimension's granularity. The MONTH pair stays — month-of-year is a
+        different question and keeps its numeric mutate on purpose."""
         self.assertEqual([op["type"] for op in self.operations()],
-                         ["source", "mutate", "mutate", "mutate", "cast",
+                         ["source", "mutate", "mutate", "cast",
                           "summarize", "order_by", "order_by", "order_by"])
 
     def test_the_twelve_branches_all_survive_in_order(self):
@@ -1321,7 +1340,7 @@ class TestACaseThatMapsValuesToLabels(unittest.TestCase):
                       [op for op in self.operations()
                        if op["type"] == "summarize"][0]["dimensions"]}
         self.assertEqual(dimensions,
-                         {"Year": "Integer", "Month Label": "String",
+                         {"custom_proposed_date": "Date", "Month Label": "String",
                           "Month No": "Integer"})
 
     def test_the_mutate_comes_before_the_summarize_that_groups_by_it(self):
