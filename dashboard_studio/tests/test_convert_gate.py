@@ -379,8 +379,12 @@ class TestStudioMakesNoNetworkCall(unittest.TestCase):
             if "tests" in path.parts or "__pycache__" in path.parts:
                 continue
             text = path.read_text()
-            for marker in ("metabase_url", "metabase_api_key", "/api/card",
-                           "/api/dataset", "X-API-Key"):
+            # USE-shaped markers, not bare names: `exports.py` mentions
+            # `metabase_api_key` in the docstring explaining why a traversal
+            # there would disclose it, and a guard that its own documentation
+            # trips is one somebody deletes.
+            for marker in ('conf.get("metabase_url")', 'conf.get("metabase_api_key")',
+                           '"/api/card', '"/api/dataset', '"X-API-Key"'):
                 if marker in text:
                     offenders.append(f"{path.name}: {marker}")
         self.assertEqual(offenders, [],

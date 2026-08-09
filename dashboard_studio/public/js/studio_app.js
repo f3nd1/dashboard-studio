@@ -130,6 +130,12 @@
       // ordinary paste, and the chart is left at Insights' default.
       vizCard: null,
       vizCardName: "",
+      // The server-side export search. `exports` is the last reply — null means
+      // "not asked yet", and an unavailable one carries the folder problem so
+      // the box explains itself instead of looking empty.
+      exportSearch: "",
+      exports: null,
+      exportsLoading: false,
     };
   }
 
@@ -340,82 +346,95 @@
     box.addEventListener("input", function () { self.state.vizSql = box.value; });
     wrap.appendChild(box);
 
-    // Load an exported PAIR — `<report>--<id>.sql` and its `.json` sidecar,
-    // written together by `metabase_export_sql.py`. Both are picked in one
-    // selection and matched on the filename before the extension, so the
-    // sidecar that reaches the server is the one exported beside that exact
-    // SQL. Nothing is fetched and nothing is matched on the query TEXT: this
-    // export is full of near-identical variants of one report, so a text match
-    // would silently apply another report's chart settings.
+    // Load an exported report FROM THE SERVER.
+    //
+    // This was a native `<input type=file>` and could never have worked: a file
+    // input opens the CLIENT's filesystem, so clicking it showed the user their
+    // own Mac's Downloads while the exports sat on the bench at
+    // sites/metabase_sql. That is a browser security boundary, not a path to
+    // configure. The list has to come from the server, so it does — and
+    // searching it also answers the original complaint, which was browsing
+    // ~1775 files by raw filename.
     var load = el("div", "dss-vizimport-load");
-    var picker = el("input");
-    picker.type = "file";
-    picker.multiple = true;
-    picker.accept = ".sql,.json";
-    picker.id = "dss-export-pair";
-    picker.className = "dss-fileinput";
-    var picked = el("label", "dss-filelabel", "Load an exported report…");
-    picked.setAttribute("for", picker.id);
-    picked.title = "Select a report's .sql and its .json sidecar together. " +
-      "The sidecar carries the chart's series types and labels from Metabase.";
-    var chosen = el("div", "dss-hint dss-filechosen",
-      this.state.vizCard
-        ? "Chart settings loaded from " + this.state.vizCardName
-        : "Optional. Without the sidecar the query still converts; only the " +
-          "chart is left at Insights' default.");
-    // Input FIRST: the focus ring is drawn on the label via `input:focus +
-    // label`, and the off-screen input has no visible focus of its own.
-    load.appendChild(picker);
-    load.appendChild(picked);
-    load.appendChild(chosen);
+    var search = el("input", "dss-input dss-searchbox");
+    search.type = "search";
+    search.placeholder = "Find an exported report — type part of its name";
+    search.setAttribute("aria-label", "Search exported Metabase reports");
+    search.value = this.state.exportSearch || "";
+    var results = el("div", "dss-searchresults");
+    results.id = "dss-search-results";
+    var status = el("div", "dss-hint dss-searchstatus");
+    status.id = "dss-search-status";
+    load.appendChild(search);
+    load.appendChild(status);
+    load.appendChild(results);
     wrap.appendChild(load);
 
-    picker.addEventListener("change", function () {
-      var files = Array.prototype.slice.call(picker.files || []);
-      var base = function (f) { return f.name.replace(/\.(sql|json)$/i, ""); };
-      var sqlFile = files.filter(function (f) { return /\.sql$/i.test(f.name); })[0];
-      if (!sqlFile) {
-        self.state.notice = "Pick the report's .sql file (and its .json beside it).";
-        self.render();
+    // Looked up from the LIVE document every time, never captured.
+    //
+    // These nodes are painted again when the server replies, and any other
+    // async state change — the workbook list arriving — re-renders the page in
+    // between and detaches them. Holding the references painted a correct list
+    // into nodes that were no longer on screen: the state said four reports,
+    // the page still said "Looking…". Found by screenshotting it; the
+    // assertions on state were all green.
+    var paint = function () {
+      var results = document.getElementById("dss-search-results");
+      var status = document.getElementById("dss-search-status");
+      if (!results || !status) return;
+      results.innerHTML = "";
+      var found = self.state.exports;
+      if (!found) {
+        status.textContent = self.state.exportsLoading
+          ? "Looking…"
+          : "Optional. Without an exported report the query still converts; " +
+            "only the chart is left at Insights' default.";
         return;
       }
-      // Same base name, same export run. A .json whose name does not match is
-      // another report's, and is not read.
-      var jsonFile = files.filter(function (f) {
-        return /\.json$/i.test(f.name) && base(f) === base(sqlFile);
-      })[0];
-      self.state.vizCard = null;
-      self.state.vizCardName = "";
-      var done = function () {
-        self.state.vizTitle = self.state.vizTitle ||
-          base(sqlFile).replace(/--\d+$/, "");
-        self.render();
-      };
-      var readSql = new FileReader();
-      readSql.onload = function () {
-        self.state.vizSql = String(readSql.result || "");
-        if (!jsonFile) {
-          self.state.notice = "";
-          done();
-          return;
-        }
-        var readJson = new FileReader();
-        readJson.onload = function () {
-          try {
-            self.state.vizCard = JSON.parse(String(readJson.result || ""));
-            self.state.vizCardName = jsonFile.name;
-          } catch (e) {
-            // Not readable is not a chart to guess at.
-            self.state.vizCard = null;
-            self.state.notice = "That sidecar is not readable JSON. The query " +
-              "will still convert; the chart will be Insights' default.";
-          }
-          done();
-        };
-        readJson.readAsText(jsonFile);
-      };
-      readSql.readAsText(sqlFile);
+      if (!found.available) {
+        // Say WHICH folder and why, rather than showing an empty box that
+        // reads as "nothing matched".
+        status.textContent = found.problem || "No exports could be read.";
+        return;
+      }
+      var list = found.reports || [];
+      if (!list.length) {
+        status.textContent = "Nothing matching that in " + found.directory + ".";
+        return;
+      }
+      status.textContent = found.total > found.shown
+        ? "Showing " + found.shown + " of " + found.total + " — keep typing to narrow it."
+        : found.total + (found.total === 1 ? " report" : " reports") + " in " + found.directory;
+      list.forEach(function (item) {
+        var row = el("button", "dss-searchresult");
+        row.type = "button";
+        row.appendChild(el("span", "dss-searchresult-name", item.report));
+        // Whether it will produce a chart is the thing worth knowing BEFORE
+        // clicking, since that is what the sidecar is for.
+        row.appendChild(el("span",
+          "dss-searchresult-tag" + (item.has_sidecar ? " is-ok" : ""),
+          item.has_sidecar ? "chart settings" : "SQL only"));
+        row.addEventListener("click", function () { self.loadExport(item.stem); });
+        results.appendChild(row);
+      });
+    };
+    paint();
+
+    var timer = null;
+    search.addEventListener("input", function () {
+      self.state.exportSearch = search.value;
+      // Debounced: this hits the server on every keystroke otherwise, and the
+      // folder has ~1775 files in it.
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        self.searchExports(search.value, paint);
+      }, 200);
     });
+    // One call on first paint so the folder problem (missing, empty, not
+    // configured) is on screen before anybody types into a box that cannot work.
+    if (this.state.exports === null && !this.state.exportsLoading) {
+      this.searchExports(this.state.exportSearch || "", paint);
+    }
 
     var row = el("div", "dss-vizimport-row");
     var go = el("button", "dss-btn dss-btn-primary", "Convert SQL →");
@@ -796,6 +815,61 @@
   // Always reports through state, so there is exactly one place a result can
   // appear. The refusal TEXT is the server's own, unchanged — only where it
   // renders has moved.
+  // Ask the server which exported reports match. Read-only; it returns names,
+  // never file contents.
+  App.prototype.searchExports = function (text, paint) {
+    var self = this;
+    if (!hasFrappe()) {
+      this.state.exports = { available: false,
+        problem: "Listing the exports needs the server." };
+      paint();
+      return;
+    }
+    this.state.exportsLoading = true;
+    return dsCall({
+      method: "dashboard_studio.api.exports.list_exported_reports",
+      args: { search: text || "" },
+    }).then(function (r) {
+      self.state.exportsLoading = false;
+      self.state.exports = r.message || { available: false,
+        problem: "The server returned no export list." };
+      paint();
+    }).catch(function (err) {
+      self.state.exportsLoading = false;
+      // The server's own sentence — a missing folder or an unset config key
+      // says which, and that is the whole point of showing it here.
+      self.state.exports = { available: false,
+        problem: core.refusalMessage(err, "The exports could not be listed.") };
+      paint();
+    });
+  };
+
+  // One chosen report -> the SQL in the box and its sidecar in state. The same
+  // pairing the file picker did, except the pairing happened on the server,
+  // where both files actually are.
+  App.prototype.loadExport = function (stem) {
+    var self = this;
+    return dsCall({
+      method: "dashboard_studio.api.exports.read_exported_report",
+      args: { stem: stem },
+    }).then(function (r) {
+      var got = r.message || {};
+      self.state.vizSql = got.sql || "";
+      self.state.vizCard = got.card || null;
+      self.state.vizCardName = got.sidecar || "";
+      self.state.vizTitle = self.state.vizTitle || got.report || "";
+      // An unreadable sidecar is not a chart to guess at, and saying so beats
+      // a chart silently left at the default.
+      self.state.notice = got.card_problem || "";
+      self.state.proposal = null;
+      self.state.conversion = null;
+      self.render();
+    }).catch(function (err) {
+      self.state.notice = core.refusalMessage(err, "That report could not be read.");
+      self.render();
+    });
+  };
+
   App.prototype.convertSql = function (sql) {
     var self = this;
     return dsCall({

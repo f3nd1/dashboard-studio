@@ -72,6 +72,10 @@ class TestEndpointsReachable(unittest.TestCase):
             "dashboard_studio.api.propose.propose_from_question",
             "dashboard_studio.api.propose.llm_key_is_configured",
             "dashboard_studio.api.propose.propose_tables",
+            # The server-side export search. It replaced a browser file input,
+            # which could only ever read the CLIENT's disk.
+            "dashboard_studio.api.exports.list_exported_reports",
+            "dashboard_studio.api.exports.read_exported_report",
         }, "the front end's call sites changed — has the call shape changed too?")
 
     def test_every_method_the_browser_calls_is_whitelisted(self):
