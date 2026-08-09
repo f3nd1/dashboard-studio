@@ -1077,7 +1077,9 @@
       }));
       warn.appendChild(el("div", "dss-hint",
         "Substitutes " + part.part.toUpperCase() + "( for YEAR( and converts " +
-        "again. If month-of-year was the question you meant, ignore this — " +
+        "again. If " + part.part + "-of-" +
+        (part.part === "day" ? "month" : "year") +
+        " was the question you meant, ignore this — " +
         "it is a different question, not a mistake."));
       box.appendChild(warn);
     }

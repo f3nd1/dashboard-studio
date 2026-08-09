@@ -483,6 +483,32 @@ Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN
 
 **Copy**: present-tense and specific — "Reading your question…", "Building the query…", "Converting the query…", "Creating it in Insights…". The spinner is decoration; `prefers-reduced-motion` stops it and the label still says what is happening.
 
+## ADR-029 — Five more Metabase display types map to Insights chart types; six stay unmapped by name
+
+**Sized from a full-corpus scan, not an estimate.** bar+line covered 553 of 1775 cards; the corpus is dominated by types Insights has natively — scalar (791), row (194), table (154), pie (15), smartscalar (1), funnel (1) — taking the ceiling to ~1709. Critically, 1021 cards need no X axis at all, so the biggest slice of this is also the lowest-risk.
+
+**Every name and requirement is Insights' own source at v3.12.2.** `chart.types.ts` CHARTS gives the type names; `charts/chart.ts`'s validation gives the hard requirements — Number needs `number_columns`, Donut/Funnel need `label_column` + `value_column`, Table demands non-empty `rows`, Row is an axis chart. The same file shows a chart REBUILDS its query from the config at render time, so every builder lifts its columns from the summarize rather than composing them: a config naming anything the query does not produce is a chart that errors on open.
+
+**Refusals, each because the alternative is a chart that renders and says something else:** a grouped query cannot be a Number (`addNumberChartOperation` would drop the grouping); a two-measure pie has one `value_column` slot; an ungrouped table has nothing for its required rows. `gauge`, `object`, `pivot`, `combo`, `area`, `map` stay unmapped and fall back to the flag.
+
+**Two rule changes.** Empty `series_settings` now BUILDS (the chart type alone is Metabase's own statement, and without this chart there is no chart at all — the old "defaults apply" refusal predates Convert creating charts). Settings that match NOTHING the query produces abandon the chart with the keys named — building anyway would silently drop every stored setting. A row card's series carry no type: Metabase's own series.ts hides that control for row cards, so a stored value there is a leftover Metabase itself does not render.
+
+## ADR-030 — A grouped `year(col)` mutate is promoted to the Date dimension with a granularity
+
+**32 axis-needing cards compute YEAR through a wrapper or alias** (5 via `CONCAT('', YEAR(col))`), so ADR-024's flat-shape rule never fired and the dimension landed as an Integer — correct values, unchartable axis. `_promote_year_mutates` runs once on the FINAL operation list, so every spelling that reduces to "grouped by year(col)" — flat, wrapped, aliased, or the regroup button's output — lands on the same chartable shape. One consolidation point, not a fourth special case.
+
+**It fires only when the whole story is visible:** the expression is exactly `year(<column>)`; the column is a Date/Datetime in exactly one table this query reads (re-checked — a text match must not out-vote the schema); nothing else references the alias; the column's name is not already taken. An ORDER BY on the alias is rewritten to the column — ordering by the date orders by the year exactly, the same equivalence (`truncate("Y")` partitions by calendar year) that makes the promotion safe. MONTH/QUARTER/DAY mutates are untouched, per ADR-024.
+
+**A test found its own guard dead before commit:** the alias-reference regex's `\b` word boundaries had been eaten by a heredoc (non-raw string, `\b` → backspace byte), so a mutate reading the alias did not stop the promotion. The test written to pin the guard caught it.
+
+## ADR-031 — Same-function series settings match by POSITION, which is Metabase's rule
+
+**79 axis-needing cards abandoned their chart** because two measures shared a function. The corpus shows Metabase's aliases for repeated functions are positional — `avg`, `avg_2`, `avg_3` as literal result-column names, in SQL order — so the Nth same-function measure takes the Nth key. Our measures list holds SQL order, which is the order Metabase numbers by. Only the two observed spellings match; `avg_x`, `teacher_1` and a number past the group's size match nothing, and the 34 custom-key corpus cards keep falling back to the flag.
+
+**The unsafe shape came out of a failing test, and it is sharper than planned.** The draft disabled positional matching whenever an ADR-011 expression existed; `AVG(a)+AVG(a)` dedupes to ONE measure and slipped that gate. The real rule: a measure the expression READS is a COMPONENT — never a Metabase result column — so it neither takes a key nor counts in the numbering, and a key pointed at one refuses the whole card by name. A genuine result column beside an expression still matches. The two refusal messages are kept distinct ("your keys are custom names" vs "exists only inside a computed expression") because they point at different fixes.
+
+**Caveat, recorded:** the positional claim rests on the corpus scan's finding; no corpus exists in the build environment. A counter-example tightens `_entry_for`'s spellings set.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.
