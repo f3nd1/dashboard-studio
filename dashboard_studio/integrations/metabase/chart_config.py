@@ -31,6 +31,8 @@ that disagreed with the one in the query would chart a column the query does
 not produce.
 """
 
+import re
+
 # Metabase's per-series display vocabulary, from its own source:
 # `frontend/src/metabase/visualizations/lib/settings/series.ts` gives
 # `{value: "line"}, {value: "area"}, {value: "bar"}`.
@@ -127,7 +129,7 @@ def _measures_and_dimensions(operations):
     return [], []
 
 
-def _entry_for(measure, settings, counts, reasons):
+def _entry_for(measure, ordinal, settings, reasons):
     """The `series_settings` entry naming this measure, or `{}`.
 
     Metabase keys a series by its own result column name. For a compiled
@@ -136,22 +138,41 @@ def _entry_for(measure, settings, counts, reasons):
     while this converter names the same two measures `avg_of_<column>` and
     `count`. So the two are matched on the AGGREGATION, which both sides state.
 
-    That key names only the FUNCTION, so two measures sharing one cannot be
-    told apart: `AVG(a)` and `AVG(b)` are `avg` and `avg_2` to Metabase and
-    `avg_of_a` and `avg_of_b` here, and nothing lines them up. That is recorded
-    in `reasons` and abandons the whole card, because putting the label and the
-    line on the wrong series makes a chart that reads correctly and is not.
+    Two measures sharing a function are told apart by POSITION, because that is
+    Metabase's own rule rather than a guess: its aliases for repeated functions
+    are `avg`, `avg_2`, `avg_3` — literal result-column names, numbered in SQL
+    order, observed across the full corpus. So the Nth same-function measure
+    (SQL order, which is the order this list holds) takes the key `<func>` for
+    N=1 and `<func>_<N>` after that. Only those two spellings match; `avg_x`,
+    `teacher_1` and a numbered key past the group's size match nothing.
+
+    `ordinal` is None for a measure that exists only as a COMPONENT of an
+    expression over aggregates (ADR-011). Metabase numbers its own result
+    columns, and a component never was one — its output column is the
+    expression's — so a component takes no key and does not count in the
+    numbering. A same-function key pointed at one refuses the whole card by
+    name, because styling a component as if it were a result column puts the
+    label and the line on a series Metabase never drew.
     """
     wanted = str(measure.get("aggregation") or "").strip().lower()
-    named = [value for key, value in settings.items()
-             if str(key).strip().lower() == wanted]
-    if not named:
+    if not wanted:
         return {}
-    if counts.get(wanted, 0) > 1:
-        reasons.append(
-            f"this query has {counts[wanted]} '{wanted}' measures, and Metabase "
-            "names a series only by its function — so which of them its display "
-            "setting belongs to cannot be told. Build the chart by hand.")
+    if ordinal is None:
+        pointed = [key for key in settings
+                   if str(key).strip().lower() == wanted
+                   or re.fullmatch(re.escape(wanted) + r"_\d+",
+                                   str(key).strip().lower())]
+        if pointed:
+            reasons.append(
+                f"the '{pointed[0]}' series setting names a '{wanted}' aggregate "
+                "that exists here only inside a computed expression — Metabase "
+                "numbers its own result columns, so the two cannot be lined up. "
+                "Build the chart by hand.")
+        return {}
+    spellings = {wanted} if ordinal == 1 else {f"{wanted}_{ordinal}"}
+    named = [value for key, value in settings.items()
+             if str(key).strip().lower() in spellings]
+    if not named:
         return {}
     entry = named[0]
     return entry if isinstance(entry, dict) else {}
@@ -186,14 +207,24 @@ def chart_config_from_card(card, operations):
             f"the query groups by {len(dimensions)} columns, and a chart needs "
             "exactly one for its X axis — build this one in Insights by hand")
 
-    counts = {}
+    # Each measure's ordinal within its own function group, in this list's
+    # order — which is SQL order, the order Metabase numbers by. A measure
+    # that exists only inside an expression gets None: it is not a Metabase
+    # result column, so it neither takes a key nor counts in the numbering.
+    components = _expression_components(operations)
+    seen = {}
+    ordinals = []
     for measure in measures:
+        if measure.get("measure_name") in components:
+            ordinals.append(None)
+            continue
         key = str(measure.get("aggregation") or "").strip().lower()
-        counts[key] = counts.get(key, 0) + 1
+        seen[key] = seen.get(key, 0) + 1
+        ordinals.append(seen[key])
 
     series, matched, reasons = [], [], []
-    for measure in measures:
-        entry = _entry_for(measure, settings, counts, reasons)
+    for measure, ordinal in zip(measures, ordinals):
+        entry = _entry_for(measure, ordinal, settings, reasons)
         if reasons:
             return None, None, reasons[0]
         item = {"measure": dict(measure), "align": _ALIGN}
@@ -240,6 +271,28 @@ def chart_config_from_card(card, operations):
     config = {"x_axis": {"dimension": dict(dimensions[0])},
               "y_axis": {"series": series}}
     return config, _AXIS_DISPLAYS[display], None
+
+
+def _expression_components(operations):
+    """Measure names an ADR-011 expression mutate reads — the measures that are
+    components of a computed column rather than result columns of their own.
+    Only mutates AFTER the summarize qualify: those are the ones whose
+    expressions are written over measure names."""
+    past_summarize = False
+    found = set()
+    for operation in operations or []:
+        if not isinstance(operation, dict):
+            continue
+        if operation.get("type") == "summarize":
+            past_summarize = True
+            measures = operation.get("measures") or []
+        elif past_summarize and operation.get("type") == "mutate":
+            text = str((operation.get("expression") or {}).get("expression") or "")
+            for measure in measures:
+                name = str(measure.get("measure_name") or "")
+                if name and re.search(r"\b" + re.escape(name) + r"\b", text):
+                    found.add(name)
+    return found
 
 
 def _simple_chart(chart_type, measures, dimensions):

@@ -331,9 +331,10 @@ class TestTheChartFromTheCardsOwnSettings(_Base):
         self.assertEqual(len(self.queries()), 1)
         self.assertIn("could not be read", result["chart_not_built"])
 
-    def test_an_ambiguous_card_writes_the_query_and_says_why(self):
-        """Two AVGs, one `avg` key. The query is already written by then, so
-        this reports rather than refuses — and builds no chart."""
+    def test_avg_and_avg_2_build_the_chart_POSITIONALLY(self):
+        """Two AVGs are `avg` and `avg_2` to Metabase — positional, its own
+        rule — so the card builds, with each setting on the measure whose SQL
+        position matches its number."""
         import types as _types
         self.frappe.get_meta = lambda dt: _types.SimpleNamespace(fields=[
             _types.SimpleNamespace(fieldname=f, fieldtype=ft)
@@ -342,10 +343,32 @@ class TestTheChartFromTheCardsOwnSettings(_Base):
         self.frappe._table_columns["Student Applicant"].append("grant")
         sql = ("SELECT `academic_year`, AVG(`fee`) AS `avg`, AVG(`grant`) AS `avg_2` "
                "FROM `tabStudent Applicant` GROUP BY `academic_year`")
-        result = self.api.convert_sql(sql, workbook="2", card=self.CARD)
+        card = {"card_id": 9, "display": "line",
+                "series_settings": {"avg": {"display": "bar", "title": "Fees"},
+                                    "avg_2": {"title": "Grants"}}}
+        result = self.api.convert_sql(sql, workbook="2", card=card)
+        self.assertEqual(len(self.charts()), 1)
+        self.assertIsNone(result["chart_not_built"])
+        config = self.frappe.parse_json(self.charts()[0]["config"])
+        self.assertEqual(
+            [(s["measure"]["column_name"], s.get("type"), s.get("name"))
+             for s in config["y_axis"]["series"]],
+            [("fee", "bar", "Fees"), ("grant", "line", "Grants")])
+
+    def test_an_EXPRESSION_beside_same_function_measures_builds_no_chart(self):
+        """The shape where position lies: the expression's component aggregates
+        sit in the measures list, but Metabase numbers only its own result
+        columns. The query is already written by then, so this reports rather
+        than refuses — and builds no chart."""
+        sql = ("SELECT `academic_year`, ( AVG(`fee`) + AVG(`fee`) ) / 2 AS `x` "
+               "FROM `tabStudent Applicant` GROUP BY `academic_year`")
+        card = {"card_id": 9, "display": "line",
+                "series_settings": {"avg": {"display": "bar"}}}
+        result = self.api.convert_sql(sql, workbook="2", card=card)
         self.assertEqual(self.charts(), [])
         self.assertEqual(len(self.queries()), 1)
-        self.assertIn("cannot be told", result["chart_not_built"])
+        self.assertIn("exists here only inside a computed expression",
+                      result["chart_not_built"])
 
     def test_a_refused_QUERY_creates_neither(self):
         """The chart is downstream of the query. A refusal upstream must not

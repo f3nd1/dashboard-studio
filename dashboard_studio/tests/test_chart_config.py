@@ -86,13 +86,17 @@ class TestWhatIsNotBuilt(unittest.TestCase):
         self.assertIsNone(chart_type)
         self.assertIn(fragment, reason)
 
-    def test_two_measures_sharing_an_aggregation_are_ambiguous(self):
-        """Metabase names a series by its FUNCTION, so `AVG(a)` and `AVG(b)` are
-        `avg` and `avg_2` there and `avg_of_a`/`avg_of_b` here. Nothing lines
-        them up, and picking one would put the label on the wrong line."""
+    def test_same_function_measures_with_an_EXPRESSION_still_refuse(self):
+        """The one shape where position lies: an ADR-011 expression puts its
+        component aggregates into the measures list, but Metabase numbers only
+        its own result columns — the Nth here is not the Nth there."""
         second = dict(AVG, measure_name="avg_of_other", column_name="other")
-        self.assert_refused(QIPI_CARD, ops(measures=(AVG, second)),
-                            "which of them its display setting belongs to")
+        operations = ops(measures=(AVG, second)) + [
+            {"type": "mutate", "new_name": "combined", "data_type": "Auto",
+             "expression": {"type": "expression",
+                            "expression": "(avg_of_qipi + avg_of_other) / 2"}}]
+        self.assert_refused(QIPI_CARD, operations,
+                            "exists here only inside a computed expression")
 
     def test_EMPTY_series_settings_still_builds_from_the_card_display(self):
         """Superseded by the display mapping (Fix 1): the chart TYPE alone is
@@ -343,3 +347,111 @@ class TestTheSimpleChartFamilies(unittest.TestCase):
         self.assertIsNone(reason)
         self.assertEqual(chart_type, "Number")
         self.assertNotIn("series", repr(config))
+
+
+class TestPositionalSeriesMatching(unittest.TestCase):
+    """`avg`, `avg_2`, `avg_3` are Metabase's own aliases for repeated
+    functions — literal result-column names, numbered in SQL order, observed
+    across the full corpus. So the Nth same-function measure takes the Nth
+    key, and that is Metabase's rule rather than this converter's guess.
+
+    The failure mode is a chart whose labels are swapped between two lines, so
+    the tests assert WHICH measure each setting landed on, never just that a
+    chart was built.
+    """
+
+    AVG_A = {"measure_name": "avg_of_a", "column_name": "a",
+             "data_type": "Decimal", "aggregation": "avg"}
+    AVG_B = {"measure_name": "avg_of_b", "column_name": "b",
+             "data_type": "Decimal", "aggregation": "avg"}
+
+    def build(self, settings, measures=None):
+        return chart_config_from_card(
+            {"display": "line", "series_settings": settings},
+            ops(measures=measures or (self.AVG_A, self.AVG_B)))
+
+    def series(self, settings, measures=None):
+        config, chart_type, reason = self.build(settings, measures)
+        self.assertIsNone(reason)
+        return {(s["measure"]["measure_name"]): s for s in
+                config["y_axis"]["series"]}
+
+    def test_avg_and_avg_2_land_in_SQL_order(self):
+        by_name = self.series({"avg": {"title": "First", "display": "bar"},
+                               "avg_2": {"title": "Second"}})
+        self.assertEqual(by_name["avg_of_a"]["name"], "First")
+        self.assertEqual(by_name["avg_of_a"]["type"], "bar")
+        self.assertEqual(by_name["avg_of_b"]["name"], "Second")
+        self.assertEqual(by_name["avg_of_b"]["type"], "line")
+
+    def test_the_bare_key_is_position_ONE_never_a_broadcast(self):
+        """`avg` names the first avg — applying it to both would restyle a
+        series Metabase styled differently."""
+        by_name = self.series({"avg": {"display": "bar"}})
+        self.assertEqual(by_name["avg_of_a"]["type"], "bar")
+        self.assertEqual(by_name["avg_of_b"]["type"], "line")
+
+    def test_a_numbered_key_past_the_group_matches_nothing(self):
+        """`avg_3` with two avgs describes a measure this query does not have.
+        As the ONLY key it abandons the chart (nothing matched); beside a real
+        one it is ignored."""
+        config, _, reason = self.build({"avg_3": {"display": "bar"}})
+        self.assertIsNone(config)
+        self.assertIn("names this query does not produce", reason)
+        by_name = self.series({"avg": {"title": "ok"}, "avg_3": {"title": "no"}})
+        self.assertEqual(by_name["avg_of_a"].get("name"), "ok")
+        self.assertNotIn("name", by_name["avg_of_b"])
+
+    def test_a_NON_NUMERIC_suffix_is_not_positional(self):
+        """`avg_x` is a custom name, not Metabase's numbering."""
+        config, _, reason = self.build({"avg_x": {"display": "bar"}})
+        self.assertIsNone(config)
+        self.assertIn("names this query does not produce", reason)
+
+    def test_three_of_a_kind(self):
+        third = dict(self.AVG_A, measure_name="avg_of_c", column_name="c")
+        by_name = self.series(
+            {"avg": {"title": "1"}, "avg_2": {"title": "2"}, "avg_3": {"title": "3"}},
+            measures=(self.AVG_A, self.AVG_B, third))
+        self.assertEqual([by_name[k].get("name") for k in
+                          ("avg_of_a", "avg_of_b", "avg_of_c")],
+                         ["1", "2", "3"])
+
+    def test_positions_count_WITHIN_a_function_not_across_the_list(self):
+        """`count, avg, avg_2`: the avgs are positions 1 and 2 of THEIR group
+        even though they sit second and third overall."""
+        by_name = self.series(
+            {"count": {"title": "N"}, "avg": {"title": "A"}, "avg_2": {"title": "B"}},
+            measures=(COUNT, self.AVG_A, self.AVG_B))
+        self.assertEqual(by_name["count"].get("name"), "N")
+        self.assertEqual(by_name["avg_of_a"].get("name"), "A")
+        self.assertEqual(by_name["avg_of_b"].get("name"), "B")
+
+    def test_case_and_spacing_still_forgiven(self):
+        by_name = self.series({" AVG_2 ": {"title": "second"}})
+        self.assertEqual(by_name["avg_of_b"].get("name"), "second")
+        self.assertNotIn("name", by_name["avg_of_a"])
+
+    def test_a_CUSTOM_suffix_beside_a_component_gets_the_custom_key_message(self):
+        """`avg_x` near an expression component is a custom name, not a
+        positional one — the reason must say "names this query does not
+        produce" (fix: the keys are custom), never the expression message
+        (fix: a different query shape). The two point at different causes."""
+        operations = ops(measures=(self.AVG_A,)) + [
+            {"type": "mutate", "new_name": "x", "data_type": "Auto",
+             "expression": {"type": "expression",
+                            "expression": "avg_of_a * 2"}}]
+        config, _, reason = chart_config_from_card(
+            {"display": "line", "series_settings": {"avg_x": {"title": "T"}}},
+            operations)
+        self.assertIsNone(config)
+        self.assertIn("names this query does not produce", reason)
+        self.assertNotIn("computed expression", reason)
+
+    def test_the_QIPI_single_avg_still_matches_the_bare_key(self):
+        """Group size one is the corpus's common case and must be untouched."""
+        by_name = self.series({"avg": {"title": "Average of QIPI"},
+                               "count": {"display": "bar"}},
+                              measures=(COUNT, AVG))
+        self.assertEqual(by_name["avg_of_qipi"].get("name"), "Average of QIPI")
+        self.assertEqual(by_name["count"]["type"], "bar")
