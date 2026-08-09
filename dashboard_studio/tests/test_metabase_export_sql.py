@@ -14,6 +14,7 @@ two endpoints that would run a query against production appear nowhere, and a
 
 import contextlib
 import io
+import json
 import pathlib
 import re
 import sys
@@ -36,6 +37,15 @@ CARDS = [
 ]
 DETAIL = {
     1: {"id": 1, "name": "Enrolment by year", "query_type": "native",
+        "display": "line",
+        # The real QIPI shape, plus two keys that live alongside
+        # `series_settings` and are deliberately NOT copied.
+        "visualization_settings": {
+            "series_settings": {"avg": {"color": "#E75454", "title": "Average of QIPI"},
+                                "count": {"display": "bar", "title": "Count of QA"}},
+            "graph.dimensions": ["custom_proposed_date"],
+            "column_settings": {'["name","fee"]': {"decimals": 2}},
+        },
         "dataset_query": {"type": "native", "native": {"query": NATIVE_SQL}}},
     # GUI-built: MBQL, no SQL anywhere on the card.
     2: {"id": 2, "name": "Quality Performance / Outcomes", "query_type": "query",
@@ -104,8 +114,9 @@ class _Base(unittest.TestCase):
                         exec(compile(text, str(SCRIPT), "exec"), {}, {})
                     else:
                         exec(compile(text, str(SCRIPT), "exec"), {})
+                # Both halves of the export: the .sql AND its .json sidecar.
                 files = {p.name: p.read_text()
-                         for p in sorted(pathlib.Path("metabase_sql").glob("*.sql"))} \
+                         for p in sorted(pathlib.Path("metabase_sql").glob("*.*"))} \
                     if pathlib.Path("metabase_sql").is_dir() else {}
             finally:
                 os.chdir(cwd)
@@ -185,7 +196,10 @@ class TestNothingIsExecuted(_Base):
         self.assertEqual([c for c in calls if c[0] == "POST"], [])
         self.assertIn("GUI-built, and compile_gui_cards is off", text)
         # …and the native card still exports, so the GET-only run is useful.
-        self.assertEqual(list(files), ["Enrolment by year--1.sql"])
+        # The native card still exports — its .sql and its sidecar, which is
+        # written from the card JSON already in hand and needs no POST.
+        self.assertEqual(sorted(files), ["Enrolment by year--1.json",
+                                         "Enrolment by year--1.sql"])
 
     def test_it_writes_nothing_to_metabase_or_frappe(self):
         source = SCRIPT.read_text()
@@ -238,7 +252,10 @@ class TestTheOutput(_Base):
 
     def test_the_id_is_in_the_name_so_two_cards_cannot_collide(self):
         _, files = self.run_script()
-        self.assertTrue(all(re.search(r"--\d+\.sql$", name) for name in files), files)
+        # Both halves carry it: a sidecar is only trustworthy because its
+        # name pins it to one card.
+        self.assertTrue(all(re.search(r"--\d+\.(sql|json)$", name)
+                            for name in files), files)
 
     def test_an_archived_card_is_skipped(self):
         _, files = self.run_script()
@@ -298,3 +315,59 @@ class TestWhatGoesWrong(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheChartSidecar(_Base):
+    """One `.json` beside every `.sql`, written in the SAME pass.
+
+    That simultaneity is the whole design: it is what lets `convert_sql` trust
+    the pair without matching anything. Matching a pasted query back to a card
+    later would mean comparing SQL text, and this export is full of
+    near-identical variants of one report.
+    """
+
+    def sidecar(self, files, name="Enrolment by year--1.json"):
+        return json.loads(files[name])
+
+    def test_one_is_written_beside_every_sql(self):
+        _, files = self.run_script()
+        for sql_name in [n for n in files if n.endswith(".sql")]:
+            with self.subTest(sql_name):
+                self.assertIn(sql_name[:-4] + ".json", files)
+
+    def test_it_carries_the_series_settings_the_display_and_the_id(self):
+        _, files = self.run_script()
+        self.assertEqual(self.sidecar(files), {
+            "card_id": 1,
+            "display": "line",
+            "series_settings": {
+                "avg": {"color": "#E75454", "title": "Average of QIPI"},
+                "count": {"display": "bar", "title": "Count of QA"}},
+        })
+
+    def test_it_does_NOT_copy_visualization_settings_wholesale(self):
+        """Only the one key the chart needs. `visualization_settings` carries
+        plenty else — axis choices, per-column formatting keyed by column name —
+        and an export writes to disk, so it copies what it needs and no more."""
+        _, files = self.run_script()
+        written = self.sidecar(files)
+        self.assertEqual(set(written), {"card_id", "display", "series_settings"})
+        self.assertNotIn("column_settings", json.dumps(written))
+        self.assertNotIn("graph.dimensions", json.dumps(written))
+
+    def test_a_card_with_no_visualization_settings_still_gets_one(self):
+        """Card 2 has none. An absent sidecar and an empty one mean the same
+        thing to the converter, and always writing one keeps the pair total."""
+        _, files = self.run_script()
+        self.assertEqual(
+            self.sidecar(files, "Quality Performance - Outcomes--2.json"),
+            {"card_id": 2, "display": None, "series_settings": {}})
+
+    def test_no_row_data_can_reach_it(self):
+        """`visualization_settings` describes the chart, never its contents —
+        but this asserts the output rather than trusting that."""
+        _, files = self.run_script()
+        for name in [n for n in files if n.endswith(".json")]:
+            with self.subTest(name):
+                for banned in ("rows", "data", "result_metadata", "dataset_query"):
+                    self.assertNotIn(banned, json.loads(files[name]))

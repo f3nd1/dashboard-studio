@@ -124,6 +124,12 @@
       tableMode: "auto",
       tables: "",
       confirming: false,
+      // The sidecar loaded beside an exported .sql — the source card's
+      // `series_settings` and `display`. State only, like the API key: it
+      // belongs to the query in the box and nothing else. Null means the
+      // ordinary paste, and the chart is left at Insights' default.
+      vizCard: null,
+      vizCardName: "",
     };
   }
 
@@ -333,6 +339,83 @@
     box.value = this.state.vizSql || "";
     box.addEventListener("input", function () { self.state.vizSql = box.value; });
     wrap.appendChild(box);
+
+    // Load an exported PAIR — `<report>--<id>.sql` and its `.json` sidecar,
+    // written together by `metabase_export_sql.py`. Both are picked in one
+    // selection and matched on the filename before the extension, so the
+    // sidecar that reaches the server is the one exported beside that exact
+    // SQL. Nothing is fetched and nothing is matched on the query TEXT: this
+    // export is full of near-identical variants of one report, so a text match
+    // would silently apply another report's chart settings.
+    var load = el("div", "dss-vizimport-load");
+    var picker = el("input");
+    picker.type = "file";
+    picker.multiple = true;
+    picker.accept = ".sql,.json";
+    picker.id = "dss-export-pair";
+    picker.className = "dss-fileinput";
+    var picked = el("label", "dss-filelabel", "Load an exported report…");
+    picked.setAttribute("for", picker.id);
+    picked.title = "Select a report's .sql and its .json sidecar together. " +
+      "The sidecar carries the chart's series types and labels from Metabase.";
+    var chosen = el("div", "dss-hint dss-filechosen",
+      this.state.vizCard
+        ? "Chart settings loaded from " + this.state.vizCardName
+        : "Optional. Without the sidecar the query still converts; only the " +
+          "chart is left at Insights' default.");
+    // Input FIRST: the focus ring is drawn on the label via `input:focus +
+    // label`, and the off-screen input has no visible focus of its own.
+    load.appendChild(picker);
+    load.appendChild(picked);
+    load.appendChild(chosen);
+    wrap.appendChild(load);
+
+    picker.addEventListener("change", function () {
+      var files = Array.prototype.slice.call(picker.files || []);
+      var base = function (f) { return f.name.replace(/\.(sql|json)$/i, ""); };
+      var sqlFile = files.filter(function (f) { return /\.sql$/i.test(f.name); })[0];
+      if (!sqlFile) {
+        self.state.notice = "Pick the report's .sql file (and its .json beside it).";
+        self.render();
+        return;
+      }
+      // Same base name, same export run. A .json whose name does not match is
+      // another report's, and is not read.
+      var jsonFile = files.filter(function (f) {
+        return /\.json$/i.test(f.name) && base(f) === base(sqlFile);
+      })[0];
+      self.state.vizCard = null;
+      self.state.vizCardName = "";
+      var done = function () {
+        self.state.vizTitle = self.state.vizTitle ||
+          base(sqlFile).replace(/--\d+$/, "");
+        self.render();
+      };
+      var readSql = new FileReader();
+      readSql.onload = function () {
+        self.state.vizSql = String(readSql.result || "");
+        if (!jsonFile) {
+          self.state.notice = "";
+          done();
+          return;
+        }
+        var readJson = new FileReader();
+        readJson.onload = function () {
+          try {
+            self.state.vizCard = JSON.parse(String(readJson.result || ""));
+            self.state.vizCardName = jsonFile.name;
+          } catch (e) {
+            // Not readable is not a chart to guess at.
+            self.state.vizCard = null;
+            self.state.notice = "That sidecar is not readable JSON. The query " +
+              "will still convert; the chart will be Insights' default.";
+          }
+          done();
+        };
+        readJson.readAsText(jsonFile);
+      };
+      readSql.readAsText(sqlFile);
+    });
 
     var row = el("div", "dss-vizimport-row");
     var go = el("button", "dss-btn dss-btn-primary", "Convert SQL →");
@@ -718,7 +801,9 @@
     return dsCall({
       method: "dashboard_studio.api.convert.convert_sql",
       args: { sql: sql, title: (this.state.vizTitle || "").trim() || null,
-              workbook: this.state.vizWorkbook || null },
+              workbook: this.state.vizWorkbook || null,
+              // The sidecar loaded beside this exact .sql, or nothing at all.
+              card: this.state.vizCard ? JSON.stringify(this.state.vizCard) : null },
     }).then(function (r) {
       var made = r.message;
       if (!made || !made.name) {

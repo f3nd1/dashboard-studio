@@ -41,6 +41,7 @@ def _export():
     # noqa on the block: isort wants a blank line before the first-party
     # import, and a blank line here breaks the piped-paste form.
     import frappe  # noqa: I001
+    import json
     import pathlib
     import re
     import requests
@@ -92,6 +93,26 @@ def _export():
         slug = re.sub(r"[^\w\- ]+", "-", name).strip().strip("-").strip()
         slug = re.sub(r"\s+", " ", slug)[:80].strip() or "card"
         return f"{slug}--{card.get('id')}.sql"
+    def sidecar(card):
+        """What the chart needs, written beside the SQL in the SAME run.
+        Three keys, each read straight off the card: the per-series display
+        type and label somebody set (`series_settings`), the card-level
+        `display` those series inherit from, and the card id for traceability.
+        Written in the same pass as the .sql so the pair is GUARANTEED to
+        correspond — matching a pasted query back to a card later would mean
+        comparing SQL text, and this export is full of near-identical variants
+        of one report, so a wrong match would apply another report's chart
+        settings in silence. No row data: `visualization_settings` describes
+        the chart rather than its contents, and only these two keys are copied
+        out of it rather than the block wholesale."""
+        settings = card.get("visualization_settings")
+        settings = settings if isinstance(settings, dict) else {}
+        series = settings.get("series_settings")
+        return {
+            "card_id": card.get("id"),
+            "display": card.get("display"),
+            "series_settings": series if isinstance(series, dict) else {},
+        }
     folder = pathlib.Path(out_dir)
     folder.mkdir(parents=True, exist_ok=True)
     print("=" * 78)
@@ -139,6 +160,9 @@ def _export():
         path = folder / filename(card)
         path.write_text(sql)
         written.append(path.name)
+        # The sidecar carries the chart settings; `bulk_dry_run.py` reads
+        # `*.sql` and never sees it.
+        path.with_suffix(".json").write_text(json.dumps(sidecar(card), indent=2))
         # `{{param}}` and `[[optional]]` are Metabase's template syntax, not
         # SQL. Counted here so the dry run's refusals for them are expected
         # rather than a mystery.

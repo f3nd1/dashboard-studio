@@ -429,6 +429,24 @@ Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN
 
 **The bug the tests caught, which is the whole reason both halves needed the same round.** `WHERE YEAR(d) = 2025 GROUP BY YEAR(d)` needs the granularity *and* the mutate from one call. De-duplicating the two routes against a shared record dropped the mutate, and the WHERE rewrite then left a filter comparing the raw date column against `2025` — supported, runnable, and returning nothing. Each route now de-duplicates against its own record, and the WHERE region is rewritten with the mutate name even where the GROUP BY took the granularity: a granularity is a property of a dimension, and a filter has none.
 
+## ADR-025 — The chart's series come from a sidecar the export writes, not from a call to Metabase
+
+**Decision.** `metabase_export_sql.py` writes `<report>--<id>.json` beside every `<report>--<id>.sql`, carrying the card's `series_settings`, its `display` and its id. Convert reads that sidecar when given one and creates an `Insights Chart v3` alongside the query, each series carrying the type and label Metabase had. **Studio still makes no network call in the convert path**, and a test asserts it.
+
+**The live-call approval was granted and not spent.** Felix approved dashboard_studio calling Metabase during conversion, as a scoped exception. It turned out to be unnecessary: Convert has no card id to fetch by — `convert_sql(sql, title, workbook)` takes pasted text — so a live call would have needed a card id supplied anyway, and once one is being supplied the sidecar is already beside the file. Writing it in the SAME export pass is strictly better than fetching later, because the pair is then guaranteed to correspond rather than matched. `TestStudioMakesNoNetworkCall` holds the outcome, since "we did not need it" erodes unless something says so.
+
+**Matching is by filename and nothing else.** The picker takes a `.sql` and a `.json` in one selection and pairs them on the basename; a sidecar whose name does not match is not read. Matching on the query TEXT was never an option: the export is full of near-identical variants of one report — `- delete`, `- retain`, `- Duplicate` — so a text match would apply another report's chart settings in silence.
+
+**Metabase keys a series by its result column name, and we match on the AGGREGATION.** The real QIPI card (id 2424) carries `avg` and `count`; this converter names the same measures `avg_of_<column>` and `count`. Both sides state the aggregation, so that is the join. It names only the *function*, so two measures sharing one — `AVG(a)` and `AVG(b)`, which are `avg` and `avg_2` there — cannot be told apart, and that abandons the chart for the whole card rather than picking one.
+
+**This DEGRADES where the rest of the converter refuses, and that is a considered difference rather than a softening.** A wrong chart is visible the moment somebody looks at it — bars where a line belongs. A wrong query returns a number nobody can tell is wrong. So the cost of being wrong differs in kind, and the fallback is Part 3's "check this manually" flag with the query still written. What remains forbidden is inventing a bar/line split Metabase did not state.
+
+**Every series goes on the LEFT axis.** Metabase stores `axis` only when overridden; its default is `null`, and the split happens at render time via `graph.y_axis.auto_split`. The QIPI card confirmed it from real data — two visible axes, no `axis` key on either series. There is nothing to read, so a Right assignment would be this converter's invention.
+
+**Only `bar` and `line` translate.** Metabase's vocabulary is `line | area | bar`; Insights' `Series.type` is `'line' | 'bar'`. An `area` series is a line plus a `show_area` fill, which is a different field, so `area` falls back rather than being bent into the nearest match.
+
+**The combo-card risk was measured, not assumed.** Of 2003 cards, 4 are `display: "combo"`, and all 4 have one metric and no `series_settings` — so the feared "2+ series, type computed from array position, nothing stored" shape does not exist in real UCC data. `combo` is not in the display map, so if one ever appears it falls back rather than guessing.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

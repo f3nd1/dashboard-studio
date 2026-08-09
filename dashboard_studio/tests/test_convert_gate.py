@@ -264,3 +264,144 @@ class TestSqlConversion(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheChartFromTheCardsOwnSettings(_Base):
+    """Convert writes an Insights Chart too, when the sidecar says how.
+
+    The sidecar is what `metabase_export_sql.py` wrote beside the exported
+    `.sql`, in the same pass, so the pair is guaranteed to correspond. Nothing
+    here fetches it — `TestStudioMakesNoNetworkCall` pins that.
+    """
+
+    # Two measures so there is a series each, grouped by one column so there is
+    # an X axis. The card is the real capture: display `line`, `count`
+    # overridden to `bar`.
+    SQL = ("SELECT `academic_year`, COUNT(*) AS `count`, AVG(`fee`) AS `avg` "
+           "FROM `tabStudent Applicant` GROUP BY `academic_year`")
+    CARD = {"card_id": 2424, "display": "line",
+            "series_settings": {"avg": {"title": "Average fee"},
+                                "count": {"display": "bar", "title": "How many"}}}
+
+    def charts(self):
+        return list(self.store.get("Insights Chart v3", {}).values())
+
+    def test_a_chart_is_created_beside_the_query(self):
+        result = self.api.convert_sql(self.SQL, workbook="2", card=self.CARD)
+        self.assertEqual(len(self.charts()), 1)
+        self.assertEqual(self.charts()[0]["query"], result["name"])
+        self.assertEqual(self.charts()[0]["chart_type"], "Line")
+        self.assertIsNone(result["chart_not_built"])
+
+    def test_the_stored_config_carries_the_type_and_label_per_series(self):
+        self.api.convert_sql(self.SQL, workbook="2", card=self.CARD)
+        config = self.frappe.parse_json(self.charts()[0]["config"])
+        self.assertEqual(
+            [(s["measure"]["measure_name"], s["type"], s["align"], s.get("name"))
+             for s in config["y_axis"]["series"]],
+            [("count", "bar", "Left", "How many"),
+             ("avg_of_fee", "line", "Left", "Average fee")])
+        self.assertEqual(config["x_axis"]["dimension"]["column_name"], "academic_year")
+
+    def test_the_result_reports_the_chart_for_the_read_back(self):
+        """A chart nobody can see created is a chart nobody checks."""
+        result = self.api.convert_sql(self.SQL, workbook="2", card=self.CARD)
+        self.assertEqual(result["chart"]["chart_type"], "Line")
+        self.assertIn("/chart/", result["chart"]["insights_url"])
+        self.assertEqual([s["type"] for s in result["chart"]["series"]],
+                         ["bar", "line"])
+
+    def test_a_sidecar_arriving_as_JSON_TEXT_is_read(self):
+        """Frappe hands a whitelisted argument through as text when the browser
+        sent JSON, which is exactly how this one arrives."""
+        self.api.convert_sql(self.SQL, workbook="2",
+                             card=self.frappe.as_json(self.CARD))
+        self.assertEqual(len(self.charts()), 1)
+
+    def test_NO_card_writes_the_query_and_no_chart(self):
+        """The ordinary paste. Nothing is guessed and nothing extra is created."""
+        result = self.api.convert_sql(self.SQL, workbook="2")
+        self.assertEqual(self.charts(), [])
+        self.assertEqual(len(self.queries()), 1)
+        self.assertIn("no Metabase chart settings", result["chart_not_built"])
+
+    def test_an_UNREADABLE_sidecar_does_not_stop_the_conversion(self):
+        result = self.api.convert_sql(self.SQL, workbook="2", card="{not json")
+        self.assertEqual(self.charts(), [])
+        self.assertEqual(len(self.queries()), 1)
+        self.assertIn("could not be read", result["chart_not_built"])
+
+    def test_an_ambiguous_card_writes_the_query_and_says_why(self):
+        """Two AVGs, one `avg` key. The query is already written by then, so
+        this reports rather than refuses — and builds no chart."""
+        import types as _types
+        self.frappe.get_meta = lambda dt: _types.SimpleNamespace(fields=[
+            _types.SimpleNamespace(fieldname=f, fieldtype=ft)
+            for f, ft in META[dt] + ([("grant", "Currency")]
+                                     if dt == "Student Applicant" else [])])
+        self.frappe._table_columns["Student Applicant"].append("grant")
+        sql = ("SELECT `academic_year`, AVG(`fee`) AS `avg`, AVG(`grant`) AS `avg_2` "
+               "FROM `tabStudent Applicant` GROUP BY `academic_year`")
+        result = self.api.convert_sql(sql, workbook="2", card=self.CARD)
+        self.assertEqual(self.charts(), [])
+        self.assertEqual(len(self.queries()), 1)
+        self.assertIn("cannot be told", result["chart_not_built"])
+
+    def test_a_refused_QUERY_creates_neither(self):
+        """The chart is downstream of the query. A refusal upstream must not
+        leave a chart pointing at nothing."""
+        self.refusal(self.api.convert_sql,
+                     "SELECT DISTINCT `status` FROM `tabStudent Applicant`",
+                     workbook="2", card=self.CARD)
+        self.assertEqual(self.charts(), [])
+        self.assertEqual(self.queries(), [])
+
+
+class TestStudioMakesNoNetworkCall(unittest.TestCase):
+    """The sidecar route exists precisely so the app still calls nothing.
+
+    Felix approved a live Metabase call for this feature; the sidecar made it
+    unnecessary, so the approval was not spent. This asserts the app stayed
+    network-free, because "we did not need it" is a decision that erodes unless
+    something holds it.
+    """
+
+    # `propose.py` DOES call out, to OpenAI, and that is ADR-021's decision with
+    # its own guards. This is about Metabase, which the app has never called and
+    # still does not.
+    ALLOWED_TO_CALL_OUT = {"propose.py"}
+
+    def test_nothing_in_the_app_reaches_METABASE(self):
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parents[1]
+        offenders = []
+        for path in root.rglob("*.py"):
+            if "tests" in path.parts or "__pycache__" in path.parts:
+                continue
+            text = path.read_text()
+            for marker in ("metabase_url", "metabase_api_key", "/api/card",
+                           "/api/dataset", "X-API-Key"):
+                if marker in text:
+                    offenders.append(f"{path.name}: {marker}")
+        self.assertEqual(offenders, [],
+                         "the app reached for Metabase; the sidecar exists so "
+                         "it does not have to, and the key must never come near "
+                         "a request the browser started")
+
+    def test_the_CONVERT_path_makes_no_network_call_at_all(self):
+        """The sidecar route's whole point. Felix approved a live Metabase call
+        for this feature and it turned out not to be needed — asserted, because
+        "we did not need it" erodes unless something holds it."""
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parents[1]
+        offenders = []
+        for path in root.rglob("*.py"):
+            if ("tests" in path.parts or "__pycache__" in path.parts
+                    or path.name in self.ALLOWED_TO_CALL_OUT):
+                continue
+            text = path.read_text()
+            for marker in ("import requests", "urllib.request", "http.client",
+                           "urlopen(", "socket."):
+                if marker in text:
+                    offenders.append(f"{path.name}: {marker}")
+        self.assertEqual(offenders, [], "the convert path made a network call")

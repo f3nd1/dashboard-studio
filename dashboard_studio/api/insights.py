@@ -24,6 +24,11 @@ from dashboard_studio.roles import DS_READ_ROLES
 # The v3 DocTypes. Named once so the version assumption has a single home.
 QUERY_DOCTYPE = "Insights Query v3"
 
+# Its `config` is a JSON field holding `{x_axis, y_axis, split_by}`; saving one
+# also creates a second, empty Query v3 as the chart's `data_query`, which is
+# Insights' own `before_save` doing it rather than anything here.
+CHART_DOCTYPE = "Insights Chart v3"
+
 
 WORKBOOK_DOCTYPE = "Insights Workbook"
 

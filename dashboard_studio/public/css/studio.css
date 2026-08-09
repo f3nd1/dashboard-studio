@@ -909,3 +909,20 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
 .dss-saveresult, .dss-saveresult-detail { overflow-wrap: anywhere; }
 @media (max-width: 900px) { .dss-output-fields { grid-template-columns: 1fr; } }
 .dss-output-fields .dss-field { margin-bottom: 0; }
+
+
+/* The exported-pair picker on the Paste SQL tab. The native file input is
+   hidden and driven by its label, because a bare `Choose files` button reads
+   as a generic upload rather than "load a report I exported". */
+.dss-vizimport-load { margin: 0 0 0.6rem; }
+.dss-fileinput { position: absolute; width: 1px; height: 1px; opacity: 0;
+  overflow: hidden; }
+.dss-filelabel { display: inline-block; cursor: pointer; font-size: 0.8rem;
+  padding: 0.3rem 0.65rem; border: 1px solid var(--dss-border, #d1d8dd);
+  border-radius: 6px; background: #fff; }
+.dss-filelabel:hover { background: #f4f5f6; }
+/* Keyboard focus has to be visible: the input it belongs to is off-screen. */
+.dss-fileinput:focus-visible + .dss-filelabel,
+.dss-fileinput:focus + .dss-filelabel { outline: 2px solid #2490ef;
+  outline-offset: 2px; }
+.dss-filechosen { margin-top: 0.35rem; }
