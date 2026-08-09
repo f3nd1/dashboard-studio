@@ -141,6 +141,10 @@ def convert_sql(sql: str, title: str = None, workbook: str = None, card=None):
         "workbook": workbook,
         "data_source": SITE_DB,
         "operations": result["operations"],
+        # The SQL that was converted, echoed back so the page can offer a
+        # one-click regroup when the chart's X axis came out as a date NUMBER.
+        # The caller's own input; nothing is derived from it here.
+        "sql": sql,
         "chart": chart,
         "chart_not_built": chart_reason,
         "insights_url": f"/insights/workbook/{workbook}/query/{doc.name}",

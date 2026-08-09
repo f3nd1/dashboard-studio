@@ -166,3 +166,65 @@ class TestItReadsMetabasesOwnSpelling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheUnchartableDatePartDetector(unittest.TestCase):
+    """`date_part_grouping` — the corpus scan's half of the month-of-year fix.
+
+    Mirrors `datePartGrouping` in studio_core.js. Both must agree, or the scan
+    lists reports the page does not offer the fix for, and vice versa.
+    """
+
+    def summarize(self, dimensions):
+        return {"type": "summarize", "measures": [COUNT], "dimensions": dimensions}
+
+    def mutate(self, name, expression):
+        return {"type": "mutate", "new_name": name,
+                "expression": {"type": "expression", "expression": expression}}
+
+    def test_a_month_grouping_is_found(self):
+        from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
+        found = date_part_grouping([
+            self.mutate("month_of_d", "month(d)"),
+            self.summarize([{"column_name": "month_of_d", "data_type": "Integer"}])])
+        self.assertEqual(found, {"part": "month", "dimension": "month_of_d",
+                                 "column": "d"})
+
+    def test_quarter_and_day_too(self):
+        from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
+        for part in ("quarter", "day"):
+            with self.subTest(part):
+                found = date_part_grouping([
+                    self.mutate(f"{part}_of_d", f"{part}(d)"),
+                    self.summarize([{"column_name": f"{part}_of_d"}])])
+                self.assertEqual(found["part"], part)
+
+    def test_YEAR_is_never_reported(self):
+        """Regrouping a year by year is a no-op, and offering it would loop.
+        ADR-024 means a grouped YEAR is a granularity and produces no mutate at
+        all — this asserts the exclusion directly rather than relying on that."""
+        from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
+        self.assertIsNone(date_part_grouping([
+            self.mutate("year_of_d", "year(d)"),
+            self.summarize([{"column_name": "year_of_d"}])]))
+
+    def test_a_mutate_that_is_not_GROUPED_BY_is_not_the_X_axis(self):
+        """A date part computed but not grouped by is not the chart's axis, so
+        rewriting the query would change a column nothing charts."""
+        from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
+        self.assertIsNone(date_part_grouping([
+            self.mutate("month_of_d", "month(d)"), self.summarize([])]))
+        self.assertIsNone(date_part_grouping([
+            self.mutate("month_of_d", "month(d)"),
+            self.summarize([{"column_name": "something_else"}])]))
+
+    def test_an_ARITHMETIC_mutate_is_not_a_date_part(self):
+        from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
+        self.assertIsNone(date_part_grouping([
+            self.mutate("x", "(avg_of_a + avg_of_b) / 2"),
+            self.summarize([{"column_name": "x"}])]))
+
+    def test_nothing_at_all(self):
+        from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
+        for operations in ([], None, [{"type": "source"}]):
+            self.assertIsNone(date_part_grouping(operations))

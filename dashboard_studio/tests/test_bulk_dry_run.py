@@ -490,3 +490,66 @@ class TestItCreatesNothing(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheUnchartableGroup(_Base):
+    """Converts, but the chart cannot be drawn — its own group, on purpose.
+
+    A month-of-year grouping is not a refusal and not "converts cleanly": the
+    query is right and its numbers are right, and Insights' chart X axis takes
+    only a date. Filed under either of the existing headings it would be lost,
+    which is the whole problem at ~2000 reports — the point is one list rather
+    than 2000 separate discoveries.
+    """
+
+    MONTHLY = ("SELECT MONTH(`applied_on`) AS `m`, COUNT(*) AS `n` "
+               "FROM `tabStudent Applicant` GROUP BY MONTH(`applied_on`)")
+    YEARLY = ("SELECT YEAR(`applied_on`) AS `y`, COUNT(*) AS `n` "
+              "FROM `tabStudent Applicant` GROUP BY YEAR(`applied_on`)")
+
+    def with_frappe(self):
+        frappe, store = super().with_frappe()
+        meta = {"Student Applicant": META["Student Applicant"] + [("applied_on", "Date")]}
+        frappe.get_meta = lambda dt: types.SimpleNamespace(fields=[
+            types.SimpleNamespace(fieldname=f, fieldtype=t) for f, t in meta[dt]])
+        frappe._table_columns["Student Applicant"].append("applied_on")
+        return frappe, store
+
+    def test_a_month_grouping_is_reported_in_its_own_section(self):
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"qipi": self.MONTHLY}, frappe=frappe)
+        self.assertIn("Converts, but the chart cannot be drawn (1)", text)
+        section = text.split("Converts, but the chart cannot be drawn", 1)[1]
+        self.assertIn("MONTH  (1 files)", section)
+        self.assertIn("qipi", section)
+
+    def test_it_is_NOT_counted_as_a_refusal(self):
+        """It converts. Reporting it as blocked would overstate the work and
+        send somebody to fix a query that is already correct."""
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"qipi": self.MONTHLY}, frappe=frappe)
+        self.assertIn("1 convert cleanly", text)
+        self.assertIn("0 refuse", text)
+
+    def test_a_YEAR_grouping_is_not_in_it(self):
+        """ADR-024 emits YEAR as a granularity on the date column, which stays
+        chartable — so it never becomes a mutate and never lands here."""
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"yearly": self.YEARLY}, frappe=frappe)
+        self.assertNotIn("Converts, but the chart cannot be drawn", text)
+
+    def test_a_report_that_REFUSES_is_not_listed_as_unchartable(self):
+        """An unchartable axis on a query that does not convert is noise."""
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"broken": self.MONTHLY + " UNION SELECT 1"},
+                               frappe=frappe)
+        self.assertNotIn("Converts, but the chart cannot be drawn", text)
+
+    def test_the_parts_are_counted_apart(self):
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"m": self.MONTHLY,
+                                "d": self.MONTHLY.replace("MONTH", "DAY")},
+                               frappe=frappe)
+        self.assertIn("Converts, but the chart cannot be drawn (2)", text)
+        self.assertIn("MONTH  (1 files)", text)
+        self.assertIn("DAY  (1 files)", text)

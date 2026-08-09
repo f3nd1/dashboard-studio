@@ -60,6 +60,40 @@ _TYPE_TO_CHART = {"bar": "Bar", "line": "Line"}
 _ALIGN = "Left"
 
 
+# A date part that is a NUMBER rather than a date: month-of-year pools every
+# January, so it is 12 rows and genuinely not a date. Insights' chart X axis
+# offers only date-compatible columns, so grouping by one converts correctly and
+# cannot be charted — ADR-024 records why regrouping it silently would answer a
+# different question.
+#
+# `year` is deliberately absent: ADR-024 emits it as a granularity on the date
+# column itself, which stays chartable, so it never reaches a mutate.
+_UNCHARTABLE_PARTS = ("month", "quarter", "day")
+
+
+def date_part_grouping(operations):
+    """``{part, column, dimension}`` when the chart's X axis is a date NUMBER.
+
+    Not a refusal and not a blocker: the query converts, the numbers are right,
+    and a chart is built. It simply cannot be charted in Insights, and the fix —
+    regrouping by year — is a different question that only a person may choose.
+    So this REPORTS the condition and never acts on it.
+    """
+    dimensions = {str(d.get("column_name")) for d in _measures_and_dimensions(operations)[1]}
+    for operation in operations or []:
+        if not isinstance(operation, dict) or operation.get("type") != "mutate":
+            continue
+        name = str(operation.get("new_name") or "")
+        if name not in dimensions:
+            continue
+        text = str((operation.get("expression") or {}).get("expression") or "")
+        for part in _UNCHARTABLE_PARTS:
+            if text.startswith(part + "("):
+                return {"part": part, "dimension": name,
+                        "column": text[len(part) + 1:].rstrip(")").strip()}
+    return None
+
+
 def _measures_and_dimensions(operations):
     """The summarize's own `measures` and `dimensions`, or `([], [])`."""
     for operation in operations or []:

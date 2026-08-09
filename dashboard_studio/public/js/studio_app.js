@@ -85,6 +85,46 @@
     });
   }
 
+  // A button that makes a server round-trip.
+  //
+  // The busy state lives in `state`, NOT on the DOM node, because every one of
+  // these handlers ends in a render() that throws the node away. Setting
+  // `button.disabled` and a label directly looked right in isolation and was
+  // gone a moment later — "Build the query" removed its own confirm box first,
+  // so the screen went completely static while the request ran, which is
+  // indistinguishable from a hung page.
+  //
+  // Any in-flight request disables ALL of them: there is one output region, so
+  // a second request started underneath the first would replace the answer to
+  // a question nobody can see was asked.
+  function actionButton(app, key, label, busyLabel, onClick) {
+    var busy = app.state.busy === key;
+    var button = el("button", "dss-btn dss-btn-primary" + (busy ? " is-busy" : ""));
+    button.type = "button";
+    button.disabled = !!app.state.busy;
+    if (busy) {
+      button.appendChild(el("span", "dss-spinner"));
+      button.setAttribute("aria-busy", "true");
+    }
+    button.appendChild(el("span", null, busy ? busyLabel : label));
+    button.addEventListener("click", function () {
+      if (app.state.busy) return;
+      onClick();
+    });
+    return button;
+  }
+
+  // Start / finish a round-trip. Paired: `finish` runs on success AND failure,
+  // so a refusal never leaves a button spinning forever.
+  function begin(app, key) {
+    app.state.busy = key;
+    app.render();
+  }
+
+  function finish(app) {
+    app.state.busy = null;
+  }
+
   // ------------------------------------------------------------------- app
   function App(mount, options) {
     this.mount = mount;
@@ -136,6 +176,8 @@
       exportSearch: "",
       exports: null,
       exportsLoading: false,
+      // Which round-trip is in flight, or null. Read by `actionButton`.
+      busy: null,
     };
   }
 
@@ -437,14 +479,8 @@
     }
 
     var row = el("div", "dss-vizimport-row");
-    var go = el("button", "dss-btn dss-btn-primary", "Convert SQL →");
-    go.title = "Parses the query into Insights operations, including a Join " +
-      "Table step when the ON clause is a single a.column = b.column. Both " +
-      "column names are checked against the DocType.";
-    row.appendChild(go);
-    wrap.appendChild(row);
-
-    go.addEventListener("click", function () {
+    var go = actionButton(this, "convert", "Convert SQL →",
+                          "Converting the query…", function () {
       var sql = (box.value || "").trim();
       // Every one of these lands in the OUTPUT region. The helper line above
       // the textarea used to double as the refusal surface, which put a long
@@ -456,10 +492,16 @@
       }
       self.state.proposal = null;
       self.state.conversion = null;
-      self.state.notice = "Translating that query…";
-      self.render();
-      self.convertSql(sql);
+      self.state.notice = "";
+      begin(self, "convert");
+      var done = function () { finish(self); self.render(); };
+      self.convertSql(sql).then(done, done);
     });
+    go.title = "Parses the query into Insights operations, including a Join " +
+      "Table step when the ON clause is a single a.column = b.column. Both " +
+      "column names are checked against the DocType.";
+    row.appendChild(go);
+    wrap.appendChild(row);
     return wrap;
   };
 
@@ -545,18 +587,12 @@
     });
     wrap.appendChild(chips);
 
-    var go = el("button", "dss-btn dss-btn-primary", "Propose a setup");
-    go.type = "button";
-    go.title = "Asks the model for a query and checks it. Creates nothing.";
-    go.addEventListener("click", function () {
+    var go = actionButton(this, "propose", "Propose a setup",
+                          "Reading your question…", function () {
       var question = (self.state.question || "").trim();
       if (!question) { toast("Type a question first."); return; }
-      go.disabled = true;
-      go.textContent = "Thinking…";
-      var done = function () {
-        go.disabled = false;
-        go.textContent = "Propose a setup";
-      };
+      begin(self, "propose");
+      var done = function () { finish(self); self.render(); };
       // Manual: the tables are already settled, so go straight to the query.
       // Automatic: ask which tables FIRST and stop, so the answer can be read
       // and changed before a query exists to rubber-stamp.
@@ -564,6 +600,7 @@
         ? self.propose(question)
         : self.proposeTables(question)).then(done, done);
     });
+    go.title = "Asks the model for a query and checks it. Creates nothing.";
     wrap.appendChild(go);
     return wrap;
   };
@@ -677,12 +714,18 @@
     box.appendChild(input);
 
     var actions = el("div", "dss-insights-links");
-    var build = el("button", "dss-btn dss-btn-primary", "Build the query");
-    build.type = "button";
-    build.addEventListener("click", function () {
-      build.disabled = true;
-      self.state.confirming = false;
-      self.propose((self.state.question || "").trim());
+    // `confirming` stays TRUE while this runs, so the confirm box — and this
+    // button, spinning — stay on screen. Clearing it first removed the only
+    // thing on the page that could show anything was happening.
+    var build = actionButton(this, "build", "Build the query",
+                             "Building the query…", function () {
+      begin(self, "build");
+      var done = function () {
+        finish(self);
+        self.state.confirming = false;
+        self.render();
+      };
+      self.propose((self.state.question || "").trim()).then(done, done);
     });
     actions.appendChild(build);
     var cancel = el("button", "dss-btn", "Cancel");
@@ -783,11 +826,11 @@
     // this app does not create charts — that code was archived — so there is
     // nothing to pick. Better absent than a control that does nothing.)
     var actions = el("div", "dss-insights-links");
-    var create = el("button", "dss-btn dss-btn-primary", "Create in Insights");
-    create.type = "button";
-    create.addEventListener("click", function () {
-      create.disabled = true;
-      self.convertSql(proposal.sql);
+    var create = actionButton(this, "create", "Create in Insights",
+                              "Creating it in Insights…", function () {
+      begin(self, "create");
+      var done = function () { finish(self); self.render(); };
+      self.convertSql(proposal.sql).then(done, done);
     });
     actions.appendChild(create);
 
@@ -904,6 +947,10 @@
   App.prototype.buildConversionResult = function () {
     var made = this.state.conversion;
     if (!made) return null;
+    // `self`, declared. Without it the regroup handler below reached
+    // `window.self` — a real object, so no ReferenceError, just
+    // "Cannot set properties of undefined". Found by clicking the button.
+    var self = this;
     var box = el("div", "dss-saveresult is-ok");
     box.appendChild(el("div", "dss-saveresult-title", "Converted — " + made.name));
     box.appendChild(el("div", "dss-saveresult-detail", "“" + made.title + "”"));
@@ -923,6 +970,37 @@
     // cannot know that.
     var display = core.chartDisplayNote(made.operations);
     if (display) box.appendChild(el("div", "dss-validation is-warn", display));
+
+    // Grouped by a date NUMBER, so the query is right and the chart cannot be
+    // drawn. The one-click fix removes the retyping, NOT the decision: it only
+    // fires on a click, after the person has read why, and its result goes back
+    // through the whole converter like any other conversion. Month-of-year is a
+    // genuinely different question from a year-over-year trend, so nothing here
+    // decides which one was meant.
+    var part = core.datePartGrouping(made.operations);
+    if (part && made.sql) {
+      var warn = el("div", "dss-validation is-warn");
+      warn.appendChild(el("div", "dss-validation-line",
+        "Grouped by " + part.part + "-of-" + (part.part === "day" ? "month" : "year") +
+        " (" + part.column + "), which is a number — Insights can only put a " +
+        "date on a chart's X axis, so this converted correctly but cannot be " +
+        "charted as it stands."));
+      warn.appendChild(actionButton(this, "regroup", "Try grouping by year instead",
+                                    "Rebuilding by year…", function () {
+        var retry = core.regroupByYear(made.sql, part.part);
+        self.state.vizSql = retry;
+        self.state.conversion = null;
+        self.state.notice = "";
+        begin(self, "regroup");
+        var done = function () { finish(self); self.render(); };
+        self.convertSql(retry).then(done, done);
+      }));
+      warn.appendChild(el("div", "dss-hint",
+        "Substitutes " + part.part.toUpperCase() + "( for YEAR( and converts " +
+        "again. If month-of-year was the question you meant, ignore this — " +
+        "it is a different question, not a mistake."));
+      box.appendChild(warn);
+    }
 
     var links = el("div", "dss-insights-links");
     var open = el("a", "dss-link", "Open in Insights");

@@ -459,6 +459,30 @@ Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN
 
 **A second bug the screenshots caught, which the assertions did not.** The results list painted into DOM nodes captured before the server replied. Any other async state change — the workbook list arriving — re-renders the page and detaches them, so a correct list was painted into nodes no longer on screen: state said four reports, the page still said "Looking…". Every state assertion was green. `paint` now resolves its nodes from the live document each time. This is the fourth round running where a screenshot found what assertions missed.
 
+## ADR-027 — Month-of-year is a one-click regroup and a corpus list, never an automatic rewrite
+
+**The problem is scale, not correctness.** ADR-024 established that `MONTH(d)` converts correctly and cannot be a chart's X axis in Insights, and said so on the operation. At ~2000 reports, "edit the SQL by hand" is not a fix — but neither is rewriting the corpus, because *"which month has the most X, regardless of year"* is a genuinely different and valid question from a year-over-year trend. Only a person knows which was meant. So: make the click fast and well-informed, and keep the click.
+
+**In the page.** The conversion result offers **"Try grouping by year instead"** beside the explanation. It substitutes the detected part for `YEAR(` and re-runs the whole converter — same refusals, same checks, same read-back. Nothing is applied silently and nothing is decided here; the hint says outright that ignoring it is the right move if month-of-year was the question.
+
+**The substitution steps over quoted literals**, and that is the load-bearing detail. A plain global replace would turn `WHERE label = 'MONTH(x)'` into a filter for a value nobody typed — which converts, runs, and returns different rows, the one failure mode this project exists to refuse. Backtick-quoted identifiers are stepped over for the same reason, and a word boundary is required so `t.DAY(` and `my_MONTH(` are left alone.
+
+**In the corpus scan.** `bulk_dry_run.py` gains **"Converts, but the chart cannot be drawn"** — its own section, its own count, the full file list. Deliberately not folded into either existing heading: it is not a refusal (the query is right) and not "converts cleanly" (the chart is not usable), and under either it disappears. Only reports that actually convert are considered; an unchartable axis on a query that refuses is noise.
+
+**One rule, two languages.** `chart_config.date_part_grouping` (server, for the scan) and `studio_core.datePartGrouping` (browser, for the button) must agree, or the list names reports the page will not offer the fix for. `year` is excluded from both — ADR-024 emits a grouped YEAR as a *granularity* on the date column, so it never becomes a mutate, and offering to regroup a year by year would be a no-op button that loops.
+
+**Where the flag actually lives, corrected.** The brief described this as "the reason a chart couldn't be built". It is not: a MONTH grouping **does** build a chart, with an Integer dimension, and the unchartability is flagged on the mutate line in the operations read-back. The fix is the same; the wording of the new warning says what is true.
+
+## ADR-028 — A button that makes a round-trip shows it, from STATE
+
+**The bug.** "Build the query" left a completely static screen while its request ran — indistinguishable from a hung page. Four buttons make server round-trips; two had no feedback at all, and "Propose a setup" said "Thinking…", which was neither present-tense nor specific.
+
+**Why it could not be done on the button.** Every one of these handlers ends in a `render()` that rebuilds the DOM and throws the node away, so `button.disabled = true` and a label change are gone a moment later. "Build the query" was worse: it cleared `confirming` first, removing its own confirm box, so there was nothing left on screen to show anything at all. The busy state therefore lives in `state.busy` and the button renders from it — the same lesson as the export-search list painting into detached nodes.
+
+**Any in-flight request disables all of them.** There is one output region; a second request started underneath the first would replace the answer to a question nobody could see was asked. `finish` runs on success *and* failure, so a refusal never leaves a button spinning. A double click fires exactly one request, asserted.
+
+**Copy**: present-tense and specific — "Reading your question…", "Building the query…", "Converting the query…", "Creating it in Insights…". The spinner is decoration; `prefers-reduced-motion` stops it and the label still says what is happening.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

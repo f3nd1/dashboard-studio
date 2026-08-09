@@ -72,6 +72,74 @@
     return op.type || "";
   }
 
+  // Is this query's X axis a date NUMBER rather than a date?
+  //
+  // Mirrors `chart_config.date_part_grouping` on the server, which the corpus
+  // scan uses. `year` is absent on purpose: ADR-024 emits it as a granularity
+  // on the date column, which stays chartable, so it never becomes a mutate.
+  var UNCHARTABLE_PARTS = ["month", "quarter", "day"];
+
+  function datePartGrouping(operations) {
+    operations = operations || [];
+    var grouped = {};
+    operations.forEach(function (op) {
+      if (op && op.type === "summarize") {
+        (op.dimensions || []).forEach(function (d) { grouped[d.column_name] = true; });
+      }
+    });
+    for (var i = 0; i < operations.length; i++) {
+      var op = operations[i] || {};
+      if (op.type !== "mutate" || !grouped[op.new_name]) continue;
+      var text = (op.expression || {}).expression || "";
+      for (var j = 0; j < UNCHARTABLE_PARTS.length; j++) {
+        var part = UNCHARTABLE_PARTS[j];
+        if (text.indexOf(part + "(") === 0) {
+          return { part: part, dimension: op.new_name,
+                   column: text.slice(part.length + 1).replace(/\)+$/, "").trim() };
+        }
+      }
+    }
+    return null;
+  }
+
+  // `MONTH(` -> `YEAR(`, everywhere it appears OUTSIDE a string literal.
+  //
+  // Same three places every time this pattern occurs — the SELECT list, the
+  // GROUP BY and the ORDER BY — so a plain textual substitution is the whole
+  // job. Quoted literals are stepped over rather than rewritten: a
+  // `WHERE label = 'MONTH(x)'` would otherwise be edited into a filter for a
+  // value nobody typed, and that converts cleanly and returns different rows,
+  // which is the one failure this project will not ship. Backtick-quoted
+  // identifiers are stepped over for the same reason.
+  //
+  // The result is NOT applied silently — it goes back through the whole
+  // converter and is shown like any other conversion.
+  function regroupByYear(sql, part) {
+    sql = String(sql || "");
+    var want = String(part || "month").toUpperCase();
+    var out = "", quote = null, i = 0;
+    while (i < sql.length) {
+      var ch = sql.charAt(i);
+      if (quote) {
+        // A doubled quote inside a literal is an escaped one, not the end.
+        if (ch === quote && sql.charAt(i + 1) === quote) { out += ch + ch; i += 2; continue; }
+        if (ch === "\\" && quote !== "`") { out += ch + sql.charAt(i + 1); i += 2; continue; }
+        if (ch === quote) quote = null;
+        out += ch; i += 1; continue;
+      }
+      if (ch === "'" || ch === '"' || ch === "`") { quote = ch; out += ch; i += 1; continue; }
+      var ahead = sql.slice(i);
+      var match = new RegExp("^" + want + "(\\s*\\()", "i").exec(ahead);
+      // A word boundary before it, so `DAYCOUNT(` and `x.DAY(` are left alone.
+      var before = i ? sql.charAt(i - 1) : " ";
+      if (match && !/[\w.]/.test(before)) {
+        out += "YEAR" + match[1]; i += match[0].length; continue;
+      }
+      out += ch; i += 1;
+    }
+    return out;
+  }
+
   // The plain label beside each operation. The user reads these to judge
   // whether the proposal understood the question, so they say what the step
   // DOES rather than naming Insights' internals.
@@ -249,6 +317,7 @@
 
   root.DSStudioCore = { describeOperation: describeOperation,
     labelForOperation: labelForOperation, describeProposal: describeProposal,
-    chartDisplayNote: chartDisplayNote, refusalMessage: refusalMessage };
+    chartDisplayNote: chartDisplayNote, datePartGrouping: datePartGrouping,
+    regroupByYear: regroupByYear, refusalMessage: refusalMessage };
   if (typeof module !== "undefined" && module.exports) module.exports = root.DSStudioCore;
 })(typeof window !== "undefined" ? window : this);

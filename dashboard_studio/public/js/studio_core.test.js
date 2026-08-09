@@ -252,3 +252,85 @@ assert.strictEqual(core.chartDisplayNote(
    { type: "summarize", measures: [COUNT], dimensions: [] }]), "");
 
 console.log("studio_core.test.js — the note reads the summarize specifically");
+
+// ---------------------------------------------------------------------------
+// The month-of-year one-click regroup.
+//
+// The substitution is text, so the tests are mostly about what it must NOT
+// touch. Rewriting a quoted literal would edit a filter value into one nobody
+// typed — a query that converts, runs, and returns different rows.
+// ---------------------------------------------------------------------------
+var monthOps = [
+  { type: "source", table: { table_name: "tabQuality Action" } },
+  { type: "mutate", new_name: "month_of_d",
+    expression: { expression: "month(d)" } },
+  { type: "summarize", measures: [COUNT],
+    dimensions: [{ dimension_name: "month_of_d", column_name: "month_of_d",
+                   data_type: "Integer" }] },
+];
+assert.deepStrictEqual(core.datePartGrouping(monthOps),
+  { part: "month", dimension: "month_of_d", column: "d" });
+
+// A YEAR grouping is a granularity on the date column and never a mutate, so
+// it must never offer the fix — it is already what the fix produces.
+assert.strictEqual(core.datePartGrouping([
+  { type: "summarize", measures: [COUNT],
+    dimensions: [{ dimension_name: "d", column_name: "d", data_type: "Date",
+                   granularity: "year" }] }]), null);
+// A mutate that is not grouped BY is not the chart's X axis.
+assert.strictEqual(core.datePartGrouping([
+  { type: "mutate", new_name: "month_of_d", expression: { expression: "month(d)" } },
+  { type: "summarize", measures: [COUNT], dimensions: [] }]), null);
+// Arithmetic mutates are untouched.
+assert.strictEqual(core.datePartGrouping([
+  { type: "mutate", new_name: "x", expression: { expression: "(a + b) / 2" } },
+  { type: "summarize", measures: [COUNT],
+    dimensions: [{ column_name: "x" }] }]), null);
+
+// The substitution: all three places at once, which is where it always appears.
+assert.strictEqual(
+  core.regroupByYear("SELECT MONTH(`d`) AS `m` FROM `t` " +
+                     "GROUP BY MONTH(`d`) ORDER BY MONTH(`d`) ASC", "month"),
+  "SELECT YEAR(`d`) AS `m` FROM `t` GROUP BY YEAR(`d`) ORDER BY YEAR(`d`) ASC");
+// A quoted literal is NOT rewritten — the one case that would be a silently
+// different result rather than a visible failure.
+assert.strictEqual(
+  core.regroupByYear("SELECT MONTH(`d`) FROM `t` WHERE `label` = 'MONTH(x)'", "month"),
+  "SELECT YEAR(`d`) FROM `t` WHERE `label` = 'MONTH(x)'");
+assert.strictEqual(
+  core.regroupByYear('SELECT MONTH(`d`) FROM `t` WHERE `l` = "MONTH(x)"', "month"),
+  'SELECT YEAR(`d`) FROM `t` WHERE `l` = "MONTH(x)"');
+// A backticked identifier that happens to be spelled MONTH is a column.
+assert.strictEqual(core.regroupByYear("SELECT `MONTH(x)` FROM `t`", "month"),
+                   "SELECT `MONTH(x)` FROM `t`");
+// A word boundary before it: DAYCOUNT( and t.DAY( are other things entirely.
+assert.strictEqual(core.regroupByYear("SELECT DAYCOUNT(a), DAY(`d`) FROM t", "day"),
+                   "SELECT DAYCOUNT(a), YEAR(`d`) FROM t");
+// Case and spacing as Metabase writes them.
+assert.strictEqual(core.regroupByYear("select month (`d`) from t", "month"),
+                   "select YEAR (`d`) from t");
+// Only the detected part — a QUARTER query does not have its MONTHs rewritten.
+assert.strictEqual(core.regroupByYear("SELECT QUARTER(`d`), MONTH(`e`) FROM t", "quarter"),
+                   "SELECT YEAR(`d`), MONTH(`e`) FROM t");
+// An escaped quote inside a literal does not end it.
+assert.strictEqual(
+  core.regroupByYear("SELECT MONTH(`d`) FROM t WHERE x = 'it''s MONTH(y)'", "month"),
+  "SELECT YEAR(`d`) FROM t WHERE x = 'it''s MONTH(y)'");
+
+console.log("studio_core.test.js — month-of-year regroup asserted");
+// A QUALIFIED name is not a function call. `DAYCOUNT(` never matched anyway —
+// the regex needs the bracket immediately after — so the word-boundary check
+// is really about this shape, and that is what it has to be tested on.
+assert.strictEqual(core.regroupByYear("SELECT t.DAY(`d`) FROM t", "day"),
+                   "SELECT t.DAY(`d`) FROM t");
+assert.strictEqual(core.regroupByYear("SELECT my_MONTH(`d`) FROM t", "month"),
+                   "SELECT my_MONTH(`d`) FROM t");
+// `year` must NEVER be offered as unchartable: regrouping year by year is a
+// no-op, and the button would loop. Asserted on a synthetic mutate, because
+// ADR-024 means a grouped YEAR does not produce one.
+assert.strictEqual(core.datePartGrouping([
+  { type: "mutate", new_name: "year_of_d", expression: { expression: "year(d)" } },
+  { type: "summarize", measures: [COUNT],
+    dimensions: [{ column_name: "year_of_d" }] }]), null);
+
+console.log("studio_core.test.js — regroup boundary and year-exclusion asserted");

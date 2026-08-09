@@ -936,3 +936,19 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
 /* Says up front whether picking this one produces a chart. */
 .dss-searchresult-tag { flex: 0 0 auto; font-size: 0.7rem; color: #7c7c7c; }
 .dss-searchresult-tag.is-ok { color: #1f7a4d; }
+
+
+/* In-progress state for any button that makes a server round-trip. Before
+   this, a request in flight looked exactly like a hung page. */
+.dss-btn.is-busy { cursor: progress; }
+.dss-btn[disabled] { opacity: 0.65; cursor: not-allowed; }
+.dss-spinner { display: inline-block; width: 0.75rem; height: 0.75rem;
+  margin-right: 0.45rem; vertical-align: -0.08rem; border-radius: 50%;
+  border: 2px solid currentColor; border-right-color: transparent;
+  animation: dss-spin 0.6s linear infinite; }
+@keyframes dss-spin { to { transform: rotate(360deg); } }
+/* A spinner is decoration; the label already says what is happening. Someone
+   who has asked for less motion gets the label and a static ring. */
+@media (prefers-reduced-motion: reduce) {
+  .dss-spinner { animation: none; }
+}

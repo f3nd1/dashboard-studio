@@ -164,6 +164,10 @@ def _dry_run():
         from dashboard_studio.integrations.metabase.parser import analyze_sql
         from dashboard_studio.integrations.metabase.sql_ops import operations_from_sql
     try:
+        from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
+    except ImportError:
+        date_part_grouping = None
+    try:
         from dashboard_studio.api.convert import _table_columns
         typed = True
     except Exception:
@@ -256,6 +260,11 @@ def _dry_run():
         return (text or report), found
     def distinct(reports):
         return len({base_name(r)[0] for r in reports})
+    # Reports that CONVERT but whose chart cannot be drawn: grouped by a date
+    # NUMBER (month-of-year, quarter, day-of-month). Its own group on purpose —
+    # it is neither a refusal nor "converts cleanly", and filing it under either
+    # loses it. Keyed by the part so `month` and `day` are counted apart.
+    unchartable = {}
     clean, blocked, ungrouped = [], {}, {}
     unreadable_tables = {}
     per_report = {}
@@ -277,9 +286,17 @@ def _dry_run():
                         # tables to go and look at, which is the actionable half.
                         unreadable_tables.setdefault(
                             f"{doctype}: {error}", set()).add(report)
-                reasons = ([f"the columns of {', '.join(unreadable)} are not known here"]
-                           if unreadable
-                           else operations_from_sql(analysis, columns)["reasons"])
+                converted = ({"reasons": [f"the columns of {', '.join(unreadable)} "
+                                          "are not known here"], "operations": []}
+                             if unreadable
+                             else operations_from_sql(analysis, columns))
+                reasons = converted["reasons"]
+                # Only asked of reports that CONVERT — an unchartable axis on a
+                # query that refuses is not a finding, it is noise.
+                if not reasons and date_part_grouping:
+                    part = date_part_grouping(converted["operations"])
+                    if part:
+                        unchartable.setdefault(part["part"], []).append(report)
         except Exception as error:
             # A crash is a finding in its own right: every input here is a real
             # report, and the converter is supposed to refuse, not raise.
@@ -335,6 +352,25 @@ def _dry_run():
         print("   type checks did not run — a LIKE filter, an average over a text")
         print("   column and a column the table no longer has all pass this run and")
         print("   refuse on a site. Run it under `bench console` for the real answer.")
+    if unchartable:
+        print()
+        print("=" * 78)
+        total = sum(len(set(v)) for v in unchartable.values())
+        print(f"Converts, but the chart cannot be drawn ({total})")
+        print("=" * 78)
+        print("   These are NOT refusals and NOT in the counts above. The query")
+        print("   converts and its numbers are right; it groups by a date NUMBER")
+        print("   (month-of-year, quarter, day-of-month), and Insights' chart X")
+        print("   axis takes only a date. Each has a one-click 'group by year")
+        print("   instead' in the converter — which is a DIFFERENT question, so")
+        print("   nothing here changes anything by itself.")
+        for part in sorted(unchartable, key=lambda key: -len(set(unchartable[key]))):
+            reports = sorted(set(unchartable[part]))
+            print()
+            line = f"   {part.upper()}  ({len(reports)} files"
+            print(line + (f", {distinct(reports)} reports)" if dedupe else ")"))
+            for name in reports:
+                print(f"      {name}")
     print()
     print("=" * 78)
     print("Blocked by — most reports first")
