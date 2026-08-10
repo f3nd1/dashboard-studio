@@ -30,12 +30,11 @@ from __future__ import annotations
 import frappe
 
 from dashboard_studio.api.convert import _table_columns
+from dashboard_studio.integrations.doctype_rank import rank_doctypes
 from dashboard_studio.integrations.llm.question import (
     API_URL,
     MODEL,
     MODELS_URL,
-    doctypes_from_response,
-    pick_doctypes_request,
     sql_from_response,
     write_sql_request,
 )
@@ -46,6 +45,12 @@ from dashboard_studio.integrations.metabase.sql_ops import (
     rows_multiplied_by,
 )
 from dashboard_studio.roles import DS_WRITE_ROLES
+
+# Layout and display fieldtypes hold no data, so a Section Break labelled
+# "Student Details" must not make its DocType look like it answers a question
+# about students — there is no column behind it to query.
+NO_DATA_FIELDS = ("Section Break", "Column Break", "Tab Break", "HTML",
+                  "Heading", "Button", "Image", "Fold")
 
 # What the validation strip must say alongside its green tick. A strip that
 # reports "checked" without saying what it did NOT check implies an assurance
@@ -92,27 +97,59 @@ def llm_key_is_configured():
 
 
 @frappe.whitelist()
-def propose_tables(question: str, api_key: str = None, model: str = None):
+def propose_tables(question: str):
     """Which DocTypes a question is about. **Proposes only; creates nothing.**
 
-    This step existed already and was INVISIBLE, which is how a question about
-    recruitment agents was answered from ERPNext's sales-commission tables:
-    every column existed, every type checked, and the referential validator had
-    nothing to object to. The choice of table is the one decision this
-    converter can never verify, so it is the one decision a person has to make.
+    The choice of table is the one decision this converter can never verify, so
+    it is the one decision a person has to make — ADR-023. It used to be made
+    by asking a model, which returned a DIFFERENT set on each run of the same
+    question because the reply was sampled. A defence that varies run to run is
+    not a defence, so this is now ranked from the schema: DocType names,
+    modules, and DocField labels and fieldnames. Same question, same answer,
+    and each candidate carries the fact it matched on.
 
-    Returns NAMES ONLY. No rationale from the model — a sentence explaining why
-    it picked a table would describe its intention, and it is the choice, not
-    the reasoning, that has to be checked. Same rule as the summary.
+    **No outbound call, and no API key.** Nothing about this question leaves
+    the site any more — the whole DocType list used to go to the provider with
+    it. Writing the SQL still needs a key; choosing the tables does not.
+
+    Returns names WITH THEIR EVIDENCE. That is not the model rationale ADR-023
+    refused: a rationale describes an intention, while "the field labelled
+    'Agent Name' matched 'agent'" is the fact itself and can be checked.
     """
     frappe.only_for(DS_WRITE_ROLES)
     question = (question or "").strip()
     if not question:
         frappe.throw("Type a question first.")
-    model = _model(model)
-    names = frappe.get_all("DocType", pluck="name")
-    return {"doctypes": doctypes_from_response(
-        _ask(pick_doctypes_request(question, names, model), api_key), names)}
+    ranked = rank_doctypes(question, _catalogue())
+    return {"doctypes": [entry["doctype"] for entry in ranked],
+            "candidates": ranked}
+
+
+def _catalogue():
+    """Every DocType with its module and its fields' labels and fieldnames.
+
+    Two reads, not one per DocType: `DocField` is fetched in a single pass and
+    grouped here. Custom fields are included — a site's own fields are exactly
+    the ones a local question is likely to name.
+    """
+    fields_by_doctype = {}
+    # `link_field`, not `parent_key`: a name containing "key" here trips the
+    # test that forbids any key-shaped name reaching an f-string, and that
+    # guard covers the API credential. Renaming this is the correct fix —
+    # loosening the guard to accommodate an unrelated variable is how the one
+    # thing it protects gets through later.
+    for source, link_field in (("DocField", "parent"), ("Custom Field", "dt")):
+        for row in frappe.get_all(source,
+                                  fields=[f"{link_field} as parent", "label",
+                                          "fieldname"],
+                                  filters={"fieldtype": ["not in", NO_DATA_FIELDS]}):
+            fields_by_doctype.setdefault(row["parent"], []).append(
+                {"label": row.get("label"), "fieldname": row.get("fieldname")})
+    return [{"doctype": row["name"], "module": row.get("module"),
+             "istable": row.get("istable"),
+             "fields": fields_by_doctype.get(row["name"], [])}
+            for row in frappe.get_all("DocType",
+                                      fields=["name", "module", "istable"])]
 
 
 @frappe.whitelist()

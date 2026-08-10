@@ -62,12 +62,22 @@ class TestNothingButNamesAndTypesLeaves(unittest.TestCase):
         self.assertIn("Decimal", sent)
         self.assertIn("which agent sold most", sent)
 
-    def test_the_first_pass_sends_names_and_no_columns(self):
-        """A site has hundreds of DocTypes. Sending every column of all of them
-        to answer a question about two is egress nobody agreed to."""
-        payload = Q.pick_doctypes_request("x", ["Sales Invoice", "Item"])
-        self.assertIn("Sales Invoice", repr(payload))
-        self.assertNotIn("sales_income", repr(payload))
+    def test_the_first_pass_NO_LONGER_EXISTS(self):
+        """There used to be one: the question and every DocType name on the
+        site went to the provider to choose tables. It is ranked from the
+        schema now (ADR-036), so nothing about a question leaves the site
+        until the tables are settled — a whole class of egress removed rather
+        than bounded."""
+        # Structural only. An earlier draft asserted the word "DocType" was
+        # absent from the module docstring and failed on the paragraph
+        # explaining the removal — prose read as if it were code, for the
+        # fourth time in this repo.
+        self.assertFalse(hasattr(Q, "pick_doctypes_request"))
+        self.assertFalse(hasattr(Q, "doctypes_from_response"))
+        self.assertEqual(
+            [node.name for node in ast.walk(self.TREE)
+             if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")],
+            ["write_sql_request", "sql_from_response"])
 
     def test_no_credential_is_reachable_from_here(self):
         """It imports nothing that could hold one, and takes none as an
@@ -120,8 +130,6 @@ class TestReadingTheReply(unittest.TestCase):
             with self.subTest(repr(blank)):
                 self.assertEqual(Q.write_sql_request("x", SCHEMA, blank)["model"],
                                  Q.MODEL)
-        self.assertEqual(Q.pick_doctypes_request("x", ["A"], "gpt-5.4")["model"],
-                         "gpt-5.4")
 
     def test_the_prompt_states_the_dialect_the_parser_accepts(self):
         """The model writes SQL for a PARSER, not for a reader. Left to write
@@ -177,17 +185,6 @@ class TestReadingTheReply(unittest.TestCase):
                     refusal=refusal)["messages"][1]["content"]
                 self.assertEqual(user, plain)
                 self.assertNotIn("refused", user)
-
-    def test_a_doctype_it_invented_is_dropped(self):
-        """A name that does not exist would otherwise reach `get_meta` and come
-        back as "There is no DocType called …" — a true message about the wrong
-        thing."""
-        chosen = Q.doctypes_from_response(reply("Sales Invoice\nSales Ledger"),
-                                          ["Sales Invoice", "Item"])
-        self.assertEqual(chosen, ["Sales Invoice"])
-
-    def test_NONE_means_none(self):
-        self.assertEqual(Q.doctypes_from_response(reply("NONE"), ["Item"]), [])
 
 
 class TestAJoinThatMultipliesRows(unittest.TestCase):
@@ -358,18 +355,35 @@ class TestTheModuleThatCreatesNothing(unittest.TestCase):
         keywords = {k.arg for k in calls[0].keywords}
         self.assertEqual(keywords, {"previous_sql", "refusal"})
 
-    def test_the_picking_step_is_its_own_read_only_endpoint(self):
-        source = self.PATH.read_text()
-        self.assertIn("def propose_tables(", source)
+    def test_the_picking_step_is_its_own_endpoint_and_asks_NOTHING(self):
+        """It ranks from the site's own schema now (ADR-036), so the question
+        no longer leaves the site to choose tables — and the determinism that
+        makes the confirm step a real defence is structural rather than a
+        setting. `candidates` carries the EVIDENCE each table matched on: that
+        is not the model rationale ADR-023 refused, because a rationale
+        describes an intention while "the field labelled 'Agent Name' matched
+        'agent'" is the fact itself."""
         picker = [node for node in ast.walk(self.TREE)
                   if isinstance(node, ast.FunctionDef) and node.name == "propose_tables"]
         self.assertEqual(len(picker), 1)
         returns = [n for n in ast.walk(picker[0])
                    if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)]
-        # Names only. A rationale from the model would describe its intention,
-        # and it is the choice that has to be checked.
-        self.assertEqual(
-            [{k.value for k in n.value.keys} for n in returns], [{"doctypes"}])
+        self.assertEqual([{k.value for k in n.value.keys} for n in returns],
+                         [{"doctypes", "candidates"}])
+        # No outbound call, and no credential: it takes the question alone.
+        called = [ast.unparse(n.func) for n in ast.walk(picker[0])
+                  if isinstance(n, ast.Call)]
+        self.assertNotIn("_ask", called)
+        self.assertEqual([a.arg for a in picker[0].args.args], ["question"])
+
+    def test_the_LLM_picker_is_gone_rather_than_left_to_rot(self):
+        """It returned a different set of tables on each run of the same
+        question. Keeping it beside the ranker would leave a sampled path
+        somebody could call by accident."""
+        from dashboard_studio.integrations.llm import question as module
+        self.assertFalse(hasattr(module, "pick_doctypes_request"))
+        self.assertFalse(hasattr(module, "doctypes_from_response"))
+        self.assertNotIn("pick_doctypes_request", self.PATH.read_text())
 
     def test_widening_past_the_confirmed_tables_refuses_by_name(self):
         """The server half, and the half that actually bites. Before this, the

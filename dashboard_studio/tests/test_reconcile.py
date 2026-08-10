@@ -172,6 +172,34 @@ class TestRowsThatDoNotLineUp(unittest.TestCase):
         self.assertTrue(report["match"], report["differences"])
 
 
+class TestNoRowsIsNotAgreement(unittest.TestCase):
+    """The failure mode of running this against the wrong database.
+
+    Two empty results agree, and prove nothing. On a copy that is not the one
+    the reports were written against, that is EVERY card — and a column of
+    green ticks is exactly how a harness stops being read.
+    """
+
+    def test_both_empty_is_inconclusive_and_not_a_match(self):
+        report = compare_results(result(["a"], []), result(["a"], []))
+        self.assertTrue(report["inconclusive"])
+        self.assertFalse(report["match"])
+        self.assertIn("INCONCLUSIVE", describe(report)[0])
+        self.assertIn("not evidence of anything", " ".join(report["notes"]))
+
+    def test_one_side_empty_is_an_ordinary_difference(self):
+        """Rows on one side and none on the other is a real finding, not an
+        inconclusive one — a filter that did not survive looks exactly so."""
+        report = compare_results(result(["a"], [["x"]]), result(["a"], []))
+        self.assertFalse(report["inconclusive"])
+        self.assertFalse(report["match"])
+
+    def test_rows_that_agree_are_still_a_match(self):
+        report = compare_results(result(["a"], [["x"]]), result(["a"], [["x"]]))
+        self.assertTrue(report["match"])
+        self.assertFalse(report["inconclusive"])
+
+
 class TestPairingColumns(unittest.TestCase):
     def test_an_exact_name_pairs(self):
         pairs, left, right = match_columns(["name"], ["name"])
@@ -374,3 +402,83 @@ class TestWhatTheGuardRejects(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheDatabaseReport(unittest.TestCase):
+    """`which_database.py` exists because "does this reach production?" was
+    answered by inference once. It prints configuration, so what it may print
+    is asserted rather than reviewed — this output gets pasted into chat."""
+
+    PATH = (pathlib.Path(__file__).resolve().parents[2]
+            / "scripts" / "which_database.py")
+    SOURCE = PATH.read_text()
+    TREE = ast.parse(SOURCE)
+
+    def field_lists(self):
+        """Every string inside a `fields=[...]` argument."""
+        out = []
+        for node in ast.walk(self.TREE):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg == "fields":
+                    out.extend(element.value for element in keyword.value.elts
+                               if isinstance(element, ast.Constant))
+        return out
+
+    def test_it_never_asks_for_a_credential_field(self):
+        """The credential fields on Insights Data Source v3, read from the
+        DocType's own JSON at v3.12.2. Asking for one would put it in a
+        terminal, and this output is written to be pasted."""
+        for secret in ("password", "username", "api_token", "api_password",
+                       "bigquery_service_account_key", "connection_string"):
+            self.assertNotIn(secret, self.field_lists(), secret)
+
+    def test_it_reads_BOTH_halves_of_the_harness(self):
+        """The site DB is what runs the card's SQL; the Insights data source is
+        what runs ours. They are not necessarily the same database, and a
+        report naming only one would answer half the question."""
+        self.assertIn("db_name", self.SOURCE)
+        self.assertIn("Insights Data Source v3", self.SOURCE)
+        self.assertIn("is_site_db", self.field_lists())
+
+    def test_it_runs_no_query_and_writes_nothing(self):
+        called = [ast.unparse(node.func) for node in ast.walk(self.TREE)
+                  if isinstance(node, ast.Call)]
+        for name in ("frappe.db.sql", "insert", "save", "frappe.db.set_value"):
+            self.assertNotIn(name, called, name)
+
+    def host_of(self):
+        """The real `host_of`, lifted out of the script and compiled alone.
+
+        It is nested inside a function that needs a bench, so it is extracted
+        rather than imported — but it is the code that runs, not a copy of it.
+        """
+        for node in ast.walk(self.TREE):
+            if isinstance(node, ast.FunctionDef) and node.name == "host_of":
+                namespace = {}
+                exec(compile(ast.Module(body=[node], type_ignores=[]),  # noqa: S102
+                             "<host_of>", "exec"), namespace)
+                return namespace["host_of"]
+        self.fail("host_of is missing from which_database.py")
+
+    def test_a_url_carrying_credentials_prints_only_its_host(self):
+        """A configured URL may be `https://user:token@host/path`, and this
+        output is written to be pasted into chat."""
+        host_of = self.host_of()
+        self.assertEqual(host_of("https://metabase.example.com/api"),
+                         "metabase.example.com")
+        self.assertEqual(host_of("https://someone:s3cret@metabase.example.com/x"),
+                         "metabase.example.com")
+        self.assertEqual(host_of(None), "(not set)")
+
+    def test_the_api_key_is_never_read(self):
+        self.assertNotIn("metabase_api_key", self.SOURCE)
+
+    def test_no_blank_line_inside_an_indented_block(self):
+        lines = self.SOURCE.splitlines()
+        bad = [i + 1 for i in range(1, len(lines) - 1)
+               if not lines[i].strip()
+               and lines[i - 1][:1].isspace() and lines[i - 1].strip()
+               and lines[i + 1][:1].isspace() and lines[i + 1].strip()]
+        self.assertEqual(bad, [], f"blank line inside a block at {bad}")

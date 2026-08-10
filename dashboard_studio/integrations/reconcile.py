@@ -189,6 +189,7 @@ def compare_results(expected, actual, column_map=None,
 
     report = {
         "match": False,
+        "inconclusive": False,
         "row_count": {"expected": len(expected_rows), "actual": len(actual_rows)},
         "columns": {"paired": pairs, "only_expected": only_expected,
                     "only_actual": only_actual},
@@ -198,6 +199,17 @@ def compare_results(expected, actual, column_map=None,
         "order_differs": False,
         "notes": [],
     }
+    if not expected_rows and not actual_rows:
+        # Two empty results agree, and prove nothing. This matters most on a
+        # database that is not the one the report was written against — an
+        # empty or partially-populated copy makes every card "agree", and a
+        # column of green ticks is exactly how a harness stops being read.
+        report["inconclusive"] = True
+        report["notes"].append(
+            "both sides returned NO ROWS — they agree, and that is not "
+            "evidence of anything. Check this card against a database that "
+            "holds the data it reports on")
+        return report
     if only_expected or only_actual:
         report["notes"].append(
             "columns could not be paired by name: "
@@ -253,6 +265,9 @@ def describe(report, card=""):
     """The report as lines a person reads, worst news first."""
     counts = report["row_count"]
     head = f"card {card}: " if card else ""
+    if report["inconclusive"]:
+        return [f"{head}INCONCLUSIVE — no rows on either side"] + [
+            f"   note: {note}" for note in report["notes"]]
     if report["match"]:
         worst = max(report["max_delta"].values(), default=0.0)
         return [f"{head}MATCH — {counts['actual']} rows, "

@@ -236,7 +236,8 @@ def _reconcile(guard_only=False):
         if report["columns"]["only_expected"] or report["columns"]["only_actual"]:
             unpaired[card] = (report["columns"]["only_expected"],
                               report["columns"]["only_actual"])
-        verdicts.append((card, "MATCH" if report["match"] else "DIFFERS"))
+        verdicts.append((card, "INCONCLUSIVE (no rows)" if report["inconclusive"]
+                         else "MATCH" if report["match"] else "DIFFERS"))
     print("")
     print("=" * 78)
     for card, verdict in verdicts:

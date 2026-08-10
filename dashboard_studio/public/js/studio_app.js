@@ -164,6 +164,11 @@
       tableMode: "auto",
       tables: "",
       confirming: false,
+      // The ranked candidates with the facts each matched on. Shown beside the
+      // confirm box so the choice can be CHECKED rather than rubber-stamped —
+      // this is not a model rationale (ADR-023 refused those, and was right):
+      // "the field labelled 'Agent Name' matched 'agent'" is the fact itself.
+      candidates: [],
       // The sidecar loaded beside an exported .sql — the source card's
       // `series_settings` and `display`. State only, like the API key: it
       // belongs to the query in the box and nothing else. Null means the
@@ -755,12 +760,16 @@
     self.state.proposal = null;
     self.state.conversion = null;
     self.state.notice = "";
+    // No api_key and no model: the tables are ranked from this site's own
+    // schema now, so nothing about the question leaves the site until the
+    // tables are settled. Writing the SQL still needs a key; choosing the
+    // tables does not.
     return dsCall({
       method: "dashboard_studio.api.propose.propose_tables",
-      args: { question: question, api_key: this.state.apiKey || null,
-              model: this.state.model || null },
+      args: { question: question },
     }).then(function (r) {
       var names = (r.message || {}).doctypes || [];
+      self.state.candidates = (r.message || {}).candidates || [];
       self.state.tables = names.join(", ");
       self.state.confirming = true;
       if (!names.length) {
@@ -786,9 +795,27 @@
     head.appendChild(el("span", "dss-badge", "Confirm first"));
     box.appendChild(head);
     box.appendChild(el("div", "dss-saveresult-detail",
-      "The model suggests these. Check them — this is the one choice nothing " +
-      "downstream can verify: a query over the wrong table returns real " +
-      "numbers about the wrong thing."));
+      "Ranked from this site's own schema — the same question always gives " +
+      "the same list. Check them: this is the one choice nothing downstream " +
+      "can verify, because a query over the wrong table returns real numbers " +
+      "about the wrong thing."));
+    // WHY each one is here. A name on its own is a list to rubber-stamp; the
+    // fact it matched on is something a person can disagree with.
+    if ((this.state.candidates || []).length) {
+      var why = el("div", "dss-handoff-todo");
+      why.appendChild(el("div", "dss-handoff-todo-head", "Why these"));
+      this.state.candidates.forEach(function (candidate) {
+        var line = el("div", "dss-handoff-todo-item");
+        line.appendChild(el("strong", null, candidate.doctype));
+        if (candidate.istable) {
+          line.appendChild(el("span", "dss-badge", "child table"));
+        }
+        line.appendChild(el("span", null,
+          " — " + (candidate.evidence || []).join("; ")));
+        why.appendChild(line);
+      });
+      box.appendChild(why);
+    }
     var input = el("input", "dss-input");
     input.type = "text";
     input.setAttribute("aria-label", "DocTypes to build the query over");

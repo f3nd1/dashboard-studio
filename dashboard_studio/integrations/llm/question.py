@@ -2,9 +2,17 @@
 
 **This module must never import frappe, and there is a test that says so.** That
 is the structural guarantee that no row of data can reach the model: there is no
-path from here to a database. What goes out is a question somebody typed, a list
-of DocType names, and column names with their types. Sample values are not
-withheld by care — they are unreachable.
+path from here to a database. What goes out is a question somebody typed and the
+column names, with their types, of the tables the USER confirmed. Sample values
+are not withheld by care — they are unreachable.
+
+**Choosing the tables no longer happens here.** It used to: a first pass sent
+the question and every DocType name on the site and asked which ones fitted.
+That reply was sampled, so the same question produced a different set of tables
+on each run — and ADR-023 records that step as the entire defence against the
+wrong-table failure. It is now ranked from the schema instead, deterministically
+and with its evidence, in `integrations/doctype_rank.py` (ADR-036). Nothing
+about a question leaves the site until the tables are settled.
 
 **The model emits SQL, not operations.** Everything downstream then applies
 unchanged: the wrapper rules, the allowlists, the type checks and every refusal
@@ -63,11 +71,6 @@ CANNOT: followed by one short sentence saying what is missing.
 
 The statement must fit this subset:
 """ + _SUPPORTED
-
-_PICK_SYSTEM = """\
-You are given a business question and a list of Frappe DocType names. Reply \
-with the names of up to 4 DocTypes needed to answer it, one per line, exactly \
-as spelled in the list, and nothing else. If none fit, reply with exactly NONE."""
 
 # Read out of OpenAI's own `openai-python` SDK at main rather than recalled:
 #
@@ -135,35 +138,6 @@ def _text_of(response) -> str:
     if not isinstance(message, dict):
         return ""
     return str(message.get("content") or "").strip()
-
-
-def pick_doctypes_request(question: str, doctypes, model: str = None) -> dict:
-    """Step one: which tables. Names only — no columns, no values.
-
-    A whole site's schema does not fit in one request, and sending the columns
-    of a thousand DocTypes to answer a question about two is the kind of egress
-    nobody agreed to. So the first pass sees names.
-    """
-    if not isinstance(question, str):
-        raise TypeError("question must be a string")
-    listing = "\n".join(sorted(str(name) for name in doctypes))
-    return _message(_PICK_SYSTEM, f"Question: {question}\n\nDocTypes:\n{listing}",
-                    model)
-
-
-def doctypes_from_response(response, known) -> list[str]:
-    """The names it chose, keeping only ones that really exist.
-
-    A name it invented is dropped here rather than reaching `frappe.get_meta`,
-    where it would become "There is no DocType called …" — a true message about
-    the wrong thing.
-    """
-    known = {str(name) for name in known}
-    text = _text_of(response)
-    if text.upper().startswith("NONE"):
-        return []
-    return [line.strip() for line in text.splitlines()
-            if line.strip() in known][:4]
 
 
 def write_sql_request(question: str, schema: dict, model: str = None,
