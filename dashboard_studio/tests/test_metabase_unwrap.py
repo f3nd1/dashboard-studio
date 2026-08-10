@@ -61,6 +61,12 @@ SCALE_FACTOR = (pathlib.Path(__file__).resolve().parent / "fixtures"
 # ADR-014.
 MONTH_LABEL = (pathlib.Path(__file__).resolve().parent / "fixtures"
                / "month_label_lookup.sql")
+# The seventh: card 2076 of the sole-41 survey family, captured VERBATIM off
+# the live site by wrapper_residue.py after a reconstruction converted while
+# the real card refused. The difference was one invisible character — the
+# alias `Exit  Qn. 7` carries a DOUBLE space.
+SATISFACTION = (pathlib.Path(__file__).resolve().parent / "fixtures"
+                / "employee_satisfaction_2076.sql")
 
 # The inner wrapper, exactly as Metabase writes it.
 INNER = "( select * from `tabStudent Applicant` ) AS `__mb_source`"
@@ -1086,8 +1092,11 @@ class TestAScaleFactorWrapper(unittest.TestCase):
         operations = self.operations()
         self.assertEqual([op["type"] for op in operations],
                          ["source", "join", "mutate", "summarize"])
+        # `Q1` becomes `q1`: computed aliases are slugged with Insights' own
+        # sanitize_name, which lowercases — the name Insights itself would
+        # create on open, so the stored JSON and the engine now agree exactly.
         self.assertEqual(operations[2], {
-            "type": "mutate", "new_name": "Q1", "data_type": "Auto",
+            "type": "mutate", "new_name": "q1", "data_type": "Auto",
             "expression": {"type": "expression", "expression": "rating_1 * 5"}})
 
     def test_it_is_typed_from_the_column_it_reads(self):
@@ -1111,7 +1120,7 @@ class TestAScaleFactorWrapper(unittest.TestCase):
     def test_the_join_carries_the_column_the_scale_reads(self):
         carried = [c["column_name"] for c in self.operations()[1]["select_columns"]]
         self.assertIn("rating_1", carried)
-        self.assertNotIn("Q1", carried)
+        self.assertNotIn("q1", carried)
 
     def test_two_columns_multiplied_together_refuses(self):
         """One column with numeric literals is the observed shape. `a * b` is
@@ -1141,7 +1150,7 @@ class TestAScaleFactorWrapper(unittest.TestCase):
                          ["source", "join", "join", "mutate", "mutate", "filter",
                           "summarize", "mutate"])
         self.assertEqual(result["operations"][-1]["expression"]["expression"],
-                         "(avg_of_Q1 + avg_of_Q5) / 2.0")
+                         "(avg_of_q1 + avg_of_q5) / 2.0")
 
 
 class TestADateDifferenceWrapper(unittest.TestCase):
@@ -1176,7 +1185,7 @@ class TestADateDifferenceWrapper(unittest.TestCase):
         self.assertEqual([op["type"] for op in operations],
                          ["source", "join", "mutate", "summarize"])
         self.assertEqual(operations[2], {
-            "type": "mutate", "new_name": "Days", "data_type": "Auto",
+            "type": "mutate", "new_name": "days", "data_type": "Auto",
             "expression": {"type": "expression",
                            "expression": "date_diff(completed_on, raised_on, 'day')"}})
 
@@ -1292,8 +1301,10 @@ class TestACaseThatMapsValuesToLabels(unittest.TestCase):
         return result["operations"]
 
     def labelling(self, operations=None):
+        # `Month Label` becomes `month_label`: computed aliases are slugged
+        # with Insights' own sanitize_name, the name the engine creates anyway.
         return [op for op in (operations or self.operations())
-                if op.get("new_name") == "Month Label"][0]
+                if op.get("new_name") == "month_label"][0]
 
     def test_the_reported_capture_converts_in_full(self):
         """Two mutates now, not three: the `year(d)` one is promoted into the
@@ -1340,8 +1351,8 @@ class TestACaseThatMapsValuesToLabels(unittest.TestCase):
                       [op for op in self.operations()
                        if op["type"] == "summarize"][0]["dimensions"]}
         self.assertEqual(dimensions,
-                         {"custom_proposed_date": "Date", "Month Label": "String",
-                          "Month No": "Integer"})
+                         {"custom_proposed_date": "Date", "month_label": "String",
+                          "month_no": "Integer"})
 
     def test_the_mutate_comes_before_the_summarize_that_groups_by_it(self):
         kinds = [op["type"] for op in self.operations()]
@@ -1622,8 +1633,8 @@ class TestTwoYearMutatesDoNotCollide(unittest.TestCase):
         reverse) would guess which grouping the user meant."""
         operations = self.operations()
         mutated = {op["new_name"] for op in operations if op["type"] == "mutate"}
-        self.assertIn("Year", mutated)
-        self.assertIn("Month No", mutated)
+        self.assertIn("year", mutated)
+        self.assertIn("month_no", mutated)
         dimensions = [op for op in operations
                       if op["type"] == "summarize"][0]["dimensions"]
         self.assertEqual([d.get("granularity") for d in dimensions],
@@ -1740,7 +1751,7 @@ class TestTheSurveyTrackingFamily(unittest.TestCase):
         result = operations_from_sql(analyze_sql(sql), self.COLUMNS)
         self.assertFalse(result["supported"])
         self.assertEqual(result["operations"], [])
-        self.assertTrue(any("whose name starts with a digit" in reason
+        self.assertTrue(any("cannot be written in a Python expression" in reason
                             for reason in result["reasons"]), result["reasons"])
         self.assertTrue(any("Aggregating or filtering the column directly is fine"
                             in reason for reason in result["reasons"]))
@@ -1790,3 +1801,155 @@ class TestTheSurveyTrackingFamily(unittest.TestCase):
         final = result["operations"][-2]
         self.assertEqual(final["expression"]["expression"],
                          "(avg_of_q1 + avg_of_q2) / 2.0")
+
+
+class TestTheEmployeeSatisfactionCapture(unittest.TestCase):
+    """Card 2076 VERBATIM, the capture that disproved the reconstruction.
+
+    The reconstruction above converts and the real card refused, and the
+    difference was one invisible character: Metabase's compiled alias
+    `Exit  Qn. 7` carries a DOUBLE space. The lift normalised each item's
+    whitespace before reading its alias, so the renames map held the
+    single-space spelling while the outer SELECT still referenced the
+    double-space one — an unmapped reference, a decline, and a refusal
+    naming "subquery" for a space nobody could see.
+
+    Two fixes, both visible here: the alias is read from the item's RAW
+    text, and every computed alias is slugged with Insights' own
+    `sanitize_name` transform before it can reach expression text — these
+    are the compiler's working names, and a measure name built from the raw
+    spelling (`avg_of_Exit  Qn. 7`) is a Python SyntaxError the moment
+    Insights evaluates the ADR-011 expression that reads it.
+    """
+
+    COLUMNS = {
+        "Survey Tracking": {"name": "String", "survey_name": "String"},
+        "Survey Tracking List of Surveys Childtable": {
+            "name": "String", "parent": "String", "survey_entry": "String"},
+        "Exit Interview Survey": {"name": "String", "rate_7": "Integer",
+                                  "rate_12": "Integer"},
+        "Staff Survey": {"name": "String", "rating_7": "Integer",
+                         "rating_12": "Integer"},
+        "Staff Onboarding Survey": {"name": "String", "qn_1": "Integer",
+                                    "qn_5": "Integer"},
+    }
+
+    def result(self):
+        return operations_from_sql(analyze_sql(SATISFACTION.read_text()),
+                                   self.COLUMNS)
+
+    def test_the_real_card_converts_end_to_end(self):
+        result = self.result()
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(
+            [op["type"] for op in result["operations"]],
+            ["source", "join", "join", "join", "join",
+             "mutate", "mutate", "mutate", "mutate", "mutate", "mutate",
+             "filter_group", "summarize", "mutate", "mutate", "mutate",
+             "order_by"])
+
+    def test_the_six_working_columns_are_slugged_in_full(self):
+        """`Qn. 1` -> `qn__1`: the dot and the space each become `_`, which is
+        exactly what Insights' own apply_mutate would have renamed them to —
+        so the stored JSON and the engine agree byte for byte. The double
+        space in `Exit  Qn. 7` survives as a double underscore, DIFFERENT
+        from `Exit Qn.12`'s single one: the slug keeps the two apart."""
+        mutates = [op for op in self.result()["operations"]
+                   if op["type"] == "mutate"][:6]
+        self.assertEqual(mutates, [
+            {"type": "mutate", "new_name": "staff_onboarding_qn__1",
+             "data_type": "Auto", "expression": {
+                 "type": "expression", "expression": "qn_1 * 5"}},
+            {"type": "mutate", "new_name": "staff_onboarding_qn__5",
+             "data_type": "Auto", "expression": {
+                 "type": "expression", "expression": "qn_5 * 5"}},
+            {"type": "mutate", "new_name": "staff_survey_qn__7",
+             "data_type": "Auto", "expression": {
+                 "type": "expression", "expression": "rating_7 * 5"}},
+            {"type": "mutate", "new_name": "staff_survey_qn__12",
+             "data_type": "Auto", "expression": {
+                 "type": "expression", "expression": "rating_12 * 5"}},
+            {"type": "mutate", "new_name": "exit__qn__7",
+             "data_type": "Auto", "expression": {
+                 "type": "expression", "expression": "rate_7 * 5"}},
+            {"type": "mutate", "new_name": "exit_qn_12",
+             "data_type": "Auto", "expression": {
+                 "type": "expression", "expression": "rate_12 * 5"}},
+        ])
+
+    def test_the_averages_read_the_slugged_measures(self):
+        operations = self.result()["operations"]
+        summarize = [op for op in operations if op["type"] == "summarize"][0]
+        self.assertEqual(
+            [m["measure_name"] for m in summarize["measures"]],
+            ["avg_of_staff_onboarding_qn__1", "avg_of_staff_onboarding_qn__5",
+             "avg_of_staff_survey_qn__7", "avg_of_staff_survey_qn__12",
+             "avg_of_exit__qn__7", "avg_of_exit_qn_12"])
+        self.assertEqual(
+            [(op["new_name"], op["expression"]["expression"])
+             for op in operations[operations.index(summarize) + 1:]
+             if op["type"] == "mutate"],
+            [("Staff Onboarding Average (Obj. 5)",
+              "(avg_of_staff_onboarding_qn__1 + avg_of_staff_onboarding_qn__5)"
+              " / 2.0"),
+             ("Staff Survey Average (Obj.5)",
+              "(avg_of_staff_survey_qn__7 + avg_of_staff_survey_qn__12) / 2.0"),
+             ("Exit Average (Obj.5)",
+              "(avg_of_exit__qn__7 + avg_of_exit_qn_12) / 2.0")])
+
+    def test_every_expression_parses_as_python(self):
+        """The whole point of the slug: Insights runs `ast.parse` over every
+        expression with columns injected as Python variables, so an
+        expression that does not parse is a query that fails on open."""
+        import ast
+        for op in self.result()["operations"]:
+            if op["type"] == "mutate":
+                ast.parse(op["expression"]["expression"])
+
+    def test_the_CHOSEN_labels_are_not_slugged(self):
+        """`Staff Onboarding Average (Obj. 5)` is the name a person typed into
+        Metabase and the name they read in Insights' operation list. It never
+        reaches expression text — nothing downstream reads it — so it keeps
+        its raw spelling; only the wrapper's internal working names slug."""
+        names = [op["new_name"] for op in self.result()["operations"]
+                 if op["type"] == "mutate"][6:]
+        self.assertEqual(names, ["Staff Onboarding Average (Obj. 5)",
+                                 "Staff Survey Average (Obj.5)",
+                                 "Exit Average (Obj.5)"])
+
+    def test_the_OR_filter_survives_as_a_filter_group(self):
+        group = [op for op in self.result()["operations"]
+                 if op["type"] == "filter_group"][0]
+        self.assertEqual(group["logical_operator"], "Or")
+        self.assertEqual([f["value"] for f in group["filters"]],
+                         ["Exit Interview Survey", "Staff Survey"])
+
+    def test_two_aliases_reducing_to_one_slug_refuse_by_both_names(self):
+        """`Qn. 1` and `Qn 1` both slug to `qn__1`/`qn_1`? No — to different
+        names. But `Qn.1` and `Qn_1` DO collide, and silently merging two
+        different columns into one is a query answering a different
+        question."""
+        sql = SATISFACTION.read_text().replace(
+            "`qn_5` * 5 AS `Staff Onboarding Qn. 5`",
+            "`qn_5` * 5 AS `Staff Onboarding Qn__1`")
+        result = analyze_sql(sql)
+        self.assertFalse(result["supported"])
+        joined = " | ".join(result["reasons"])
+        self.assertIn("Staff Onboarding Qn. 1", joined)
+        self.assertIn("Staff Onboarding Qn__1", joined)
+        self.assertIn("cannot be told apart", joined)
+
+    def test_a_KEYWORD_named_column_refuses(self):
+        """The generalised ADR-032 guard: `class * 5` is a SyntaxError just as
+        `1_3_months * 5` is — `isidentifier` alone passes keywords, which is
+        why the guard checks both."""
+        columns = {doctype: dict(fields) for doctype, fields
+                   in self.COLUMNS.items()}
+        columns["Staff Onboarding Survey"]["class"] = "Integer"
+        sql = SATISFACTION.read_text().replace(
+            "`TabStaff Onboarding Survey - Survey Entry`.`qn_1` * 5",
+            "`TabStaff Onboarding Survey - Survey Entry`.`class` * 5")
+        result = operations_from_sql(analyze_sql(sql), columns)
+        self.assertFalse(result["supported"])
+        self.assertTrue(any("cannot be written in a Python expression" in r
+                            for r in result["reasons"]), result["reasons"])

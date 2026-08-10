@@ -478,6 +478,19 @@ _WRAPPER_ALIAS = re.compile(r"\s*(?:AS\s+)?(?:`([^`]+)`|(\w+))", re.IGNORECASE)
 # dropped, so the coercion stays visible to the type check and to the person
 # reading the converted query. Refused in a GROUP BY, where grouping by a
 # coerced value is not grouping by the column.
+def _insights_name(name: str) -> str:
+    """Insights' own `sanitize_name` (ibis_utils.py, v3.12.2), verbatim.
+
+    `apply_mutate` runs every created column's name through this before the
+    engine sees it, so a slug produced HERE is byte-identical to the name
+    Insights itself would have shown — renaming with this transform changes
+    nothing a person sees, which is what makes it safe to apply at all.
+    """
+    return (str(name).strip().replace(" ", "_").replace("-", "_")
+            .replace(".", "_").replace("/", "_")
+            .replace("(", "_").replace(")", "_").lower())
+
+
 _WRAPPER_ITEM = re.compile(
     r"^(?P<expr>(?:`[^`]+`|\w+)\.(?:`[^`]+`|\w+))(?P<arith>\s*\*\s*1)?"
     r"\s+AS\s+(?:`(?P<alias_q>[^`]+)`|(?P<alias>\w+))$", re.IGNORECASE)
@@ -1006,19 +1019,47 @@ def lift_renaming_wrapper(sql: str, aliases: dict | None = None):
     if not re.match(r"\s*SELECT\b", items, re.IGNORECASE):
         return sql, reasons, computed
     renames = {}
+    slugs: dict[str, str] = {}
     for item in _split_items(items.strip()[len("SELECT"):]):
         text = " ".join(item.split())
+        # The alias's RAW spelling, not the whitespace-collapsed one. Card 2076
+        # carries `Exit  Qn. 7` with a DOUBLE space: collapsing it here keyed
+        # the renames map with a single-space spelling while the outer SELECT
+        # list still referenced the double-space one, so the lookup missed, the
+        # reference counted as undefined, and the whole card refused as
+        # "subquery" — for a space nobody could see.
+        raw_named = _TRAILING_ALIAS.search(item.strip())
         parsed = _WRAPPER_ITEM.match(text)
         if not parsed:
             # Not a rename. It may still be a computed column this can turn
             # into an operation — `CONCAT('', YEAR(d)) AS Year` and
             # `CAST(v AS double) AS v` are the forms Metabase writes.
-            named_item = _TRAILING_ALIAS.search(text)
-            if not named_item:
+            if not raw_named:
                 return sql, reasons, computed
-            item_alias = (named_item.group("alias_q") or named_item.group("alias")).strip()
+            item_alias = (raw_named.group("alias_q") or raw_named.group("alias")).strip()
+            # The alias is SLUGGED with Insights' own transform before it can
+            # reach expression text. Metabase's compiled aliases carry spaces,
+            # dots and parentheses (`Staff Onboarding Qn. 1`), and a mutate
+            # expression is evaluated as PYTHON (ADR-032) — a measure name
+            # built from the raw alias is a SyntaxError the moment the query
+            # opens. These are the compiler's working names, not labels anybody
+            # chose, and Insights' `apply_mutate` sanitizes every created
+            # column with this exact transform anyway — so the slug is the name
+            # Insights would have shown regardless.
+            slug = _insights_name(item_alias)
+            taken = slugs.get(slug)
+            if taken is not None and taken != item_alias:
+                # `a-b` and `a.b` both slug to `a_b`. Refusing beats letting
+                # two different columns silently become one.
+                reasons.append(
+                    f"the wrapper computes both '{taken}' and '{item_alias}', "
+                    f"which reduce to the same name '{slug}' — the two columns "
+                    "cannot be told apart once created"
+                )
+                return sql, reasons, computed
+            slugs[slug] = item_alias
             built, offending = _computed_column(
-                _TRAILING_ALIAS.sub("", text).strip(), item_alias, aliases, reasons)
+                _TRAILING_ALIAS.sub("", text).strip(), slug, aliases, reasons)
             if not built:
                 reasons.append(
                     f"the wrapper computes '{item_alias}' using {offending}, which "
@@ -1029,11 +1070,12 @@ def lift_renaming_wrapper(sql: str, aliases: dict | None = None):
                 )
                 return sql, reasons, computed
             computed.append(built)
-            # The alias travels on as a plain column name: the operation this
-            # becomes creates a real column by that name before the summarize.
-            renames[item_alias] = (f"`{item_alias}`", False)
+            # The SLUG travels on as a plain column name; the outer references
+            # to the raw alias are rewritten to it below.
+            renames[item_alias] = (f"`{slug}`", False)
             continue
-        alias = parsed.group("alias_q") or parsed.group("alias")
+        alias = ((raw_named.group("alias_q") or raw_named.group("alias")).strip()
+                 if raw_named else parsed.group("alias_q") or parsed.group("alias"))
         # The `* 1` is kept in the mapped text: dropping it here would hide a
         # cast the query asked for, and the aggregate would then be typed as
         # though the column were numeric.

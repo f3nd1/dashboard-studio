@@ -50,6 +50,7 @@ at all.
 
 from __future__ import annotations
 
+import keyword
 import re
 
 # ---------------------------------------------------------------------------
@@ -436,16 +437,18 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
         # evaluated text. (`q["1_3_months"]` exists in the evaluator's context
         # and would probably work, but no stored expression has been seen to
         # use it, and the vocabulary widens only to what has been observed.)
-        digit_led = sorted(str(column) for column in entry.get("columns") or []
-                           if str(column)[:1].isdigit())
-        if digit_led:
+        unwritable = sorted(
+            str(column) for column in entry.get("columns") or []
+            if not str(column).isidentifier() or keyword.iskeyword(str(column)))
+        if unwritable:
             reasons.append(
                 f"the wrapper computes '{entry['alias']}' from "
-                f"'{', '.join(digit_led)}', whose name starts with a digit — "
-                "Insights evaluates a calculated column's expression as Python, "
-                "where such a name cannot be written, so the query would fail "
-                "the moment it is opened. Aggregating or filtering the column "
-                "directly is fine; only a calculation over it is not"
+                f"'{', '.join(unwritable)}', whose name cannot be written in a "
+                "Python expression — Insights evaluates a calculated column's "
+                "expression as Python, so a name starting with a digit, or "
+                "carrying a space or dot, fails the moment the query is opened. "
+                "Aggregating or filtering the column directly is fine; only a "
+                "calculation over it is not"
             )
             continue
         # What the computation READS has to be the right kind of thing, and only
@@ -791,8 +794,14 @@ def _alias_referenced_outside(operations, alias, mutate, dimension):
             for side in ("left_column", "right_column"):
                 if (condition.get(side) or {}).get("column_name") == alias:
                     return True
+        # `(?!\s*\()`: a name followed by an open bracket is a CALL, never a
+        # column. Without it, a mutate slugged to `year` matched the `year(...)`
+        # inside every other date expression, was counted as referenced,
+        # dropped out of the promotion candidates — and its twin on the same
+        # column became a "singleton" the duplicate-grouping guard then
+        # promoted, exactly the double grouping that guard exists to refuse.
         if kind == "mutate" and re.search(
-                r"\b" + re.escape(alias) + r"\b",
+                r"\b" + re.escape(alias) + r"\b(?!\s*\()",
                 str((op.get("expression") or {}).get("expression") or "")):
             return True
         if kind == "summarize":

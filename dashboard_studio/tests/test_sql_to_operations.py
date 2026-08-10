@@ -1331,7 +1331,7 @@ class TestTheYearMutatePromotion(unittest.TestCase):
         result = self.run_it(self.wrapped("CONCAT('', MONTH(`t`.`d`))", "Month"))
         self.assertTrue(result["supported"], " | ".join(result["reasons"]))
         self.assertEqual([op["new_name"] for op in result["operations"]
-                          if op["type"] == "mutate"], ["Month"])
+                          if op["type"] == "mutate"], ["month"])
         dim = [op for op in result["operations"]
                if op["type"] == "summarize"][0]["dimensions"][0]
         self.assertEqual(dim["data_type"], "Integer")
