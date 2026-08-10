@@ -994,11 +994,18 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
    applying. That is the exact failure mode "verify by pixels, not by call"
    exists for, and it was invisible to the assertions by construction.
 
-   Colour carries it instead of opacity alone. Verified the way the rest of
-   this was: by rendering the rule in a garish colour and confirming the
-   pixels changed, rather than by reading `getComputedStyle`, which reported
-   the enabled colours for a button the screenshot showed as disabled — an
-   inconsistency not chased further, because the pixels are what ships. */
+   Colour carries it instead of opacity alone.
+
+   **Testing this needs a WAIT, and that trap cost two sessions an hour.**
+   `.dss-btn` transitions in 0.15s, so `getComputedStyle` read straight after
+   the toggle returns the transition's STARTING value — the enabled navy — for
+   a button that is correctly disabled and will paint grey a moment later. It
+   reads exactly like the rule not applying, and invites two wrong fixes:
+   `toggleAttribute('disabled', …)`, which is a no-op because `.disabled`
+   already reflects to the content attribute (`hasAttribute` and
+   `matches('[disabled]')` both confirm it), and hunting a phantom `!important`
+   override. Wait ~400ms, or screenshot, and it reads
+   rgb(238,242,247) on rgb(69,82,104) — this rule, as written. */
 .dss-btn.dss-btn-primary[disabled] {
   background: var(--dss-surface-3); color: var(--dss-ink-700);
   border-color: var(--dss-line); box-shadow: none; opacity: 1;
