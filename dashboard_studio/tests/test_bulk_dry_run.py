@@ -609,3 +609,41 @@ class TestAutoChartCoverage(_Base):
         text = self.run_script({"single": self.SCALAR},
                                sidecars={"single": '{"display": "scalar"}'})
         self.assertNotIn("Auto-chart coverage", text)
+
+
+class TestTheEntangledMarker(_Base):
+    """A month card whose label CASE also consumes MONTH( is marked in the
+    scan — the one-click regroup does not apply there, and a list that sizes
+    the one-click work must not count hand edits into it.
+
+    The entangled fixture is `month_label_lookup.sql` itself — the REAL wrapped
+    shape the live card had, since a flat CASE in a GROUP BY refuses and never
+    reaches this section at all (the first draft of this test found that)."""
+
+    LABELLED = (pathlib.Path(__file__).resolve().parent / "fixtures"
+                / "month_label_lookup.sql").read_text()
+    PLAIN = ("SELECT MONTH(`custom_proposed_date`) AS `m`, COUNT(*) AS `n` "
+             "FROM `tabQuality Action` GROUP BY MONTH(`custom_proposed_date`)")
+
+    def with_frappe(self):
+        frappe, store = super().with_frappe()
+        meta = {"Quality Action": [("custom_proposed_date", "Date"),
+                                   ("custom_aggregated_performance_index_api",
+                                    "Data")]}
+        frappe._doctypes = {"Insights Query v3", "Quality Action"}
+        frappe.get_meta = lambda dt: types.SimpleNamespace(fields=[
+            types.SimpleNamespace(fieldname=f, fieldtype=t) for f, t in meta[dt]])
+        frappe._table_columns = {"Quality Action": UNCONDITIONAL + [
+            "custom_proposed_date", "custom_aggregated_performance_index_api"]}
+        return frappe, store
+
+    def test_an_entangled_report_is_marked_and_counted(self):
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"labelled": self.LABELLED, "plain": self.PLAIN},
+                               frappe=frappe)
+        self.assertIn("2 convert cleanly", text)
+        section = text.split("Converts, but the chart cannot be drawn", 1)[1]
+        self.assertIn("1 also compute labels from it, marked *", section)
+        self.assertIn("labelled *", section)
+        # The plain one keeps its unmarked line.
+        self.assertRegex(section, r"\n      plain\n")

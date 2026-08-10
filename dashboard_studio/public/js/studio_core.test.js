@@ -269,7 +269,7 @@ var monthOps = [
                    data_type: "Integer" }] },
 ];
 assert.deepStrictEqual(core.datePartGrouping(monthOps),
-  { part: "month", dimension: "month_of_d", column: "d" });
+  { part: "month", dimension: "month_of_d", column: "d", entangled: false });
 
 // A YEAR grouping is a granularity on the date column and never a mutate, so
 // it must never offer the fix — it is already what the fix produces.
@@ -334,3 +334,48 @@ assert.strictEqual(core.datePartGrouping([
     dimensions: [{ column_name: "year_of_d" }] }]), null);
 
 console.log("studio_core.test.js — regroup boundary and year-exclusion asserted");
+
+// ---------------------------------------------------------------------------
+// Entanglement: a date part a LABEL expression also consumes.
+//
+// Found live: a month card's CASE (1 -> '01-Jan' ... 12 -> '12-Dec') had its
+// MONTH( substituted along with the grouping, so the regrouped query compared
+// 2024 against 1..12 and labelled every row NULL. No error, wrong everything.
+// The one-click regroup must not be offered on such a card at all.
+// ---------------------------------------------------------------------------
+var monthLabelOps = [
+  { type: "mutate", new_name: "Month Label",
+    expression: { expression: "case(month(d) == 1, '01-Jan', month(d) == 2, '02-Feb')" } },
+  { type: "mutate", new_name: "Month No", expression: { expression: "month(d)" } },
+  { type: "summarize", measures: [COUNT],
+    dimensions: [{ column_name: "Month No" }, { column_name: "Month Label" }] },
+];
+var found = core.datePartGrouping(monthLabelOps);
+assert.strictEqual(found.part, "month");
+assert.strictEqual(found.entangled, true, "the CASE consumes month( too");
+
+// A plain month grouping is untangled — the button stays.
+assert.strictEqual(core.datePartGrouping([
+  { type: "mutate", new_name: "month_of_d", expression: { expression: "month(d)" } },
+  { type: "summarize", measures: [COUNT],
+    dimensions: [{ column_name: "month_of_d" }] }]).entangled, false);
+
+// A SECOND pure mutate of the same part does not entangle: both substitute to
+// year cleanly. (It collides in the promotion instead, which refuses there.)
+assert.strictEqual(core.datePartGrouping([
+  { type: "mutate", new_name: "m1", expression: { expression: "month(d)" } },
+  { type: "mutate", new_name: "m2", expression: { expression: "month(d)" } },
+  { type: "summarize", measures: [COUNT],
+    dimensions: [{ column_name: "m1" }] }]).entangled, false);
+
+// A DIFFERENT part in the label does not entangle this one: substituting
+// QUARTER( leaves a month(...) CASE untouched.
+assert.strictEqual(core.datePartGrouping([
+  { type: "mutate", new_name: "Label",
+    expression: { expression: "case(month(d) == 1, 'x')" } },
+  { type: "mutate", new_name: "q", expression: { expression: "quarter(d)" } },
+  { type: "summarize", measures: [COUNT],
+    dimensions: [{ column_name: "q" }, { column_name: "Label" }] }]).entangled,
+  false);
+
+console.log("studio_core.test.js — date-part entanglement asserted");

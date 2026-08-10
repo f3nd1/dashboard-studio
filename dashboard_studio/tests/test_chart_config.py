@@ -212,7 +212,7 @@ class TestTheUnchartableDatePartDetector(unittest.TestCase):
             self.mutate("month_of_d", "month(d)"),
             self.summarize([{"column_name": "month_of_d", "data_type": "Integer"}])])
         self.assertEqual(found, {"part": "month", "dimension": "month_of_d",
-                                 "column": "d"})
+                                 "column": "d", "entangled": False})
 
     def test_quarter_and_day_too(self):
         from dashboard_studio.integrations.metabase.chart_config import date_part_grouping
@@ -455,3 +455,42 @@ class TestPositionalSeriesMatching(unittest.TestCase):
                               measures=(COUNT, AVG))
         self.assertEqual(by_name["avg_of_qipi"].get("name"), "Average of QIPI")
         self.assertEqual(by_name["count"]["type"], "bar")
+
+
+class TestDatePartEntanglement(unittest.TestCase):
+    """The Python twin of `datePartEntangled` — the corpus scan must agree
+    with the page, or the scan sizes a one-click fix the page will not offer.
+
+    Found live: the regroup substitution rewrote the MONTH( inside a label
+    CASE, so the regrouped query compared a year against 1..12 and labelled
+    every row NULL. No error, wrong everything.
+    """
+
+    def grouping(self, extra_expression=None):
+        from dashboard_studio.integrations.metabase.chart_config import (
+            date_part_grouping,
+        )
+        operations = [
+            {"type": "mutate", "new_name": "Month No",
+             "expression": {"type": "expression", "expression": "month(d)"}},
+            {"type": "summarize", "measures": [{"measure_name": "c"}],
+             "dimensions": [{"column_name": "Month No"}]},
+        ]
+        if extra_expression:
+            operations.insert(0, {"type": "mutate", "new_name": "Label",
+                                  "expression": {"type": "expression",
+                                                 "expression": extra_expression}})
+            operations[-1]["dimensions"].append({"column_name": "Label"})
+        return date_part_grouping(operations)
+
+    def test_a_label_CASE_on_the_same_part_entangles(self):
+        found = self.grouping("case(month(d) == 1, '01-Jan', month(d) == 2, '02-Feb')")
+        self.assertTrue(found["entangled"])
+
+    def test_a_plain_grouping_is_not_entangled(self):
+        self.assertFalse(self.grouping()["entangled"])
+
+    def test_a_case_on_a_DIFFERENT_part_does_not_entangle(self):
+        """Substituting MONTH( leaves a quarter(...) CASE untouched."""
+        found = self.grouping("case(quarter(d) == 1, 'Q1')")
+        self.assertFalse(found["entangled"])

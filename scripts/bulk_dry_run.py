@@ -304,7 +304,8 @@ def _dry_run():
                 if not reasons and date_part_grouping:
                     part = date_part_grouping(converted["operations"])
                     if part:
-                        unchartable.setdefault(part["part"], []).append(report)
+                        unchartable.setdefault(part["part"], []).append(
+                            (report, bool(part.get("entangled"))))
                 if not reasons and chart_config_from_card:
                     sidecar = path.with_suffix(".json")
                     if not sidecar.is_file():
@@ -411,12 +412,20 @@ def _dry_run():
         print("   instead' in the converter — which is a DIFFERENT question, so")
         print("   nothing here changes anything by itself.")
         for part in sorted(unchartable, key=lambda key: -len(set(unchartable[key]))):
-            reports = sorted(set(unchartable[part]))
+            entries = sorted(set(unchartable[part]))
+            reports = [name for name, _ in entries]
+            tangled = [name for name, is_tangled in entries if is_tangled]
             print()
             line = f"   {part.upper()}  ({len(reports)} files"
-            print(line + (f", {distinct(reports)} reports)" if dedupe else ")"))
-            for name in reports:
-                print(f"      {name}")
+            line += f", {distinct(reports)} reports" if dedupe else ""
+            # Entangled: the part also feeds a label expression (a CASE mapping
+            # 1..12 to names), so the one-click regroup does NOT apply — the
+            # substitution would rewrite the labels into nothing. Hand edits.
+            line += (f"; {len(tangled)} also compute labels from it, "
+                     "marked *, hand edit only" if tangled else "")
+            print(line + ")")
+            for name, is_tangled in entries:
+                print(f"      {name}" + (" *" if is_tangled else ""))
     print()
     print("=" * 78)
     print("Blocked by — most reports first")

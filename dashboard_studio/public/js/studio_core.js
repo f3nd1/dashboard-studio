@@ -95,11 +95,33 @@
         var part = UNCHARTABLE_PARTS[j];
         if (text.indexOf(part + "(") === 0) {
           return { part: part, dimension: op.new_name,
-                   column: text.slice(part.length + 1).replace(/\)+$/, "").trim() };
+                   column: text.slice(part.length + 1).replace(/\)+$/, "").trim(),
+                   entangled: datePartEntangled(operations, part) };
         }
       }
     }
     return null;
+  }
+
+  // Does anything BESIDES a bare `part(col)` grouping consume this date part?
+  //
+  // The regroup substitution rewrites every `MONTH(` in the SQL, and stepping
+  // over quoted literals is not enough when the part feeds a label expression:
+  // a `case(month(d) == 1, '01-Jan', ...)` regrouped to year compares 2024
+  // against 1..12 and labels every row NULL — correct-looking chart, wrong
+  // everything, no error. Found live. So a part that appears inside any
+  // expression larger than the bare call marks the whole query entangled, and
+  // the one-click regroup is not offered at all: a substitution that cannot be
+  // applied whole is not applied.
+  function datePartEntangled(operations, part) {
+    var pure = new RegExp("^" + part + "\\(\\w+\\)$");
+    for (var i = 0; i < (operations || []).length; i++) {
+      var op = operations[i] || {};
+      if (op.type !== "mutate") continue;
+      var text = (op.expression || {}).expression || "";
+      if (text.indexOf(part + "(") !== -1 && !pure.test(text)) return true;
+    }
+    return false;
   }
 
   // `MONTH(` -> `YEAR(`, everywhere it appears OUTSIDE a string literal.

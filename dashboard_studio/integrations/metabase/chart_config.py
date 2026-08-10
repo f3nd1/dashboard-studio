@@ -116,8 +116,29 @@ def date_part_grouping(operations):
         for part in _UNCHARTABLE_PARTS:
             if text.startswith(part + "("):
                 return {"part": part, "dimension": name,
-                        "column": text[len(part) + 1:].rstrip(")").strip()}
+                        "column": text[len(part) + 1:].rstrip(")").strip(),
+                        "entangled": _date_part_entangled(operations, part)}
     return None
+
+
+def _date_part_entangled(operations, part):
+    """Does anything besides a bare ``part(col)`` grouping consume this part?
+
+    Mirrors `datePartEntangled` in studio_core.js — the two must agree, or the
+    corpus scan sizes a one-click fix the page will not offer. A part feeding a
+    label expression (`case(month(d) == 1, '01-Jan', ...)`) cannot survive the
+    regroup substitution: regrouped to year it compares 2024 against 1..12 and
+    labels every row NULL, found live. Entangled means the one-click does not
+    apply and the report is a hand edit.
+    """
+    pure = re.compile(r"^" + re.escape(part) + r"\(\w+\)$")
+    for operation in operations or []:
+        if not isinstance(operation, dict) or operation.get("type") != "mutate":
+            continue
+        text = str((operation.get("expression") or {}).get("expression") or "")
+        if part + "(" in text and not pure.match(text):
+            return True
+    return False
 
 
 def _measures_and_dimensions(operations):

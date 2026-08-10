@@ -471,6 +471,8 @@ Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN
 
 **One rule, two languages.** `chart_config.date_part_grouping` (server, for the scan) and `studio_core.datePartGrouping` (browser, for the button) must agree, or the list names reports the page will not offer the fix for. `year` is excluded from both — ADR-024 emits a grouped YEAR as a *granularity* on the date column, so it never becomes a mutate, and offering to regroup a year by year would be a no-op button that loops.
 
+**Amended after a live failure: an ENTANGLED part gets no button.** The substitution steps over quoted literals and backticks — necessary, not sufficient. A month-label card feeds `MONTH(` into a CASE mapping 1..12 to `'01-Jan'..'12-Dec'`; the substitution rewrote that too, so the regrouped query compared a year (2024) against 1..12 and labelled every row NULL — a chart that renders, no error, wrong everything. Both detectors now report `entangled`: the part appears in any mutate expression larger than the bare `part(col)` call. Entangled cards get the explanation and **no button** — a substitution that cannot be applied whole is not offered, because only the person knows what the labels should become under a year grouping. The corpus scan marks these `*` ("hand edit only") so the one-click work is not sized to include them.
+
 **Where the flag actually lives, corrected.** The brief described this as "the reason a chart couldn't be built". It is not: a MONTH grouping **does** build a chart, with an Integer dimension, and the unchartability is flagged on the mutate line in the operations read-back. The fix is the same; the wording of the new warning says what is true.
 
 ## ADR-028 — A button that makes a round-trip shows it, from STATE

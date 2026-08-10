@@ -1065,22 +1065,37 @@
         " (" + part.column + "), which is a number — Insights can only put a " +
         "date on a chart's X axis, so this converted correctly but cannot be " +
         "charted as it stands."));
-      warn.appendChild(actionButton(this, "regroup", "Try grouping by year instead",
-                                    "Rebuilding by year…", function () {
-        var retry = core.regroupByYear(made.sql, part.part);
-        self.state.vizSql = retry;
-        self.state.conversion = null;
-        self.state.notice = "";
-        begin(self, "regroup");
-        var done = function () { finish(self); self.render(); };
-        self.convertSql(retry).then(done, done);
-      }));
-      warn.appendChild(el("div", "dss-hint",
-        "Substitutes " + part.part.toUpperCase() + "( for YEAR( and converts " +
-        "again. If " + part.part + "-of-" +
-        (part.part === "day" ? "month" : "year") +
-        " was the question you meant, ignore this — " +
-        "it is a different question, not a mistake."));
+      if (part.entangled) {
+        // NO button. The substitution rewrites every MONTH( in the SQL, and
+        // this query also feeds the part into a label expression — a
+        // `case(month(d) == 1, '01-Jan', …)` regrouped to year compares 2024
+        // against 1..12 and labels every row NULL. A chart that renders with
+        // empty labels and no error is exactly the class this project refuses,
+        // so a substitution that cannot be applied whole is not offered.
+        warn.appendChild(el("div", "dss-hint",
+          "No one-click fix here: this report also computes labels from " +
+          part.part.toUpperCase() + "(" + part.column + "), and regrouping " +
+          "by year would turn those labels into nothing. If a year trend is " +
+          "what you want, edit the SQL by hand — the labels need rewriting " +
+          "too, and only you know what they should become."));
+      } else {
+        warn.appendChild(actionButton(this, "regroup", "Try grouping by year instead",
+                                      "Rebuilding by year…", function () {
+          var retry = core.regroupByYear(made.sql, part.part);
+          self.state.vizSql = retry;
+          self.state.conversion = null;
+          self.state.notice = "";
+          begin(self, "regroup");
+          var done = function () { finish(self); self.render(); };
+          self.convertSql(retry).then(done, done);
+        }));
+        warn.appendChild(el("div", "dss-hint",
+          "Substitutes " + part.part.toUpperCase() + "( for YEAR( and converts " +
+          "again. If " + part.part + "-of-" +
+          (part.part === "day" ? "month" : "year") +
+          " was the question you meant, ignore this — " +
+          "it is a different question, not a mistake."));
+      }
       box.appendChild(warn);
     }
 
