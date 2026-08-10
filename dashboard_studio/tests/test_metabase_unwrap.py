@@ -1585,3 +1585,74 @@ class TestACommentIsNotStripped(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTwoYearMutatesDoNotCollide(unittest.TestCase):
+    """Regression: "Duplicate column name 'custom_proposed_date'", live.
+
+    `regrouped_month_card.sql` is the month-label fixture after the regroup
+    button substituted MONTH( -> YEAR( everywhere — so `Year` (the CONCAT
+    lift) and `Month No` are BOTH exactly `year(custom_proposed_date)`.
+    Promoting both made the summarize emit the same column twice, which
+    converts cleanly and fails the moment the query runs.
+
+    Two dimensions that reduce to the same date-at-same-granularity are the
+    same dimension, and choosing which alias survives would be a guess — so a
+    shared column promotes NEITHER, and the numeric mutates stay.
+    """
+
+    FIXTURE = (pathlib.Path(__file__).resolve().parent / "fixtures"
+               / "regrouped_month_card.sql")
+    COLUMNS = TestACaseThatMapsValuesToLabels.COLUMNS
+
+    def operations(self):
+        result = operations_from_sql(analyze_sql(self.FIXTURE.read_text()),
+                                     self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        return result["operations"]
+
+    def test_no_dimension_appears_twice(self):
+        dimensions = [op for op in self.operations()
+                      if op["type"] == "summarize"][0]["dimensions"]
+        names = [d["dimension_name"] for d in dimensions]
+        self.assertEqual(len(names), len(set(names)), names)
+
+    def test_neither_shared_candidate_is_promoted(self):
+        """Refused, not collapsed: picking `Year` over `Month No` (or the
+        reverse) would guess which grouping the user meant."""
+        operations = self.operations()
+        mutated = {op["new_name"] for op in operations if op["type"] == "mutate"}
+        self.assertIn("Year", mutated)
+        self.assertIn("Month No", mutated)
+        dimensions = [op for op in operations
+                      if op["type"] == "summarize"][0]["dimensions"]
+        self.assertEqual([d.get("granularity") for d in dimensions],
+                         [None, None, None])
+
+    def test_a_SINGLE_year_mutate_in_another_column_still_promotes(self):
+        """The collision rule is per COLUMN — one year(a) beside two year(b)s
+        still promotes the a one."""
+        from dashboard_studio.integrations.metabase.sql_ops import (
+            _promote_year_mutates,
+        )
+        operations = [
+            {"type": "mutate", "new_name": "YA",
+             "expression": {"type": "expression", "expression": "year(a)"}},
+            {"type": "mutate", "new_name": "YB1",
+             "expression": {"type": "expression", "expression": "year(b)"}},
+            {"type": "mutate", "new_name": "YB2",
+             "expression": {"type": "expression", "expression": "year(b)"}},
+            {"type": "summarize", "measures": [],
+             "dimensions": [
+                 {"dimension_name": "YA", "column_name": "YA",
+                  "data_type": "Integer"},
+                 {"dimension_name": "YB1", "column_name": "YB1",
+                  "data_type": "Integer"},
+                 {"dimension_name": "YB2", "column_name": "YB2",
+                  "data_type": "Integer"}]},
+        ]
+        _promote_year_mutates(operations, {"T": {"a": "Date", "b": "Date"}})
+        dimensions = operations[-1]["dimensions"]
+        self.assertEqual(
+            [(d["column_name"], d.get("granularity")) for d in dimensions],
+            [("a", "year"), ("YB1", None), ("YB2", None)])

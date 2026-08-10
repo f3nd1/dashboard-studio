@@ -700,6 +700,15 @@ def _promote_year_mutates(operations, columns):
         return
     taken = ({d.get("dimension_name") for d in summarize.get("dimensions") or []}
              | {m.get("measure_name") for m in summarize.get("measures") or []})
+    # Candidates FIRST, promotion after — because two dimensions that both
+    # reduce to year(same column) would both promote to the same
+    # {column, granularity} dimension, and a summarize emitting one column
+    # twice fails at run time with "Duplicate column name". The live card that
+    # found this had `Year = year(d)` AND `Month No = year(d)` (a month card
+    # after the regroup substitution), and promoting either one would be
+    # guessing which the user meant — so a shared column promotes NEITHER, and
+    # the numeric mutates stay exactly as they were.
+    candidates = []
     for dimension in summarize.get("dimensions") or []:
         alias = str(dimension.get("dimension_name") or "")
         mutate = next((op for op in operations if op.get("type") == "mutate"
@@ -719,10 +728,18 @@ def _promote_year_mutates(operations, columns):
             continue
         if _alias_referenced_outside(operations, alias, mutate, dimension):
             continue
+        candidates.append((dimension, mutate, alias, column,
+                           next(iter(types.values()))))
+    per_column = {}
+    for candidate in candidates:
+        per_column.setdefault(candidate[3], []).append(candidate)
+    for column, group in per_column.items():
+        if len(group) != 1:
+            continue
+        dimension, mutate, alias, column, data_type = group[0]
         operations.remove(mutate)
         dimension.update({"dimension_name": column, "column_name": column,
-                          "data_type": next(iter(types.values())),
-                          "granularity": "year"})
+                          "data_type": data_type, "granularity": "year"})
         for op in operations:
             if (op.get("type") == "order_by"
                     and (op.get("column") or {}).get("column_name") == alias):
