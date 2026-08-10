@@ -169,6 +169,9 @@
       // this is not a model rationale (ADR-023 refused those, and was right):
       // "the field labelled 'Agent Name' matched 'agent'" is the fact itself.
       candidates: [],
+      // Which of them are ticked, in ranked order. What "Build the query" is
+      // given is assembled from THIS, never from a typed string.
+      chosen: [],
       // The sidecar loaded beside an exported .sql — the source card's
       // `series_settings` and `display`. State only, like the API key: it
       // belongs to the query in the box and nothing else. Null means the
@@ -770,6 +773,9 @@
     }).then(function (r) {
       var names = (r.message || {}).doctypes || [];
       self.state.candidates = (r.message || {}).candidates || [];
+      // Every candidate ticked, in ranked order. Starting with none would
+      // make the common case — the ranking was right — the most work.
+      self.state.chosen = names.slice();
       self.state.tables = names.join(", ");
       self.state.confirming = true;
       if (!names.length) {
@@ -796,32 +802,63 @@
     box.appendChild(head);
     box.appendChild(el("div", "dss-saveresult-detail",
       "Ranked from this site's own schema — the same question always gives " +
-      "the same list. Check them: this is the one choice nothing downstream " +
-      "can verify, because a query over the wrong table returns real numbers " +
-      "about the wrong thing."));
-    // WHY each one is here. A name on its own is a list to rubber-stamp; the
-    // fact it matched on is something a person can disagree with.
-    if ((this.state.candidates || []).length) {
-      var why = el("div", "dss-handoff-todo");
-      why.appendChild(el("div", "dss-handoff-todo-head", "Why these"));
-      this.state.candidates.forEach(function (candidate) {
-        var line = el("div", "dss-handoff-todo-item");
-        line.appendChild(el("strong", null, candidate.doctype));
-        if (candidate.istable) {
-          line.appendChild(el("span", "dss-badge", "child table"));
-        }
-        line.appendChild(el("span", null,
-          " — " + (candidate.evidence || []).join("; ")));
-        why.appendChild(line);
-      });
-      box.appendChild(why);
+      "the same list. Untick anything that is not what you meant: this is the " +
+      "one choice nothing downstream can verify, because a query over the " +
+      "wrong table returns real numbers about the wrong thing."));
+
+    // One ticked row per candidate, each carrying the fact it matched on.
+    //
+    // This replaced a comma-separated text field holding every name. Removing
+    // one table meant editing a string — and a person editing a list of seven
+    // by hand will mistype one, at which point `_confirmed` refuses by name
+    // and the whole thing has to be retyped. The evidence line is unchanged
+    // and is the reason this step is checkable at all, so it moved WITH each
+    // name rather than sitting above the field describing it.
+    var chosen = this.state.chosen || [];
+    var candidates = this.state.candidates || [];
+    var count = el("div", "dss-picked");
+    var rows = el("div", "dss-picklist");
+    function refresh() {
+      var n = (self.state.chosen || []).length;
+      count.textContent = n + " of " + candidates.length + " selected"
+        + (n ? "" : " — tick at least one");
+      count.className = "dss-picked" + (n ? "" : " is-empty");
+      if (self._buildButton) self._buildButton.disabled = !n || !!self.state.busy;
     }
-    var input = el("input", "dss-input");
-    input.type = "text";
-    input.setAttribute("aria-label", "DocTypes to build the query over");
-    input.value = this.state.tables || "";
-    input.addEventListener("input", function () { self.state.tables = input.value; });
-    box.appendChild(input);
+    candidates.forEach(function (candidate) {
+      var row = el("label", "dss-pick");
+      var box2 = el("input", "dss-pick-box");
+      box2.type = "checkbox";
+      box2.checked = chosen.indexOf(candidate.doctype) !== -1;
+      box2.addEventListener("change", function () {
+        // The selection lives in STATE, and nothing re-renders here: a render
+        // would rebuild the list and throw away the focused checkbox, which
+        // makes it unusable by keyboard. Everything that depends on the
+        // selection is refreshed in place instead.
+        self.state.chosen = core.pickedInRankedOrder(
+          candidates, self.state.chosen, candidate.doctype, box2.checked);
+        row.className = "dss-pick" + (box2.checked ? " is-on" : "");
+        refresh();
+      });
+      row.className = "dss-pick" + (box2.checked ? " is-on" : "");
+      row.appendChild(box2);
+      var text = el("span", "dss-pick-text");
+      var name = el("span", "dss-pick-name", candidate.doctype);
+      if (candidate.istable) {
+        name.appendChild(el("span", "dss-badge", "child table"));
+      }
+      text.appendChild(name);
+      text.appendChild(el("span", "dss-pick-why",
+        (candidate.evidence || []).join("; ")));
+      row.appendChild(text);
+      rows.appendChild(row);
+    });
+    if (candidates.length) {
+      box.appendChild(rows);
+      box.appendChild(count);
+    }
+    box.appendChild(el("div", "dss-hint",
+      "Not listed? Cancel, then choose “I'll name the tables” and type it."));
 
     var actions = el("div", "dss-insights-links");
     // `confirming` stays TRUE while this runs, so the confirm box — and this
@@ -836,6 +873,10 @@
       : "Building the query…";
     var build = actionButton(this, "build", "Build the query",
                              buildBusyLabel, function () {
+      // Assembled FROM the ticked boxes at the moment it is used, so what is
+      // sent is what is on screen — there is no typed copy to drift from it.
+      self.state.tables = (self.state.chosen || []).join(", ");
+      if (!self.state.tables) { toast("Tick at least one table."); return; }
       begin(self, "build");
       var done = function () {
         finish(self);
@@ -844,7 +885,9 @@
       };
       self.propose((self.state.question || "").trim()).then(done, done);
     });
+    self._buildButton = build;
     actions.appendChild(build);
+    refresh();
     var cancel = el("button", "dss-btn", "Cancel");
     cancel.type = "button";
     cancel.addEventListener("click", function () {

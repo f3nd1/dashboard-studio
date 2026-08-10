@@ -380,7 +380,23 @@
     return true;
   }
 
-  root.DSStudioCore = { describeOperation: describeOperation,
+  // Ticking a DocType back on puts it back in RANKED position, not at the end.
+  //
+  // The list a person reads and the list the query is built over must not
+  // disagree: untick "Student" and re-tick it, and a click-ordered result
+  // would send `Student Attendance, Student Group Student, Student` while the
+  // screen still shows the ranked order. The tables are the one thing here
+  // nobody downstream can check (ADR-023), so the two must match exactly.
+  function pickedInRankedOrder(candidates, chosen, doctype, checked) {
+    var kept = (chosen || []).filter(function (name) { return name !== doctype; });
+    if (!checked) return kept;
+    return (candidates || []).filter(function (candidate) {
+      return candidate.doctype === doctype || kept.indexOf(candidate.doctype) !== -1;
+    }).map(function (candidate) { return candidate.doctype; });
+  }
+
+  root.DSStudioCore = { pickedInRankedOrder: pickedInRankedOrder,
+    describeOperation: describeOperation,
     labelForOperation: labelForOperation, describeProposal: describeProposal,
     chartDisplayNote: chartDisplayNote, datePartGrouping: datePartGrouping,
     regroupByYear: regroupByYear, refusalMessage: refusalMessage,

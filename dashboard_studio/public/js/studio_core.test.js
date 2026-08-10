@@ -440,3 +440,47 @@ assert.strictEqual(core.retryableRefusal(null), false);
 assert.strictEqual(core.retryableRefusal(["some message nobody has seen"]), true);
 
 console.log("studio_core.test.js — retryable refusals asserted");
+
+// ---------------------------------------------------------------------------
+// pickedInRankedOrder — the DocType confirm list's selection.
+//
+// The list a person reads and the list the query is built over must not
+// disagree. This is the one choice nothing downstream can check (ADR-023), so
+// re-ticking a table has to put it back where it was ranked, not at the end.
+// ---------------------------------------------------------------------------
+var RANKED = [{ doctype: "Student Attendance" }, { doctype: "Student Group Student" },
+              { doctype: "Student" }, { doctype: "Assessment Result" }];
+var ALL = RANKED.map(function (c) { return c.doctype; });
+
+// Unticking removes just that one, leaving the rest in order.
+assert.deepStrictEqual(
+  core.pickedInRankedOrder(RANKED, ALL, "Student Group Student", false),
+  ["Student Attendance", "Student", "Assessment Result"]);
+
+// Re-ticking puts it back in RANKED position, not on the end. Click order
+// would give [...,"Assessment Result","Student Group Student"], which reads
+// differently from the screen it was chosen on.
+assert.deepStrictEqual(
+  core.pickedInRankedOrder(RANKED,
+    ["Student Attendance", "Student", "Assessment Result"],
+    "Student Group Student", true),
+  ALL);
+
+// Ticking one that is already ticked does not duplicate it.
+assert.deepStrictEqual(core.pickedInRankedOrder(RANKED, ALL, "Student", true), ALL);
+
+// Unticking the last one leaves nothing, rather than undefined.
+assert.deepStrictEqual(
+  core.pickedInRankedOrder(RANKED, ["Student"], "Student", false), []);
+
+// Rebuilding from empty keeps ranked order however the ticks arrive.
+var built = [];
+["Assessment Result", "Student Attendance"].forEach(function (name) {
+  built = core.pickedInRankedOrder(RANKED, built, name, true);
+});
+assert.deepStrictEqual(built, ["Student Attendance", "Assessment Result"]);
+
+// Missing inputs are not a crash: an empty candidate list has nothing to rank.
+assert.deepStrictEqual(core.pickedInRankedOrder(null, null, "X", true), []);
+
+console.log("studio_core.test.js — ranked selection asserted");

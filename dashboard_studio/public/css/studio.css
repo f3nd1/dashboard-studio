@@ -534,6 +534,50 @@ textarea.dss-sqlbox { min-height: 190px; font-family: ui-monospace, SFMono-Regul
 .dss-handoff-todo-key { min-width: 70px; color: var(--dss-muted); font-weight: 700; }
 .dss-handoff-todo-val { font-weight: 700; color: var(--dss-ink); }
 
+/* The DocType confirm list. One ticked row per candidate, each carrying the
+   fact it matched on — this replaced a comma-separated text field, where
+   removing one name out of seven meant editing a string by hand.
+
+   It has to stay readable at BOTH ends of the range: two or three candidates
+   for a narrow question, seven or more for a broad one ("student attendance"
+   is the real case). The evidence sits on its own line instead of running the
+   row wide.
+
+   NO max-height, and that is the finding rather than the default. Capping the
+   list at 260px with `overflow-y: auto` sliced the fifth row mid-sentence and
+   showed NOTHING to say more existed — Chromium's overlay scrollbar only
+   appears once you scroll, so seven candidates read as five while the counter
+   underneath said "7 of 7 selected". Caught by screenshot; every DOM assertion
+   passed. The page scrolls instead, which is an affordance nobody has to
+   discover. */
+.dss-picklist {
+  margin-top: 9px; display: flex; flex-direction: column; gap: 4px;
+}
+.dss-pick {
+  display: flex; gap: 9px; align-items: flex-start; cursor: pointer;
+  padding: 6px 9px; border-radius: var(--dss-r-sm);
+  border: 1px solid var(--dss-line); background: var(--dss-surface-2);
+}
+.dss-pick:hover { border-color: var(--dss-line-dark); }
+/* Ticked is the default, so UNticked is the state that must look different —
+   a row nobody has touched should not look like one that was switched off. */
+.dss-pick.is-on { background: var(--dss-surface); border-color: var(--dss-line-dark); }
+.dss-pick:not(.is-on) { opacity: .55; }
+.dss-pick-box { flex: none; margin-top: 2px; width: 14px; height: 14px; cursor: pointer; }
+.dss-pick-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dss-pick-name { font-size: 12px; font-weight: 700; color: var(--dss-ink); }
+/* The evidence, verbatim from the ranker. It is the whole reason this step is
+   checkable rather than a list to rubber-stamp, so it is never truncated —
+   it wraps. */
+.dss-pick-why {
+  font-size: 10.5px; line-height: 1.45; color: var(--dss-ink-700);
+  overflow-wrap: anywhere;
+}
+.dss-picked {
+  margin-top: 7px; font-size: 10.5px; font-weight: 700; color: var(--dss-muted);
+}
+.dss-picked.is-empty { color: var(--dss-red); }
+
 /* Both handoff links, side by side. Two because only the Desk one is certain —
    see INSIGHTS_QUERY_PATH in api/insights.py. */
 .dss-insights-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
@@ -942,6 +986,23 @@ textarea.dss-exportbox { margin-top: 10px; min-height: 220px; font-family: ui-mo
    this, a request in flight looked exactly like a hung page. */
 .dss-btn.is-busy { cursor: progress; }
 .dss-btn[disabled] { opacity: 0.65; cursor: not-allowed; }
+/* A disabled PRIMARY button needs more than the opacity above, and that is a
+   pixel finding rather than a preference. Screenshotting "Build the query"
+   with nothing ticked showed a confident dark-navy button that looked
+   entirely pressable, while every DOM assertion passed — the button really
+   was `disabled`, and `cursor: not-allowed` from the rule above really was
+   applying. That is the exact failure mode "verify by pixels, not by call"
+   exists for, and it was invisible to the assertions by construction.
+
+   Colour carries it instead of opacity alone. Verified the way the rest of
+   this was: by rendering the rule in a garish colour and confirming the
+   pixels changed, rather than by reading `getComputedStyle`, which reported
+   the enabled colours for a button the screenshot showed as disabled — an
+   inconsistency not chased further, because the pixels are what ships. */
+.dss-btn.dss-btn-primary[disabled] {
+  background: var(--dss-surface-3); color: var(--dss-ink-700);
+  border-color: var(--dss-line); box-shadow: none; opacity: 1;
+}
 .dss-spinner { display: inline-block; width: 0.75rem; height: 0.75rem;
   margin-right: 0.45rem; vertical-align: -0.08rem; border-radius: 50%;
   border: 2px solid currentColor; border-right-color: transparent;
