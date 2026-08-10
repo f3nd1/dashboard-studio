@@ -132,12 +132,18 @@ _ONLY_TABLE = re.compile(r"^`" + _TAB + r"([^`]+)`(?:\s+(?:AS\s+)?(?:`[^`]+`|\w+
 # One projected column: `q`.`col` [AS `col`]. The alias must repeat the column
 # name or it is a rename, not a passthrough.
 #
-# The name has to START with a letter or underscore, which is what every Frappe
-# column does. Without that, `SELECT 1 FROM `tabX`` read as a projection of a
-# column called "1" and the wrapper was flattened away — a literal column is not
-# the table's, and the outer query may be reading it.
+# A BARE name has to start with a letter or underscore. Without that,
+# `SELECT 1 FROM `tabX`` read as a projection of a column called "1" and the
+# wrapper was flattened away — a literal column is not the table's, and the
+# outer query may be reading it. A BACKTICKED name may start with a digit:
+# backticks are what make it an identifier rather than a literal, and UCC's
+# survey DocTypes really do have columns called `1_3_months` and `2k_4k` —
+# requiring a letter there made every wrapper touching those tables refuse as
+# "not an identity" for a reason no message named.
 _PROJECTED = re.compile(
-    r"^(?:(?:`[^`]+`|\w+)\.)?`?([A-Za-z_][\w ]*?)`?(?:\s+AS\s+`?([A-Za-z_][\w ]*?)`?)?$",
+    r"^(?:(?:`[^`]+`|\w+)\.)?"
+    r"(?:`(?P<col_q>[\w][\w ]*?)`|(?P<col>[A-Za-z_][\w ]*?))"
+    r"(?:\s+AS\s+(?:`(?P<alias_q>[\w][\w ]*?)`|(?P<alias>[A-Za-z_][\w ]*?)))?$",
     re.IGNORECASE)
 # ONE aggregate call and nothing else. `.*` between the parentheses matched
 # `SUM(a) * 100 / COUNT(*)` — it starts with an aggregate name and ends with
@@ -268,8 +274,9 @@ def _passthrough_table(inner: str) -> str | None:
             projected = _PROJECTED.match(item)
             if not projected:
                 return None
-            alias = projected.group(2)
-            if alias and alias.strip() != projected.group(1).strip():
+            column = (projected.group("col_q") or projected.group("col")).strip()
+            alias = projected.group("alias_q") or projected.group("alias")
+            if alias and alias.strip() != column:
                 return None
     return "`tab" + base.group(1) + "`"
 
@@ -391,10 +398,12 @@ def drop_passthrough_wrapper(sql: str) -> str:
     # `<wrapper>`.`col` [AS `col`] and nothing else. Qualified by THIS wrapper:
     # an item qualified by anything else is a column from somewhere this rule
     # has not proved anything about.
+    # Leading digits allowed in both halves: everything here is qualified by
+    # the wrapper's own dot, so nothing that matches can be a bare literal.
     item_pattern = re.compile(
         r"^(?:`" + re.escape(wrapper) + r"`|" + re.escape(wrapper) + r")\."
-        r"`?(?P<column>[A-Za-z_][\w ]*?)`?"
-        r"(?:\s+AS\s+`?(?P<alias>[A-Za-z_][\w ]*?)`?)?$", re.IGNORECASE)
+        r"`?(?P<column>[\w][\w ]*?)`?"
+        r"(?:\s+AS\s+`?(?P<alias>[\w][\w ]*?)`?)?$", re.IGNORECASE)
     taken = []
     for item in _split_items(selected.group(1)):
         found = item_pattern.match(" ".join(item.split()))
@@ -520,8 +529,14 @@ _CAST_TYPES = {"double": "Decimal", "decimal": "Decimal", "float": "Decimal",
 # anchored `_QUALIFIED`. Quoted or qualified only: Metabase always quotes, and a
 # bare word left unmatched lands in the residue below, which refuses. That is
 # the safe direction.
-_COLUMN_REF = re.compile(r"(?:`[^`]+`|\b[A-Za-z_]\w*)\.`?[A-Za-z_][\w ]*`?"
-                         r"|`[A-Za-z_][\w ]*`")
+# The column halves accept a LEADING DIGIT — `1_3_months`, `2k_4k` are real
+# columns on UCC's survey DocTypes — because both positions are identifiers by
+# construction: one follows a qualifier's dot, the other is inside backticks.
+# A bare literal can reach neither. The bare-QUALIFIER half keeps its letter
+# start; that one can be a bare word, and `1.5` must not read as column 5 of
+# table 1.
+_COLUMN_REF = re.compile(r"(?:`[^`]+`|\b[A-Za-z_]\w*)\.`?[\w][\w ]*`?"
+                         r"|`[\w][\w ]*`")
 
 
 # --------------------------------------------------------------------------

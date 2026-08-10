@@ -511,6 +511,18 @@ Refused by name: a compound condition (`AND`/`OR`/`NOT`), `IS NULL`, `LIKE`, `IN
 
 **Caveat, recorded:** the positional claim rests on the corpus scan's finding; no corpus exists in the build environment. A counter-example tightens `_entry_for`'s spellings set.
 
+## ADR-032 — The sole-41 survey family: backticks make a digit-led name an identifier, and an expression can never hold one
+
+**The capture came first.** `wrapper_residue.py` over cards 2032/1795/2076/1820 showed one family: `tabSurvey Tracking` LEFT JOIN its child table ON name=parent, LEFT JOIN survey DocTypes ON survey_entry=name, inner `col * 5` scale factors, WHERE on the FROM table, outer aggregation. No inner GROUP BY/DISTINCT/LIMIT anywhere — these are pure projections over joins, not aggregating sub-questions, so the flatten is row-preserving where it applies.
+
+**Finding one: the 2076 shape already converts on current main.** A reconstruction of its described residue lifts, filters as an ADR-019 OR group, scales via ADR-013, and finishes with ADR-011's expression — asserted end to end. If the live card still refuses after a deploy, either the bench lags main or the residue description omitted the blocking detail; re-run `wrapper_residue.py` after deploying before concluding anything.
+
+**Finding two, the confirmed code fault: `_PROJECTED` required a column's first character to be a letter.** That rule exists for a real reason — `SELECT 1 FROM tabX` must not read as a projection of a column called "1" — but it also rejected `` `1_3_months` `` and `` `2k_4k` ``, real columns on `tabEnd of Course Survey`, so any operand projecting them could never be proven an identity and the whole card refused as "subquery". **Backticks are the distinction the pattern failed to draw**: a backticked name is an identifier by construction, a bare one may be a literal. The backticked branches of `_PROJECTED`, `_COLUMN_REF` and the passthrough re-select now admit a leading digit; every bare branch keeps the letter rule, and `SELECT 1` still refuses.
+
+**Finding three, settled from Insights' own source: an expression can NEVER name such a column.** `ibis_utils.py` at v3.12.2 evaluates a mutate/case expression with `ast.parse` — Python syntax — and offers columns as variables by name (`{col: getattr(self.query, col)}`). A Python identifier cannot start with a digit, so `1_3_months * 5` is a SyntaxError the moment the query opens: converts here, fails there, the exact class this converter refuses. So a computed column reading a digit-led name refuses BY NAME, while the same column is fine in every JSON position — join `select_columns`, filter rules, summarize measures — because those are Column objects, never evaluated text. `AVG(`1_3_months`)` directly converts whole. (`q["1_3_months"]` exists in the evaluator's context and would probably work, but no stored expression has been seen to use it; the vocabulary widens only to what has been observed, and one hand-built calculated column on the live site plus `insights_operations_probe.py` would settle it.)
+
+**What this means for the 41:** cards whose expressions read letter-named columns (2076's shape) convert; cards whose `* 5` mutates read digit-named columns refuse with the precise sentence instead of "subquery". The reconstructions are labelled reconstructions in the tests — the live confirmation on the real cards is the deploy-and-rescan.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

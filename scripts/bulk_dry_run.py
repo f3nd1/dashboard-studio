@@ -116,6 +116,11 @@ def _dry_run():
         # whoever reads the report to the wrong half of the query.
         ("not a column of any table this query reads",
          "computed column reads a column no table in the query has"),
+        # BEFORE the generic wrong-kind entry below. A digit-led name is not a
+        # type problem: Insights evaluates expressions as Python, where such a
+        # name cannot be written at all.
+        ("whose name starts with a digit",
+         "calculation over a digit-named column (Insights expressions are Python)"),
         ("from a column that is not a", "computed column reads the wrong kind of column"),
         ("is not a column of", "join names a column the table does not have"),
         ("are not known here", "table's columns could not be read"),

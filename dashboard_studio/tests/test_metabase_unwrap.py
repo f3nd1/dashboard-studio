@@ -1656,3 +1656,137 @@ class TestTwoYearMutatesDoNotCollide(unittest.TestCase):
         self.assertEqual(
             [(d["column_name"], d.get("granularity")) for d in dimensions],
             [("a", "year"), ("YB1", None), ("YB2", None)])
+
+
+class TestTheSurveyTrackingFamily(unittest.TestCase):
+    """The sole-41 subquery family — RECONSTRUCTED from the captured residues,
+    not captured itself, and labelled so on purpose.
+
+    wrapper_residue.py's output (cards 2032/1795/2076/1820) showed one family:
+    `tabSurvey Tracking` LEFT JOIN its child table ON name=parent, LEFT JOIN a
+    survey DocType ON survey_entry=name, inner `col * 5` scale factors, WHERE
+    on the FROM table, outer aggregation. Two blockers, both settled from
+    source rather than the residue text:
+
+    - `_PROJECTED` required a column's first character to be a letter, so an
+      operand projecting `1_3_months` (a real column on `tabEnd of Course
+      Survey`) could never be proven an identity and the whole card refused as
+      "subquery". Backticks are what make a digit-leading name an identifier
+      rather than a literal, so the backticked branch now admits it — and the
+      bare-literal guard (`SELECT 1` is not a projection) stays.
+
+    - An EXPRESSION reading such a column refuses BY NAME: Insights evaluates
+      a mutate's expression as Python (`ibis_utils.py` at v3.12.2 —
+      `ast.parse` plus columns injected as variables), and a Python name
+      cannot start with a digit, so `1_3_months * 5` is a SyntaxError the
+      moment the query opens. The same column is fine in every JSON position:
+      join select_columns, filter rules, summarize measures.
+    """
+
+    COLUMNS = {
+        "Survey Tracking": {"name": "String", "department": "String",
+                            "survey_type": "String"},
+        "Survey Tracking List of Surveys Childtable": {
+            "name": "String", "parent": "String", "survey_entry": "String"},
+        "End of Course Survey": {"name": "String", "1_3_months": "Integer",
+                                 "2k_4k": "Integer"},
+    }
+
+    def family(self, item, inner_item):
+        return (
+            "SELECT `__mb`.`department` AS `department`, " + item + " FROM ( "
+            "SELECT `tabSurvey Tracking`.`department` AS `department`, "
+            + inner_item + " FROM "
+            "( SELECT * FROM `tabSurvey Tracking` ) AS `tabSurvey Tracking` "
+            "LEFT JOIN ( SELECT * FROM `tabSurvey Tracking List of Surveys "
+            "Childtable` ) AS `Child` "
+            "ON `Child`.`parent` = `tabSurvey Tracking`.`name` "
+            "LEFT JOIN ( SELECT `1_3_months` AS `1_3_months`, `2k_4k`, `name` "
+            "FROM `tabEnd of Course Survey` ) AS `tabEnd of Course Survey` "
+            "ON `Child`.`survey_entry` = `tabEnd of Course Survey`.`name` "
+            "WHERE `tabSurvey Tracking`.`survey_type` = 'Exit' ) AS `__mb` "
+            "GROUP BY `__mb`.`department`")
+
+    def test_a_digit_led_projection_is_an_identity(self):
+        """The operand that never unwrapped, isolated."""
+        sql = ("SELECT `w`.`1_3_months` FROM ( SELECT `1_3_months` AS "
+               "`1_3_months`, `2k_4k` FROM `tabEnd of Course Survey` ) AS `w`")
+        self.assertNotIn("( SELECT", unwrap_derived_tables(sql)[len("SELECT"):])
+
+    def test_a_bare_literal_is_still_NOT_a_projection(self):
+        """The guard the letter-first rule existed for. `SELECT 1` reads as a
+        literal, not a column called 1, and the wrapper stays."""
+        sql = "SELECT `w`.`x` FROM ( SELECT 1 FROM `tabX` ) AS `w`"
+        self.assertIn("( SELECT 1 FROM", unwrap_derived_tables(sql))
+
+    def test_the_family_with_a_DIRECT_aggregate_converts_whole(self):
+        """AVG over the digit column itself: every position it reaches is JSON
+        (measure, join select_columns), so nothing evaluates its name."""
+        sql = self.family("AVG(`__mb`.`1_3_months`) AS `avg`",
+                          "`tabEnd of Course Survey`.`1_3_months` AS `1_3_months`")
+        result = operations_from_sql(analyze_sql(sql), self.COLUMNS)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual([op["type"] for op in result["operations"]],
+                         ["source", "join", "join", "filter", "summarize"])
+        measure = [op for op in result["operations"]
+                   if op["type"] == "summarize"][0]["measures"][0]
+        self.assertEqual(measure["column_name"], "1_3_months")
+        self.assertEqual(measure["measure_name"], "avg_of_1_3_months")
+
+    def test_a_SCALE_FACTOR_on_a_digit_column_refuses_by_name(self):
+        """`1_3_months * 5` would be a Python SyntaxError inside Insights."""
+        sql = self.family("AVG(`__mb`.`q1`) AS `avg`",
+                          "`tabEnd of Course Survey`.`1_3_months` * 5 AS `q1`")
+        result = operations_from_sql(analyze_sql(sql), self.COLUMNS)
+        self.assertFalse(result["supported"])
+        self.assertEqual(result["operations"], [])
+        self.assertTrue(any("whose name starts with a digit" in reason
+                            for reason in result["reasons"]), result["reasons"])
+        self.assertTrue(any("Aggregating or filtering the column directly is fine"
+                            in reason for reason in result["reasons"]))
+
+    def test_a_LETTER_named_scale_factor_still_converts(self):
+        """The guard must not catch the ordinary ADR-013 case."""
+        columns = dict(self.COLUMNS)
+        columns["End of Course Survey"] = dict(columns["End of Course Survey"],
+                                               overall="Integer")
+        sql = self.family("AVG(`__mb`.`q1`) AS `avg`",
+                          "`tabEnd of Course Survey`.`overall` * 5 AS `q1`")
+        result = operations_from_sql(analyze_sql(sql), columns)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertIn({"type": "mutate", "new_name": "q1", "data_type": "Auto",
+                       "expression": {"type": "expression",
+                                      "expression": "overall * 5"}},
+                      result["operations"])
+
+    def test_the_2076_shape_converts_end_to_end(self):
+        """The cleanest capture's described shape: letter-named survey columns,
+        `col * 5` pair, OR filter on the FROM table, ADR-011 outer expression.
+        Reconstructed; the live check on the real card is the user's step."""
+        columns = {"Survey Tracking": self.COLUMNS["Survey Tracking"],
+                   "Survey Tracking List of Surveys Childtable":
+                       self.COLUMNS["Survey Tracking List of Surveys Childtable"],
+                   "Staff Survey": {"name": "String", "communication": "Integer",
+                                    "clarity": "Integer"}}
+        sql = (
+            "SELECT `__mb`.`department` AS `department`, "
+            "CAST(AVG(`__mb`.`q1`) + AVG(`__mb`.`q2`) AS double) / 2.0 AS `index` "
+            "FROM ( SELECT `tabSurvey Tracking`.`department` AS `department`, "
+            "`tabStaff Survey`.`communication` * 5 AS `q1`, "
+            "`tabStaff Survey`.`clarity` * 5 AS `q2` FROM `tabSurvey Tracking` "
+            "LEFT JOIN `tabSurvey Tracking List of Surveys Childtable` AS `Child` "
+            "ON `Child`.`parent` = `tabSurvey Tracking`.`name` "
+            "LEFT JOIN `tabStaff Survey` "
+            "ON `Child`.`survey_entry` = `tabStaff Survey`.`name` "
+            "WHERE `tabSurvey Tracking`.`survey_type` = 'Employee Satisfaction' "
+            "OR `tabSurvey Tracking`.`survey_type` = 'ESI' ) AS `__mb` "
+            "GROUP BY `__mb`.`department` ORDER BY `__mb`.`department` ASC")
+        result = operations_from_sql(analyze_sql(sql), columns)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        kinds = [op["type"] for op in result["operations"]]
+        self.assertEqual(kinds, ["source", "join", "join", "mutate", "mutate",
+                                 "filter_group", "summarize", "mutate",
+                                 "order_by"])
+        final = result["operations"][-2]
+        self.assertEqual(final["expression"]["expression"],
+                         "(avg_of_q1 + avg_of_q2) / 2.0")

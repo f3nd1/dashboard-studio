@@ -422,6 +422,32 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     # column of any table, so it must never reach the schema check.
     computed = analysis.get("computed") or []
     for entry in computed:
+        # A column whose name STARTS WITH A DIGIT cannot appear in expression
+        # text at all. Insights evaluates a mutate/case expression as PYTHON —
+        # `ibis_utils.py` at v3.12.2 does `ast.parse(expression)` and offers
+        # the columns as variables by name (`{col: getattr(self.query, col)}`)
+        # — and a Python identifier cannot begin with a digit, so an
+        # expression reading `1_3_months` is a SyntaxError the moment the
+        # query is opened: it converts here and fails there, the exact class
+        # this converter refuses. UCC's survey DocTypes really carry such
+        # columns (`1_3_months`, `2k_4k`). The SAME columns are fine
+        # everywhere JSON carries them — a join's select_columns, a filter
+        # rule, a summarize measure — because those are Column objects, never
+        # evaluated text. (`q["1_3_months"]` exists in the evaluator's context
+        # and would probably work, but no stored expression has been seen to
+        # use it, and the vocabulary widens only to what has been observed.)
+        digit_led = sorted(str(column) for column in entry.get("columns") or []
+                           if str(column)[:1].isdigit())
+        if digit_led:
+            reasons.append(
+                f"the wrapper computes '{entry['alias']}' from "
+                f"'{', '.join(digit_led)}', whose name starts with a digit — "
+                "Insights evaluates a calculated column's expression as Python, "
+                "where such a name cannot be written, so the query would fail "
+                "the moment it is opened. Aggregating or filtering the column "
+                "directly is fine; only a calculation over it is not"
+            )
+            continue
         # What the computation READS has to be the right kind of thing, and only
         # the translator knows types. `rating * 5` is a number only if `rating`
         # is one; a date difference is days only between dates.
