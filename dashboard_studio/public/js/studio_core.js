@@ -337,9 +337,53 @@
     return text.replace(/<[^>]*>/g, "").trim();
   }
 
+  // Whether a refusal is worth handing back to the model for a corrected
+  // attempt, or STRUCTURAL — the Insights operation vocabulary lacks the
+  // concept, so no respelling of the same question can ever convert and a
+  // retry only burns tokens. The line is: a fault in how the SQL was WRITTEN
+  // (an alias, a bare column, an invented name, IN where ORs would do) is
+  // fixable; a fault in what the question NEEDS (mixed AND+OR precedence, a
+  // CASE, null logic, a pattern match, nesting) is not.
+  //
+  // The spellings are exact substrings of the converter's own refusal
+  // messages, same discipline as bulk_dry_run.py's groups table — the bare
+  // one-word markers ("UNION", "DISTINCT") are matched as WHOLE reasons, so a
+  // DocType named "Union Bank" inside another message cannot trip them.
+  // ONE structural reason blocks the retry even beside fixable ones:
+  // correcting the others still leaves it, and it will never pass.
+  // A reason matching neither list retries — it is bounded either way, and an
+  // unknown message is far more likely a dialect fault than a new concept.
+  var STRUCTURAL_REASONS = ["UNION", "HAVING clause", "CASE expression",
+    "DISTINCT", "window function (OVER)"];
+  var STRUCTURAL_FRAGMENTS = [
+    "AND and OR in one WHERE clause",
+    "subquery / nested SELECT",
+    "WHERE condition using a CASE expression",
+    "WHERE condition using a subquery",
+    "WHERE condition using EXISTS",
+    "WHERE condition using LIKE",
+    "WHERE condition using IS NULL",
+    "WHERE condition using REGEXP",
+    "WHERE condition using NOT",
+    "JOIN has no Insights equivalent",
+    "more than once (or to itself)",
+    "filter operator 'LIKE'"];
+  function retryableRefusal(reasons) {
+    if (!reasons || !reasons.length) return false;
+    for (var i = 0; i < reasons.length; i++) {
+      var reason = String(reasons[i]);
+      if (STRUCTURAL_REASONS.indexOf(reason.trim()) !== -1) return false;
+      for (var j = 0; j < STRUCTURAL_FRAGMENTS.length; j++) {
+        if (reason.indexOf(STRUCTURAL_FRAGMENTS[j]) !== -1) return false;
+      }
+    }
+    return true;
+  }
+
   root.DSStudioCore = { describeOperation: describeOperation,
     labelForOperation: labelForOperation, describeProposal: describeProposal,
     chartDisplayNote: chartDisplayNote, datePartGrouping: datePartGrouping,
-    regroupByYear: regroupByYear, refusalMessage: refusalMessage };
+    regroupByYear: regroupByYear, refusalMessage: refusalMessage,
+    retryableRefusal: retryableRefusal };
   if (typeof module !== "undefined" && module.exports) module.exports = root.DSStudioCore;
 })(typeof window !== "undefined" ? window : this);

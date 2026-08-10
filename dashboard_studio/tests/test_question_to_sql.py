@@ -133,6 +133,10 @@ class TestReadingTheReply(unittest.TestCase):
         self.assertIn("`si`.`posting_date`", prompt)
         self.assertIn("sum_of_<column>", prompt)
         self.assertIn("never a SELECT-list alias", prompt)
+        # The produced-columns rule covers BOTH clauses by name: the observed
+        # miss was `ORDER BY 'count'` against a query producing `count_of_name`,
+        # and GROUP BY fails the same way for the same reason.
+        self.assertIn("Every ORDER BY and every GROUP BY", prompt)
 
     def test_a_shape_it_does_not_recognise_refuses_rather_than_raising(self):
         for response in (None, {}, {"choices": "text"}, {"choices": []},
@@ -142,6 +146,37 @@ class TestReadingTheReply(unittest.TestCase):
                 sql, refusal = Q.sql_from_response(response)
                 self.assertEqual(sql, "")
                 self.assertTrue(refusal)
+
+    def test_a_correction_request_carries_the_sql_and_the_refusal(self):
+        """The retry loop's server half: the converter's own refusal goes back
+        to the model beside the SQL it refused. No new egress — the SQL is text
+        the model itself wrote, and the refusal is composed from that SQL and
+        the schema already in the same request."""
+        payload = Q.write_sql_request(
+            "which agent sold most", SCHEMA,
+            previous_sql="SELECT `x` FROM `tabSales Invoice`",
+            refusal="ordering by 'count' which is not a column this query produces")
+        user = payload["messages"][1]["content"]
+        self.assertIn("SELECT `x` FROM `tabSales Invoice`", user)
+        self.assertIn("not a column this query produces", user)
+        self.assertIn("refused by the SQL validator", user)
+        # Still a full request: the question and the schema are stated again,
+        # not assumed remembered — every call is stateless.
+        self.assertIn("which agent sold most", user)
+        self.assertIn("agent_name", user)
+
+    def test_without_BOTH_pieces_the_request_is_the_ordinary_one(self):
+        """Half a correction is no correction: a refusal with no SQL (a CANNOT)
+        has nothing to correct, and SQL with no refusal has nothing to say."""
+        plain = Q.write_sql_request("x", SCHEMA)["messages"][1]["content"]
+        for previous_sql, refusal in (("SELECT 1", ""), ("", "some refusal"),
+                                      ("", "")):
+            with self.subTest((previous_sql, refusal)):
+                user = Q.write_sql_request(
+                    "x", SCHEMA, previous_sql=previous_sql,
+                    refusal=refusal)["messages"][1]["content"]
+                self.assertEqual(user, plain)
+                self.assertNotIn("refused", user)
 
     def test_a_doctype_it_invented_is_dropped(self):
         """A name that does not exist would otherwise reach `get_meta` and come
@@ -302,6 +337,26 @@ class TestTheModuleThatCreatesNothing(unittest.TestCase):
                if isinstance(n, ast.Call)]
         self.assertNotIn("pick_doctypes_request", own)
         self.assertNotIn("doctypes_from_response", own)
+
+    def test_a_retry_goes_through_the_same_path_with_no_new_calls(self):
+        """The retry loop lives in the PAGE; the server's whole part is passing
+        `previous_sql` and `refusal` into the prompt builder. Both are optional
+        keywords on the one existing outbound path — no second endpoint, no
+        skipped check, nothing conditional downstream of the SQL coming back."""
+        signatures = {node.name: node for node in ast.walk(self.TREE)
+                      if isinstance(node, ast.FunctionDef)}
+        endpoint = signatures["propose_from_question"]
+        # Optional with None defaults, so a plain first call is unchanged.
+        optional = [a.arg for a in endpoint.args.args[-len(endpoint.args.defaults):]]
+        self.assertIn("previous_sql", optional)
+        self.assertIn("refusal", optional)
+        # They reach write_sql_request as keywords — the ONE prompt builder —
+        # and nowhere else: no other call in the endpoint takes them.
+        calls = [n for n in ast.walk(endpoint) if isinstance(n, ast.Call)
+                 and ast.unparse(n.func).endswith("write_sql_request")]
+        self.assertEqual(len(calls), 1)
+        keywords = {k.arg for k in calls[0].keywords}
+        self.assertEqual(keywords, {"previous_sql", "refusal"})
 
     def test_the_picking_step_is_its_own_read_only_endpoint(self):
         source = self.PATH.read_text()

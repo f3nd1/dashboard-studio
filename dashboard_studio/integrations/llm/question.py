@@ -40,9 +40,10 @@ person, and idiomatic SQL that a person would prefer is refused:
   `tabSales Invoice`.`posting_date`. A short table alias is fine
   (`si`.`posting_date`), but a BARE column name is not — `si.posting_date`
   and `posting_date` are both refused.
-- ORDER BY names a column the query PRODUCES, never a SELECT-list alias. After
-  a GROUP BY those are the grouped columns and the aggregates, and the
-  aggregates are named `sum_of_<column>`, `avg_of_<column>`, `min_of_<column>`,
+- Every ORDER BY and every GROUP BY names a column the SELECT list PRODUCES,
+  spelled exactly — never a SELECT-list alias. After a GROUP BY the produced
+  columns are the grouped columns and the aggregates, and the aggregates are
+  named `sum_of_<column>`, `avg_of_<column>`, `min_of_<column>`,
   `max_of_<column>` and `count`. So `ORDER BY `sum_of_sales_income` DESC`,
   not `ORDER BY `total` DESC`.
 
@@ -165,12 +166,21 @@ def doctypes_from_response(response, known) -> list[str]:
             if line.strip() in known][:4]
 
 
-def write_sql_request(question: str, schema: dict, model: str = None) -> dict:
+def write_sql_request(question: str, schema: dict, model: str = None,
+                      previous_sql: str = "", refusal: str = "") -> dict:
     """Step two: the SQL. `schema` is ``{DocType: {column: data_type}}``.
 
     That mapping is the same one the converter itself types columns from, so
     what the model is told and what the validator checks against cannot drift
     apart — they are one value.
+
+    `previous_sql` + `refusal` (both or neither) turn the request into a
+    CORRECTION: the converter's own refusal text is handed back so the model
+    can fix what it names. This extends no new trust — the reply goes through
+    the same validation as a first attempt — and it adds no new egress: the
+    previous SQL is text the model itself wrote, and the refusal is composed
+    by our converter from that SQL and the schema already sent above. No row
+    of data exists on this path to leak (this module cannot reach a database).
     """
     if not isinstance(question, str):
         raise TypeError("question must be a string")
@@ -182,8 +192,16 @@ def write_sql_request(question: str, schema: dict, model: str = None) -> dict:
         listing = ", ".join(f"{name} ({columns[name]})" for name in sorted(columns))
         blocks.append(f"`tab{doctype}`\n  {listing}")
     tables = "\n\n".join(blocks)
-    return _message(_SYSTEM,
-                    f"Question: {question}\n\nTables and columns:\n\n{tables}", model)
+    user = f"Question: {question}\n\nTables and columns:\n\n{tables}"
+    if previous_sql and refusal:
+        user += (
+            "\n\nA previous attempt was refused by the SQL validator."
+            f"\n\nPrevious SQL:\n{previous_sql}"
+            f"\n\nRefused because:\n{refusal}"
+            "\n\nWrite a corrected statement answering the same question, "
+            "fixing exactly what the refusal names. All rules above still apply."
+        )
+    return _message(_SYSTEM, user, model)
 
 
 def sql_from_response(response) -> tuple[str, str]:

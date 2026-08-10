@@ -274,7 +274,8 @@ def _refused(reasons, doctypes, sql: str = "") -> dict:
 
 @frappe.whitelist()
 def propose_from_question(question: str, doctypes, api_key: str = None,
-                         model: str = None):
+                         model: str = None, previous_sql: str = None,
+                         refusal: str = None):
     """Propose an Insights setup, over DocTypes the USER confirmed. Creates nothing.
 
     `doctypes` is required and is the whole point: the tables are settled by a
@@ -286,6 +287,13 @@ def propose_from_question(question: str, doctypes, api_key: str = None,
     calls and then goes out of scope. It is never stored, logged or echoed.
     `model` resolves the same way — the request's value, then site_config's
     `llm_model`, then the default — and is likewise not stored anywhere.
+
+    `previous_sql` + `refusal` make this call a RETRY: the page sends back the
+    SQL the last call returned and the refusal it came with, and the model is
+    asked to correct it. The loop lives in the page, bounded there, so each
+    retry is one ordinary request through this same function — same
+    validation, same allowlists, same widening check. A retry extends no new
+    trust and skips nothing.
     """
     frappe.only_for(DS_WRITE_ROLES)
     question = (question or "").strip()
@@ -297,10 +305,12 @@ def propose_from_question(question: str, doctypes, api_key: str = None,
 
     model = _model(model)
     columns = {doctype: _table_columns(doctype) for doctype in chosen}
-    sql, refusal = sql_from_response(
-        _ask(write_sql_request(question, columns, model), api_key))
-    if refusal:
-        return _refused([refusal], chosen)
+    sql, cannot = sql_from_response(
+        _ask(write_sql_request(question, columns, model,
+                               previous_sql=(previous_sql or "").strip(),
+                               refusal=(refusal or "").strip()), api_key))
+    if cannot:
+        return _refused([cannot], chosen)
 
     analysis = analyze_sql(sql)
     if not analysis["supported"]:

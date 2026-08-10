@@ -178,6 +178,9 @@
       exportsLoading: false,
       // Which round-trip is in flight, or null. Read by `actionButton`.
       busy: null,
+      // Which corrected attempt is running (0 = the first, ordinary one).
+      // Drives the build button's busy label so a retry is never invisible.
+      retrying: 0,
       // The provider's model list, once asked for. Null means "not asked".
       // Session state like the key: never saved, gone on refresh.
       models: null,
@@ -797,8 +800,15 @@
     // `confirming` stays TRUE while this runs, so the confirm box — and this
     // button, spinning — stay on screen. Clearing it first removed the only
     // thing on the page that could show anything was happening.
+    // The busy label is computed at render time so a retry is VISIBLE: each
+    // retry sets `state.retrying` and re-renders, and this button is the one
+    // thing on screen saying what the wait is for (ADR-028).
+    var buildBusyLabel = this.state.retrying
+      ? "Refused — correcting the SQL (attempt "
+        + (this.state.retrying + 1) + " of " + (PROPOSE_RETRIES + 1) + ")…"
+      : "Building the query…";
     var build = actionButton(this, "build", "Build the query",
-                             "Building the query…", function () {
+                             buildBusyLabel, function () {
       begin(self, "build");
       var done = function () {
         finish(self);
@@ -819,21 +829,51 @@
     return box;
   };
 
-  App.prototype.propose = function (question) {
+  // How many CORRECTED attempts follow a refused one. Bounded and small: each
+  // retry is a full round through the same validation, so the only cost of a
+  // hopeless retry is tokens — and the only cost of stopping is the person
+  // rewording the question themselves, which is where this started.
+  var PROPOSE_RETRIES = 2;
+
+  App.prototype.propose = function (question, attempt, correction) {
     var self = this;
+    attempt = attempt || 0;
+    var args = { question: question, doctypes: this.state.tables || "",
+                 // Sent with this request and used for this request. The server
+                 // passes it to the outbound call and lets it go out of scope.
+                 api_key: this.state.apiKey || null,
+                 model: this.state.model || null };
+    if (correction) {
+      // The refusal goes back to the model in the converter's own words — the
+      // reply passes through the same validation as any first attempt.
+      args.previous_sql = correction.sql;
+      args.refusal = (correction.reasons || []).join("\n");
+    }
     return dsCall({
       method: "dashboard_studio.api.propose.propose_from_question",
-      // Sent with this request and used for this request. The server passes it
-      // to the outbound call and lets it go out of scope.
-      args: { question: question, doctypes: this.state.tables || "",
-              api_key: this.state.apiKey || null,
-              model: this.state.model || null },
+      args: args,
     }).then(function (r) {
+      var proposal = r.message || null;
+      // Retry only a refusal OUR validator produced over SQL the model wrote
+      // (`sql` present — a CANNOT or an empty reply has nothing to correct),
+      // only for reasons a rewrite can fix, and only within the budget.
+      if (proposal && !proposal.supported && proposal.sql
+          && attempt < PROPOSE_RETRIES
+          && core.retryableRefusal(proposal.reasons)) {
+        self.state.retrying = attempt + 1;
+        self.render();
+        return self.propose(question, attempt + 1,
+                            { sql: proposal.sql, reasons: proposal.reasons });
+      }
+      // Exhausted retries show the LAST refusal: this response replaces
+      // everything, and it is the one the model could not get past.
+      self.state.retrying = 0;
       self.state.notice = "";
-      self.state.proposal = r.message || null;
+      self.state.proposal = proposal;
       self.state.conversion = null;
       self.render();
     }).catch(function (err) {
+      self.state.retrying = 0;
       self.state.proposal = { supported: false, reasons: [
         core.refusalMessage(err, "Could not propose a setup for that.")] };
       self.render();

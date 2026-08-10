@@ -379,3 +379,64 @@ assert.strictEqual(core.datePartGrouping([
   false);
 
 console.log("studio_core.test.js — date-part entanglement asserted");
+
+// ---------------------------------------------------------------------------
+// retryableRefusal — which refusals are worth a corrected attempt.
+//
+// STRUCTURAL means the Insights operation vocabulary lacks the concept, so no
+// respelling of the same question can convert and a retry only burns tokens.
+// A fault in how the SQL was WRITTEN — an alias, a bare column, an invented
+// name — is what the retry loop exists for.
+// ---------------------------------------------------------------------------
+// The motivating case: ORDER BY named an alias the query does not produce.
+assert.strictEqual(core.retryableRefusal(
+  ["ordering by 'count' which is not a column this query produces"]), true);
+// An invented column and a widened table are both the model's spelling to fix.
+assert.strictEqual(core.retryableRefusal(
+  ["the join condition uses 'agent', which is not a column of Sales Invoice"]), true);
+assert.strictEqual(core.retryableRefusal(
+  ["the query reads Sales Order, which is not among the tables you chose"]), true);
+// IN is losslessly rewritable as OR-ed equalities, so it retries…
+assert.strictEqual(core.retryableRefusal(
+  ["filter operator 'IN' is not one this converter translates — it handles ="]), true);
+// …but LIKE is not: there is no pattern operator, and '=' answers a
+// different question.
+assert.strictEqual(core.retryableRefusal(
+  ["filter operator 'LIKE' is not one this converter translates"]), false);
+// Structural concepts never retry.
+assert.strictEqual(core.retryableRefusal(
+  ["AND and OR in one WHERE clause — Insights' filter group is one operator"]), false);
+assert.strictEqual(core.retryableRefusal(["CASE expression"]), false);
+assert.strictEqual(core.retryableRefusal(["UNION"]), false);
+assert.strictEqual(core.retryableRefusal(["DISTINCT"]), false);
+assert.strictEqual(core.retryableRefusal(["HAVING clause"]), false);
+assert.strictEqual(core.retryableRefusal(["window function (OVER)"]), false);
+assert.strictEqual(core.retryableRefusal(
+  ["subquery / nested SELECT — a subquery here is only removed when…"]), false);
+assert.strictEqual(core.retryableRefusal(
+  ["unparsed WHERE condition using IS NULL: `x` IS NULL"]), false);
+// LIKE has two spellings — the operator table's and the unparsed-WHERE one —
+// and both are structural: there is no pattern operator to rewrite into.
+assert.strictEqual(core.retryableRefusal(
+  ["unparsed WHERE condition using LIKE, which this converter does not translate"]), false);
+// BETWEEN's unparsed spelling retries: >= AND <= is the same rows exactly.
+assert.strictEqual(core.retryableRefusal(
+  ["unparsed WHERE condition using BETWEEN, which this converter does not translate"]), true);
+assert.strictEqual(core.retryableRefusal(
+  ["'Sales Invoice' is joined more than once (or to itself)"]), false);
+// The bare markers match WHOLE reasons only: a DocType named "Union Bank"
+// inside another message must not read as a UNION.
+assert.strictEqual(core.retryableRefusal(
+  ["the join condition uses 'branch', which is not a column of Union Bank"]), true);
+// ONE structural reason blocks the retry even beside fixable ones.
+assert.strictEqual(core.retryableRefusal(
+  ["ordering by 'count' which is not a column this query produces",
+   "CASE expression"]), false);
+// Nothing to correct with: no reasons, no retry.
+assert.strictEqual(core.retryableRefusal([]), false);
+assert.strictEqual(core.retryableRefusal(null), false);
+// An unlisted message retries — bounded either way, and an unknown message is
+// far more likely a dialect fault than a new structural concept.
+assert.strictEqual(core.retryableRefusal(["some message nobody has seen"]), true);
+
+console.log("studio_core.test.js — retryable refusals asserted");
