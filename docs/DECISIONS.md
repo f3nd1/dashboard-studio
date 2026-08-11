@@ -611,7 +611,13 @@ The generated name is `<name>_calc`, escalating to `_calc_2` against both the re
 
 **What made the pairing possible at all was ADR-033's other half** — chosen labels keep their raw spelling, so the card's `Staff Onboarding Average (Obj. 5)` and ours are byte-identical and paired by name with no map. Had those been slugged too, every card would have needed a hand-written mapping for its headline numbers.
 
-Recorded and NOT acted on this round, per the standing rule: `match` conflates "our side has structural extras" with "something was not compared", and those are different findings. So is the question of whether the intermediate columns should be projected away in the created query at all — that changes what a person sees in Insights and is a decision, not a cleanup.
+**Both halves of that were then acted on, once the control card confirmed the comparison itself was sound** (2424: MATCH, 12 rows, exact agreement).
+
+`match` no longer requires both leftover lists to be empty. A column of the CARD's that went uncompared still blocks — half a comparison must never read as a pass — but extra columns on OUR side do not, because they cannot change a paired value and cannot change the rows. They are still reported, in their own note and on the verdict line ("plus 6 column(s) ours only"): matching quietly would hide that the created query shows a person columns the card never had. A harness that cries DIFFERS over a full agreement stops being read, which costs more than the strictness bought.
+
+**And "largest relative delta 0" was ambiguous, which the control card exposed.** `max(…, default=0.0)` prints the same `0` for a set of perfectly equal numbers and for an EMPTY delta map — so a comparison that never reached the float path at all read as an exact agreement. The report now carries `compared: {values, numeric}` and the line says "largest relative delta 0 over 24 numeric values", or "NO numeric values were compared" when there were none. The question could not be answered from the first clean run's output, which is the definition of an instrument that needs a mark on it.
+
+Still NOT acted on: whether the intermediate columns should be projected away in the created query. That changes what a person sees in Insights and is a decision, not a cleanup.
 
 ## Known unsupported — recorded, not scheduled
 

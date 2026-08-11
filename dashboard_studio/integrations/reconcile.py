@@ -196,6 +196,13 @@ def compare_results(expected, actual, column_map=None,
         "differences": [],
         "difference_count": 0,
         "max_delta": {},
+        # How many VALUES were compared, and how many of those were compared as
+        # numbers. Without this, "largest relative delta 0" is ambiguous — an
+        # empty delta map prints the same 0 as a set of perfectly equal
+        # numbers, so a comparison that never reached the float path at all
+        # reads as an exact agreement. That question was asked of the first
+        # clean run and the report could not answer it.
+        "compared": {"values": 0, "numeric": 0},
         "order_differs": False,
         "notes": [],
     }
@@ -210,13 +217,23 @@ def compare_results(expected, actual, column_map=None,
             "evidence of anything. Check this card against a database that "
             "holds the data it reports on")
         return report
-    if only_expected or only_actual:
+    # The two leftover lists are DIFFERENT findings and stopped being one note
+    # after the first real run reported DIFFERS on two cards whose every column
+    # agreed. A column of the CARD's that went uncompared means the comparison
+    # is incomplete and must not read as a pass. Extra columns on OUR side mean
+    # the converted query returns more than the card did — additional, not
+    # different — which cannot change any paired value or any row.
+    if only_expected:
         report["notes"].append(
-            "columns could not be paired by name: "
-            f"{only_expected or '-'} on the card's side, "
-            f"{only_actual or '-'} on ours. Supply a column_map to compare them "
-            "— they are NOT paired by position, because a guessed pairing can "
-            "agree as easily as it can disagree")
+            f"columns of the card's result were NOT compared: {only_expected}. "
+            "Supply a column_map — they are not paired by position, because a "
+            "guessed pairing can agree as easily as it can disagree")
+    if only_actual:
+        report["notes"].append(
+            f"our query also returns {only_actual}, which the card does not. "
+            "Additional columns, not different ones — commonly the component "
+            "measures an expression is built from, which Insights must name "
+            "before a mutate can reference them")
     if len(expected_rows) != len(actual_rows):
         report["notes"].append(
             f"row counts differ ({len(expected_rows)} vs {len(actual_rows)}) — "
@@ -236,7 +253,9 @@ def compare_results(expected, actual, column_map=None,
     for index, (row_e, row_a) in enumerate(zip(left, right)):
         for name_e, name_a in pairs:
             value_e, value_a = row_e.get(name_e), row_a.get(name_a)
+            report["compared"]["values"] += 1
             if _is_number(value_e) and _is_number(value_a):
+                report["compared"]["numeric"] += 1
                 delta = _delta(value_e, value_a)
                 previous = report["max_delta"].get(name_e, 0.0)
                 report["max_delta"][name_e] = max(previous, delta)
@@ -252,8 +271,10 @@ def compare_results(expected, actual, column_map=None,
                     {"row": index, "column": name_e, "as_column": name_a,
                      "expected": value_e, "actual": value_a, "delta": delta})
 
-    report["match"] = (report["difference_count"] == 0
-                       and not only_expected and not only_actual)
+    # Extras on our side do not block a match; a card column left uncompared
+    # does. A harness that cries DIFFERS over a full agreement stops being read,
+    # which costs more than the strictness bought.
+    report["match"] = report["difference_count"] == 0 and not only_expected
     if report["difference_count"] > len(report["differences"]):
         report["notes"].append(
             f"{report['difference_count']} differing values in total; the first "
@@ -269,9 +290,14 @@ def describe(report, card=""):
         return [f"{head}INCONCLUSIVE — no rows on either side"] + [
             f"   note: {note}" for note in report["notes"]]
     if report["match"]:
-        worst = max(report["max_delta"].values(), default=0.0)
-        return [f"{head}MATCH — {counts['actual']} rows, "
-                f"largest relative delta {worst:.2g}"
+        numeric = report["compared"]["numeric"]
+        worst = (f"largest relative delta {max(report['max_delta'].values()):.2g}"
+                 f" over {numeric} numeric values" if numeric
+                 else "NO numeric values were compared — every paired column "
+                      "held text, dates or nulls")
+        extra = report["columns"]["only_actual"]
+        return [f"{head}MATCH — {counts['actual']} rows, {worst}"
+                + (f", plus {len(extra)} column(s) ours only" if extra else "")
                 + (" (ROW ORDER DIFFERS)" if report["order_differs"] else "")]
     lines = [f"{head}DIFFERS — {counts['expected']} rows from the card's SQL, "
              f"{counts['actual']} from ours"]

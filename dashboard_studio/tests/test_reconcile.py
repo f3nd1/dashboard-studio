@@ -226,12 +226,12 @@ class TestPairingColumns(unittest.TestCase):
                                            {"avg": "avg_of_x"})
         self.assertEqual((pairs, left, right), ([("avg", "avg_of_x")], [], []))
 
-    def test_unpaired_columns_prevent_a_MATCH_and_say_so(self):
+    def test_an_uncompared_CARD_column_prevents_a_MATCH_and_says_so(self):
         """Half a comparison must never read as a pass."""
         report = compare_results(result(["a", "avg"], [["x", 1.0]]),
                                  result(["a", "avg_of_x"], [["x", 1.0]]))
         self.assertFalse(report["match"])
-        self.assertIn("could not be paired", " ".join(report["notes"]))
+        self.assertIn("were NOT compared", " ".join(report["notes"]))
         self.assertEqual(report["columns"]["only_expected"], ["avg"])
         self.assertEqual(report["columns"]["only_actual"], ["avg_of_x"])
 
@@ -598,3 +598,79 @@ class TestColumnMapsFromTheEnvironment(_ScriptBase):
                                         '{"10": {"avg": "avg_of_a"}}'})
         self.assertIn("Column maps: 1 card(s)   (from "
                       "$DASHBOARD_STUDIO_COLUMN_MAPS)", text)
+
+
+class TestExtraColumnsOnOurSideAreNotADifference(unittest.TestCase):
+    """The first real run reported DIFFERS on two cards whose every column
+    agreed, because `match` required BOTH leftover lists to be empty.
+
+    The two lists are different findings. A column of the CARD's that went
+    uncompared means the comparison is incomplete. Extra columns on ours mean
+    the converted query returns MORE than the card did — commonly the component
+    measures an expression is built from, which Insights must name before a
+    mutate can reference them (ADR-011). Additional, not different: they cannot
+    change a paired value, and they cannot change the rows, because the
+    grouping is set by the summarize's dimensions.
+
+    A harness that cries DIFFERS over a full agreement stops being read, which
+    costs more than the strictness bought.
+    """
+
+    def compare(self):
+        return compare_results(
+            result(["name", "Average"], [["a", 2.0], ["b", 4.0]]),
+            result(["name", "Average", "avg_of_q1", "avg_of_q5"],
+                   [["a", 2.0, 1.0, 3.0], ["b", 4.0, 3.0, 5.0]]))
+
+    def test_it_is_a_MATCH(self):
+        report = self.compare()
+        self.assertTrue(report["match"], report["notes"])
+        self.assertEqual(report["columns"]["only_expected"], [])
+        self.assertEqual(report["columns"]["only_actual"],
+                         ["avg_of_q1", "avg_of_q5"])
+
+    def test_the_extras_are_STILL_reported_rather_than_dropped(self):
+        """Matching quietly would hide that the created query shows a person
+        columns the card never had."""
+        report = self.compare()
+        self.assertIn("our query also returns", " ".join(report["notes"]))
+        self.assertIn("plus 2 column(s) ours only", describe(report)[0])
+
+    def test_an_uncompared_card_column_still_blocks_even_beside_extras(self):
+        report = compare_results(
+            result(["name", "avg"], [["a", 2.0]]),
+            result(["name", "avg_of_q1", "avg_of_q5"], [["a", 1.0, 3.0]]))
+        self.assertFalse(report["match"])
+
+
+class TestZeroDeltaIsNotAmbiguous(unittest.TestCase):
+    """"largest relative delta 0" used to mean two different things.
+
+    `max(…, default=0.0)` prints the same 0 for a set of perfectly equal
+    numbers and for an EMPTY delta map — so a comparison that never reached the
+    float path at all read as an exact agreement. That question was asked of the
+    first clean run and the report could not answer it.
+    """
+
+    def test_a_genuine_exact_agreement_says_how_many_numbers_it_compared(self):
+        report = compare_results(result(["v"], [[1.0], [2.0]]),
+                                 result(["v"], [[1.0], [2.0]]))
+        self.assertTrue(report["match"])
+        self.assertEqual(report["compared"], {"values": 2, "numeric": 2})
+        self.assertIn("largest relative delta 0 over 2 numeric values",
+                      describe(report)[0])
+
+    def test_a_comparison_with_NO_numbers_in_it_says_so_instead(self):
+        """Text, dates and nulls compare exactly and contribute no delta. That
+        is a different statement from "the numbers agreed"."""
+        report = compare_results(result(["a"], [["x"], [None]]),
+                                 result(["a"], [["x"], [None]]))
+        self.assertTrue(report["match"])
+        self.assertEqual(report["compared"], {"values": 2, "numeric": 0})
+        self.assertIn("NO numeric values were compared", describe(report)[0])
+        self.assertNotIn("delta 0", describe(report)[0])
+
+    def test_a_MIXED_result_counts_only_the_numeric_ones(self):
+        report = compare_results(result(["a", "v"], [["x", 1.0], ["y", 2.0]]),
+                                 result(["a", "v"], [["x", 1.0], ["y", 2.0]]))
+        self.assertEqual(report["compared"], {"values": 4, "numeric": 2})
