@@ -647,3 +647,55 @@ class TestTheEntangledMarker(_Base):
         self.assertIn("labelled *", section)
         # The plain one keeps its unmarked line.
         self.assertRegex(section, r"\n      plain\n")
+
+
+class TestTheRenamedGroup(_Base):
+    """Converts, after renaming a computed column — its own section (ADR-037).
+
+    Every report in it WAS a refusal before the rename shipped, so it belongs
+    with the other "neither a refusal nor nothing" section rather than being
+    invisible. The number is the question the fix was sized against: one card
+    with an unlucky alias, or a naming habit across the survey reports.
+    """
+
+    # `score * 5 AS "Academic Year"` slugs onto `academic_year`, which is a
+    # real column of tabStudent Applicant.
+    COLLIDING = ("SELECT `w`.`status` AS `status`, AVG(`w`.`Academic Year`) AS `avg` "
+                 "FROM ( SELECT `tabStudent Applicant`.`score` * 5 AS `Academic Year`, "
+                 "`tabStudent Applicant`.`status` AS `status` "
+                 "FROM `tabStudent Applicant` ) AS `w` GROUP BY `w`.`status`")
+
+    def with_frappe(self):
+        frappe, store = super().with_frappe()
+        meta = {"Student Applicant": META["Student Applicant"] + [("score", "Int")]}
+        frappe.get_meta = lambda dt: types.SimpleNamespace(fields=[
+            types.SimpleNamespace(fieldname=f, fieldtype=t) for f, t in meta[dt]])
+        frappe._table_columns["Student Applicant"].append("score")
+        return frappe, store
+
+    def test_the_rename_is_reported_with_both_names(self):
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"survey": self.COLLIDING}, frappe=frappe)
+        self.assertIn("Converts, after renaming a computed column (1 files)", text)
+        section = text.split("Converts, after renaming a computed column", 1)[1]
+        self.assertIn("survey: academic_year -> academic_year_calc", section)
+
+    def test_it_counts_as_CONVERTING_not_as_a_refusal(self):
+        """It converts. Counting it as blocked would overstate the work left
+        and send somebody to fix a report that is already right."""
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"survey": self.COLLIDING}, frappe=frappe)
+        self.assertIn("1 convert cleanly", text)
+        self.assertIn("0 refuse", text)
+
+    def test_a_report_with_no_collision_is_not_in_it(self):
+        frappe, _ = self.with_frappe()
+        text = self.run_script({"plain": CLEAN}, frappe=frappe)
+        self.assertNotIn("after renaming a computed column", text)
+
+    def test_it_needs_a_SITE_because_the_real_columns_are_the_point(self):
+        """Off a bench there is no schema to collide with, so the section
+        cannot appear — and must not, since a shape-only pass would report
+        every one of these as converting with nothing renamed."""
+        text = self.run_script({"survey": self.COLLIDING})
+        self.assertNotIn("after renaming a computed column", text)

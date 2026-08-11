@@ -15,6 +15,7 @@ there changes which rows come back and flattening it would answer a different
 question without failing.
 """
 
+import json
 import pathlib
 import re
 import unittest
@@ -1546,12 +1547,24 @@ class TestAnInlineGroupByExpression(unittest.TestCase):
         self.assertEqual(mutate["new_name"], "month_of_custom_proposed_date")
         self.assertNotEqual(mutate["new_name"], "custom_proposed_date")
 
-    def test_a_generated_name_that_collides_with_a_real_column_refuses(self):
+    def test_a_generated_name_that_collides_with_a_real_column_is_RENAMED(self):
+        """This refused until ADR-037. The collision is real and must not be
+        conflated — but the generated name is an internal one and the real
+        column set is a fact, so it moves out of the way instead of costing
+        the report. The real column keeps its name and is untouched."""
         columns = {"Quality Action": dict(self.COLUMNS["Quality Action"],
                                           month_of_custom_proposed_date="Integer")}
         result = operations_from_sql(analyze_sql(self.SQL), columns)
-        self.assertFalse(result["supported"])
-        self.assertIn("cannot be told apart", " | ".join(result["reasons"]))
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["renamed"],
+                         [("month_of_custom_proposed_date",
+                           "month_of_custom_proposed_date_calc")])
+        mutate = [op for op in result["operations"] if op["type"] == "mutate"][0]
+        self.assertEqual(mutate["new_name"], "month_of_custom_proposed_date_calc")
+        # It still computes from the DATE column, not from the real integer
+        # column it collided with.
+        self.assertEqual(mutate["expression"]["expression"],
+                         "month(custom_proposed_date)")
 
     def test_a_function_off_the_allowlist_still_refuses_by_name(self):
         """Lifting is about POSITION. DAYOFWEEK numbers the days differently
@@ -1953,3 +1966,144 @@ class TestTheEmployeeSatisfactionCapture(unittest.TestCase):
         self.assertFalse(result["supported"])
         self.assertTrue(any("cannot be written in a Python expression" in r
                             for r in result["reasons"]), result["reasons"])
+
+
+COLLISION = (pathlib.Path(__file__).resolve().parent / "fixtures"
+             / "teaching_effectiveness_collision.sql")
+
+
+class TestAComputedNameLandingOnARealColumn(unittest.TestCase):
+    """ADR-037. `teaching_question * 5 AS "Teaching Effectiveness"` slugs to
+    `teaching_effectiveness`, and `tabEnd of Course Survey` already HAS a
+    column of that name holding text.
+
+    Refusing was correct while there was nothing better — the aggregate
+    resolved against the real column and would have averaged text coerced to
+    zero. But the computed name is an internal working one (ADR-033) and the
+    real column set is a FACT, so it moves out of the way instead of costing
+    the report. What must NOT move: the real column, and the labels a person
+    chose.
+
+    RECONSTRUCTED from the reported shape — the card's own SQL was not
+    supplied. The detail that made ADR-033 necessary was invisible in a
+    description, so this should be replaced with the real capture when it
+    arrives; the rename itself is provable independently of the card.
+    """
+
+    COLUMNS = {
+        "Survey Tracking": {"name": "String", "survey_name": "String"},
+        "Survey Tracking List of Surveys Childtable": {
+            "name": "String", "parent": "String", "survey_entry": "String"},
+        "End of Course Survey": {"name": "String", "teaching_question": "Integer",
+                                 "teaching_effectiveness": "String"},
+    }
+
+    def result(self, sql=None, columns=None):
+        return operations_from_sql(analyze_sql(sql or COLLISION.read_text()),
+                                   columns or self.COLUMNS)
+
+    def test_the_card_converts_and_says_what_it_renamed(self):
+        result = self.result()
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["renamed"],
+                         [("teaching_effectiveness", "teaching_effectiveness_calc")])
+
+    def test_it_averages_the_SCALED_QUESTION_not_the_real_text_column(self):
+        """The whole point. Before this, the measure resolved against the real
+        `teaching_effectiveness` — a String — and either refused or, had the
+        types allowed it, averaged text coerced to zero."""
+        operations = self.result()["operations"]
+        mutate = [op for op in operations if op["type"] == "mutate"][0]
+        self.assertEqual(mutate["new_name"], "teaching_effectiveness_calc")
+        self.assertEqual(mutate["expression"]["expression"], "teaching_question * 5")
+        measure = [op for op in operations
+                   if op["type"] == "summarize"][0]["measures"][0]
+        self.assertEqual(measure["column_name"], "teaching_effectiveness_calc")
+        self.assertEqual(measure["aggregation"], "avg")
+        self.assertEqual(measure["data_type"], "Decimal")
+
+    def test_the_REAL_column_is_untouched_and_not_even_carried(self):
+        """It keeps its name, and since nothing references it the join does not
+        bring it across either — `select_columns` is what the query READS."""
+        operations = self.result()["operations"]
+        join = [op for op in operations if op["type"] == "join"
+                and op["table"]["table_name"] == "tabEnd of Course Survey"][0]
+        carried = [c["column_name"] for c in join["select_columns"]]
+        self.assertIn("teaching_question", carried)
+        self.assertNotIn("teaching_effectiveness", carried)
+        # And nothing anywhere in the operations claims the real name.
+        self.assertNotIn('"teaching_effectiveness"', json.dumps(operations))
+
+    def test_a_CHOSEN_label_is_never_renamed(self):
+        """The rename is for internal working names. An outer ADR-011
+        expression's label is what a person typed and reads back in Insights,
+        so it keeps its spelling even when the column it reads was renamed."""
+        sql = COLLISION.read_text().replace(
+            "AVG(`__mb_source`.`Teaching Effectiveness`) AS `Teaching Effectiveness Average`",
+            "CAST( AVG(`__mb_source`.`Teaching Effectiveness`) + "
+            "AVG(`__mb_source`.`Teaching Effectiveness`) AS double ) / 2.0 "
+            "AS `Teaching Effectiveness (Obj. 3)`")
+        result = self.result(sql)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        final = [op for op in result["operations"] if op["type"] == "mutate"][-1]
+        self.assertEqual(final["new_name"], "Teaching Effectiveness (Obj. 3)")
+        # …and its expression reads the RENAMED measure, not the old name.
+        self.assertIn("avg_of_teaching_effectiveness_calc",
+                      final["expression"]["expression"])
+        self.assertNotIn("avg_of_teaching_effectiveness ",
+                         final["expression"]["expression"] + " ")
+
+    def test_a_query_using_the_REAL_column_TOO_still_refuses(self):
+        """The one genuinely ambiguous case, and it keeps refusing. Renaming
+        here would be a guess about which reference meant which column — and
+        guessing is what the original refusal existed to prevent."""
+        sql = COLLISION.read_text().replace(
+            "      `__mb_source`.`name` AS `name`\n",
+            "      `__mb_source`.`name` AS `name`,\n"
+            "      `TabEnd of Course Survey - Survey Entry`.`teaching_effectiveness` "
+            "AS `teaching_effectiveness`\n")
+        result = self.result(sql.replace(
+            "GROUP BY\n  `__mb_source`.`name`",
+            "GROUP BY\n  `__mb_source`.`name`, `__mb_source`.`teaching_effectiveness`"))
+        self.assertFalse(result["supported"])
+        self.assertIn("uses that real column as well", " | ".join(result["reasons"]))
+        self.assertEqual(result["operations"], [])
+
+    def test_an_in_place_CAST_is_not_a_collision(self):
+        """`CAST(v AS double) AS v` names the column it converts because
+        CastArgs has nowhere to put a new name (ADR-012). Renaming it would
+        break the one shape that is SUPPOSED to share the name."""
+        sql = ("SELECT `w`.`v` AS `v`, AVG(`w`.`v`) AS `avg` FROM ( SELECT "
+               "CAST(`tabQuality Action`.`v` AS double) AS `v` "
+               "FROM `tabQuality Action` ) AS `w` GROUP BY `w`.`v`")
+        result = self.result(sql, {"Quality Action": {"name": "String", "v": "String"}})
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["renamed"], [])
+        cast = [op for op in result["operations"] if op["type"] == "cast"][0]
+        self.assertEqual(cast["column"]["column_name"], "v")
+
+    def test_the_generated_name_avoids_a_SECOND_real_column(self):
+        """`<name>_calc` is not automatically free either."""
+        columns = {doctype: dict(fields) for doctype, fields in self.COLUMNS.items()}
+        columns["End of Course Survey"]["teaching_effectiveness_calc"] = "String"
+        result = self.result(columns=columns)
+        self.assertTrue(result["supported"], " | ".join(result["reasons"]))
+        self.assertEqual(result["renamed"],
+                         [("teaching_effectiveness", "teaching_effectiveness_calc_2")])
+
+    def test_a_computed_vs_COMPUTED_collision_still_refuses(self):
+        """Two aliases reducing to one slug: which is which is genuinely
+        unknown, so ADR-033's refusal stands. Only the real-column case is a
+        fact-based rename."""
+        # `Teaching-Effectiveness` and `Teaching.Effectiveness` both reduce to
+        # `teaching_effectiveness`. A DOUBLE space would not — it survives as a
+        # double underscore, which is what keeps 2076's `Exit  Qn. 7` apart
+        # from its single-spaced sibling.
+        sql = COLLISION.read_text().replace(
+            "`teaching_question` * 5 AS `Teaching Effectiveness`,",
+            "`teaching_question` * 5 AS `Teaching-Effectiveness`,\n"
+            "      `TabEnd of Course Survey - Survey Entry`.`teaching_question` * 4 "
+            "AS `Teaching.Effectiveness`,")
+        result = analyze_sql(sql)
+        self.assertFalse(result["supported"])
+        self.assertIn("cannot be told apart", " | ".join(result["reasons"]))

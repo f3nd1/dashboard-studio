@@ -304,6 +304,106 @@ def _value(raw, data_type):
         return raw
 
 
+def _rename_colliding_computed(analysis, available):
+    """Rename a computed column that lands on a real column's name.
+
+    Metabase aliases `teaching_question * 5 AS "Teaching Effectiveness"`, which
+    slugs to `teaching_effectiveness` — and `tabEnd of Course Survey` already
+    HAS a column called `teaching_effectiveness`, holding text. Refusing was
+    correct while there was nothing better: the aggregate resolved against the
+    real column and would have averaged the wrong thing. But the name is an
+    internal working one that Insights re-sanitises anyway (ADR-033), and the
+    real column set is a FACT from `frappe.get_meta` — so a rename settles it
+    without a guess, where a refusal costs a report.
+
+    **What makes it provable is the qualifier.** After the wrapper lift, a
+    reference to the computed alias is BARE — the lift substituted the slug —
+    while a reference to the real column is QUALIFIED, because the lift
+    substituted the source expression `` `tabX`.`col` `` complete with its
+    table. So the two are already distinguishable in the analysis even though
+    they read the same in the SQL, and only bare references are rewritten.
+
+    If ANY reference to the name is qualified, the query uses the real column
+    too, and which one each remaining reference meant is genuinely unknown —
+    that keeps refusing. Computed-vs-computed collisions are refused earlier,
+    in the lift, for the same reason: nothing there says which is which.
+
+    Returns ``[(old, new), …]`` and rewrites `analysis` in place.
+    """
+    computed = analysis.get("computed") or []
+    if not computed:
+        return []
+    taken = set(available) | {str(entry.get("alias") or "") for entry in computed}
+    renames = []
+    for entry in computed:
+        alias = str(entry.get("alias") or "")
+        # An in-place `cast` names the column it converts (`CAST(v AS double)
+        # AS v`) — CastArgs has nowhere to put a new name, so that is not a
+        # collision and must not be renamed.
+        if alias not in available or alias in {str(c) for c in entry.get("columns") or []}:
+            continue
+        if _qualified_use(analysis, alias):
+            continue
+        new = alias + "_calc"
+        suffix = 2
+        while new in taken:
+            new = f"{alias}_calc_{suffix}"
+            suffix += 1
+        taken.add(new)
+        entry["alias"] = new
+        renames.append((alias, new))
+    for old, new in renames:
+        _rewrite_reference(analysis, old, new)
+    return renames
+
+
+def _bare_references(analysis):
+    """Every ``(holder, key, table)`` naming a column, for the passes below.
+
+    One list so the "is it qualified" test and the rewrite cannot drift apart —
+    a rewrite reaching a reference the test did not consider is precisely how a
+    filter would end up pointing at a column nobody chose.
+    """
+    found = []
+    for rule in analysis.get("filters") or []:
+        found.append((rule, "field", rule.get("table")))
+    for reference in analysis.get("group_by") or []:
+        found.append((reference, "field", reference.get("table")))
+    for aggregation in analysis.get("aggregations") or []:
+        found.append((aggregation, "argument", aggregation.get("table")))
+    for expression in analysis.get("expressions") or []:
+        for aggregation in expression.get("aggregates") or []:
+            found.append((aggregation, "argument", aggregation.get("table")))
+    # An ORDER BY carries no qualifier at all — it names a column the query
+    # PRODUCES (ADR-018), which after a summarize is a dimension or a measure.
+    for rule in analysis.get("order_by") or []:
+        found.append((rule, "column", None))
+    return found
+
+
+def _qualified_use(analysis, name):
+    """Does anything name this column WITH a table? Then the real one is used."""
+    return any(str(holder.get(key) or "").strip() == name and table
+               for holder, key, table in _bare_references(analysis))
+
+
+def _rewrite_reference(analysis, old, new):
+    """Point every reference to this name at the renamed computed column.
+
+    EVERY reference, not just the unqualified ones — and that is safe rather
+    than sloppy: a rename only happens once `_qualified_use` has confirmed no
+    qualified reference to the name exists, so every match here is the computed
+    column by construction. Filtering on `not table` as well read as prudence
+    and was a check that could not fail, which a mutation run duly proved.
+    """
+    for holder, key, _table in _bare_references(analysis):
+        if str(holder.get(key) or "").strip() == old:
+            holder[key] = new
+    granularities = analysis.get("granularities")
+    if isinstance(granularities, dict) and old in granularities:
+        granularities[new] = granularities.pop(old)
+
+
 def _referenced_columns(analysis, available):
     """``{DocType: {column, …}}`` — the columns this query actually uses.
 
@@ -408,7 +508,8 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
             "be typed — Insights needs a data type on every grouping and measure"
         )
     if reasons:
-        return {"supported": False, "operations": [], "reasons": reasons}
+        return {"supported": False, "operations": [], "reasons": reasons,
+                "renamed": []}
 
     tables = [source] + [j["doctype"] for j in joins]
     # column -> {DocType: data_type}. A name in two tables is ambiguous, and the
@@ -422,6 +523,7 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
     # is available to the grouping and the aggregate by name — and it is NOT a
     # column of any table, so it must never reach the schema check.
     computed = analysis.get("computed") or []
+    renamed = _rename_colliding_computed(analysis, available)
     for entry in computed:
         # A column whose name STARTS WITH A DIGIT cannot appear in expression
         # text at all. Insights evaluates a mutate/case expression as PYTHON —
@@ -481,14 +583,15 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
                        "count of days")
                 )
         if str(entry["alias"]) in available and entry["alias"] not in entry["columns"]:
-            # A generated name landing on a real column would have the mutate
-            # and the table both claiming it. `<function>_of_<column>` cannot
-            # collide with the column it reads, but nothing stops a table
-            # having a column of that name already.
+            # Still reachable, and still right. `_rename_colliding_computed`
+            # above has already renamed every collision it could PROVE was one
+            # — what is left is a query that names the real column too, where
+            # which one each reference meant is genuinely unknown.
             reasons.append(
                 f"the computed column '{entry['alias']}' has the same name as a "
-                "real column of a table this query reads, so the two cannot be "
-                "told apart"
+                "real column of a table this query reads, and the query uses "
+                "that real column as well, so which one each reference means "
+                "cannot be told"
             )
             continue
         if entry.get("data_type") is None:
@@ -685,9 +788,14 @@ def operations_from_sql(analysis, columns, data_source=DEFAULT_DATA_SOURCE):
         operations.append(_limit(int(analysis["limit"])))
 
     if reasons:
-        return {"supported": False, "operations": [], "reasons": reasons}
+        return {"supported": False, "operations": [], "reasons": reasons,
+                "renamed": renamed}
     _promote_year_mutates(operations, columns)
-    return {"supported": True, "operations": operations, "reasons": []}
+    # `renamed` is reported rather than kept quiet: it is how the corpus scan
+    # counts whether this collision is one card or a pattern across the survey
+    # reports, and a rename nobody can count is a rename nobody can review.
+    return {"supported": True, "operations": operations, "reasons": [],
+            "renamed": renamed}
 
 
 # A dimension is promotable when its mutate is EXACTLY `year(<column>)` —

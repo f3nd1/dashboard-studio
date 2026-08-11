@@ -581,6 +581,24 @@ Fixture-tested end to end; the live re-run of `wrapper_residue.py` on card 2076 
 
 **A mutation run caught a test passing for the wrong reason**, which is worth recording because the shape recurs: "a table name outranks a field that merely mentions it" used `Recruitment Agent` against `Student Applicant`, whose alphabetical order matches the expected ranking — so it passed with the weights flattened, via the tie-break rather than the weighting. The discriminating test puts the name match alphabetically last.
 
+## ADR-037 — A computed column landing on a real column's name is RENAMED, not refused
+
+**The case:** an End of Course Survey card aliases `teaching_question * 5 AS "Teaching Effectiveness"`, which slugs to `teaching_effectiveness` — and `tabEnd of Course Survey` already has a column of exactly that name, holding text. The aggregate resolved against the real column, and the refusal ("the two cannot be told apart", plus a consequential String/AVG complaint) was **correct**: averaging text coerced to zero is the silent-wrong-number failure this project exists to refuse.
+
+**Why a rename is not a softening of that refusal.** Two facts, both already established rather than assumed. The computed name is an INTERNAL working name — ADR-033 slugs every one of them with Insights' own `sanitize_name`, which `apply_mutate` applies again engine-side, and the labels a person actually chose keep their raw spelling and are untouched here. And the real column set is a FACT from `frappe.get_meta`, already loaded and already the thing every other check in this file runs against. So the collision is resolved from evidence, not by picking a winner.
+
+**What makes it provable is the qualifier, and that was verified rather than assumed.** After the wrapper lift, a reference to the computed alias is BARE — the lift substituted the slug — while a reference to the real column is QUALIFIED, because the lift substituted the source expression `` `tabX`.`col` `` complete with its table. Checked directly on a query naming both: the aggregate over the alias came back `{"argument": "teaching_effectiveness", "table": null}` and the grouping on the real column `{"field": "teaching_effectiveness", "table": "End of Course Survey"}`. So the two are already distinguishable in the analysis even though they read identically in the SQL.
+
+**Where it still refuses, and the refusal is sharper than before.** If any reference to the name is qualified, the query uses the real column TOO, and which one each remaining reference meant is genuinely unknown — that refuses, now saying so ("and the query uses that real column as well"). Computed-vs-computed collisions keep refusing in the lift for the same reason: nothing there says which alias is which, so renaming would be a guess. And an in-place `cast` — `CAST(v AS double) AS v`, which names the column it converts because `CastArgs` has nowhere to put a new name (ADR-012) — is exempt, since that shape is *supposed* to share the name.
+
+The generated name is `<name>_calc`, escalating to `_calc_2` against both the real columns and the other computed aliases.
+
+**It is counted, not silent.** `operations_from_sql` returns `renamed`, and `bulk_dry_run.py` prints "Converts, after renaming a computed column" as its own section beside the unchartable one — neither a refusal nor nothing, since every report in it *was* a refusal before this. That answers the question the fix was sized against: one unlucky alias, or a naming habit across the survey cards. It is a site-depth measurement by nature — off a bench there is no schema to collide with, and the section correctly cannot appear.
+
+**A mutation run deleted a check rather than adding one.** `_rewrite_reference` also filtered on "unqualified", which reads as prudence and cannot fail: a rename only happens after `_qualified_use` has confirmed no qualified reference exists, so every remaining match is the computed column by construction. A check no test can make fail is noise pretending to be safety, so it went.
+
+**The fixture is a RECONSTRUCTION**, and that is recorded because ADR-033 is the standing warning: a reconstruction converted while the real card refused, over a detail (a double space) that no description carried. The rename is provable independently of the card, but the fixture should be replaced with the real capture.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.

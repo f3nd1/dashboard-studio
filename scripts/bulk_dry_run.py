@@ -276,6 +276,13 @@ def _dry_run():
     # it is neither a refusal nor "converts cleanly", and filing it under either
     # loses it. Keyed by the part so `month` and `day` are counted apart.
     unchartable = {}
+    # Reports whose computed column landed on a REAL column's name and was
+    # renamed (ADR-037). Counted rather than silent for two reasons: it says
+    # whether the collision is one card or a pattern across the survey
+    # reports, and a rename nobody can count is a rename nobody can review.
+    # Like `unchartable`, this is neither a refusal nor nothing — before the
+    # rename shipped, every one of these WAS a refusal.
+    renamed_reports = []
     # Auto-chart coverage: of the reports that CONVERT, how many get their
     # chart built from the sidecar, and what stops the rest. Only measurable
     # at site depth — the chart is built from the typed operations.
@@ -313,6 +320,10 @@ def _dry_run():
                     if part:
                         unchartable.setdefault(part["part"], []).append(
                             (report, bool(part.get("entangled"))))
+                if not reasons and converted.get("renamed"):
+                    renamed_reports.append(
+                        (report, ", ".join(f"{a} -> {b}"
+                                           for a, b in converted["renamed"])))
                 if not reasons and chart_config_from_card:
                     sidecar = path.with_suffix(".json")
                     if not sidecar.is_file():
@@ -406,6 +417,25 @@ def _dry_run():
             reports = sorted(set(chart_fallback[why]))
             print(f"   {len(reports):>5}  {why}")
             print(f"          e.g. {', '.join(reports[:examples_per_group])}")
+    if renamed_reports:
+        print()
+        print("=" * 78)
+        entries = sorted(set(renamed_reports))
+        line = f"Converts, after renaming a computed column ({len(entries)} files"
+        line += f", {distinct([r for r, _ in entries])} reports" if dedupe else ""
+        print(line + ")")
+        print("=" * 78)
+        print("   NOT refusals and not in the counts above — but every one of")
+        print("   these WAS a refusal before ADR-037. The card's computed column")
+        print("   slugged onto the name of a REAL column of a table it reads, so")
+        print("   the aggregate resolved against the wrong one; the computed name")
+        print("   is internal and moves aside. The real column is untouched.")
+        print("   A big number here means the survey cards share a naming habit,")
+        print("   not that anything is wrong.")
+        for report, moved in entries[:examples_per_group * 4]:
+            print(f"   {report}: {moved}")
+        if len(entries) > examples_per_group * 4:
+            print(f"   … and {len(entries) - examples_per_group * 4} more")
     if unchartable:
         print()
         print("=" * 78)
