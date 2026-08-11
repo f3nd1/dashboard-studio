@@ -52,7 +52,8 @@ a module-level helper is unreachable from inside the function under `exec`.
 def _reconcile(guard_only=False):
     # noqa on the block: isort wants a blank line before the first-party
     # import, and a blank line here breaks the piped-paste form.
-    import os  # noqa: I001
+    import json  # noqa: I001
+    import os
     import pathlib
     import re
     import sys
@@ -69,7 +70,13 @@ def _reconcile(guard_only=False):
     use_live_connection = True
     # `{card id: {card column: our column}}` for columns that cannot pair by
     # name — the card's `AVG(x) AS avg` is our `avg_of_x`. The run prints a
-    # ready-to-fill block for whatever it could not pair; paste it back here.
+    # ready-to-fill block for whatever it could not pair.
+    #
+    # Set $DASHBOARD_STUDIO_COLUMN_MAPS to that block as JSON rather than
+    # editing this. Assigning `column_maps` in the console before the exec
+    # CANNOT work — this function declares its own and shadows it, the same
+    # trap `directory` already carries a warning about — so a second run meant
+    # hand-editing the file each time.
     column_maps = {}
     _WRITES = ("INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE", "ALTER",
                "CREATE", "GRANT", "REVOKE", "REPLACE", "CALL", "LOAD", "SET",
@@ -108,6 +115,31 @@ def _reconcile(guard_only=False):
             out.append(char)
             index += 1
         return "".join(out)
+    def _column_maps_from(raw):
+        """``(maps, problem)`` for $DASHBOARD_STUDIO_COLUMN_MAPS.
+        `maps` is None when the variable is unset, meaning "use the file's own
+        default". A value that is set but unreadable is a PROBLEM rather than a
+        silent fall back to {}: it would run, report the same unpaired columns
+        as last time, and look like the mapping had simply not helped.
+        """
+        if not (raw or "").strip():
+            return None, ""
+        try:
+            parsed = json.loads(raw)
+        except Exception as error:
+            return None, f"not readable as JSON ({type(error).__name__})"
+        if not isinstance(parsed, dict):
+            return None, "must be a JSON object keyed by card id"
+        maps = {}
+        for card, mapping in parsed.items():
+            if not isinstance(mapping, dict):
+                return None, f"the entry for {card!r} is not an object"
+            for theirs, ours in mapping.items():
+                if not isinstance(ours, str) or not ours.strip():
+                    return None, (f"{card!r} maps {theirs!r} to something that is "
+                                  "not a column name")
+            maps[str(card)] = {str(k): str(v) for k, v in mapping.items()}
+        return maps, ""
     def _read_only(statement):
         """"" if this is one plain SELECT; otherwise why it is refused."""
         bare = _strip(statement or "")
@@ -125,7 +157,7 @@ def _reconcile(guard_only=False):
                 return f"statement contains {verb} — refused, this only ever reads"
         return ""
     if guard_only:
-        return _read_only
+        return {"read_only": _read_only, "column_maps_from": _column_maps_from}
     directory, chosen_from, cards = "", "", []
     if os.environ.get("DASHBOARD_STUDIO_SQL_DIR"):
         directory = os.environ["DASHBOARD_STUDIO_SQL_DIR"]
@@ -158,10 +190,26 @@ def _reconcile(guard_only=False):
     if not folder.is_dir():
         print(f"Not a directory: {folder}   (from {chosen_from})")
         return
-    # Imported only once there is work to do, so the usage text above prints
+    # Read BEFORE the site imports, so a mistyped mapping is a message rather
+    # than a stack trace three minutes into a run.
+    supplied, problem = _column_maps_from(os.environ.get("DASHBOARD_STUDIO_COLUMN_MAPS"))
+    if problem:
+        print(f"$DASHBOARD_STUDIO_COLUMN_MAPS is {problem}. Nothing was run.")
+        print('   Expected: {"2424": {"avg": "avg_of_some_column"}}')
+        return
+    maps_from = "the file's own default"
+    if supplied is not None:
+        column_maps = supplied
+        maps_from = "$DASHBOARD_STUDIO_COLUMN_MAPS"
+    # What was read, BEFORE the slow work — a run that does not say what it
+    # read cannot be argued with, and these three lines are the whole input.
+    print(f"Reading {folder.resolve()}   (from {chosen_from})")
+    print("Read-only: one SELECT per card, row-capped, rolled back. "
+          "Metabase is not contacted.")
+    print(f"Column maps: {len(column_maps)} card(s)   (from {maps_from})")
+    # Imported only once there is work to do, so everything above prints
     # anywhere — this file is read by its own tests, which have no bench.
-    import json  # noqa: I001
-    import frappe
+    import frappe  # noqa: I001
     from dashboard_studio.api.convert import _table_columns
     from dashboard_studio.integrations.metabase.parser import analyze_sql
     from dashboard_studio.integrations.metabase.sql_ops import operations_from_sql
@@ -170,9 +218,6 @@ def _reconcile(guard_only=False):
         IbisQueryBuilder,
         execute_ibis_query,
     )
-    print(f"Reading {folder.resolve()}   (from {chosen_from})")
-    print("Read-only: one SELECT per card, row-capped, rolled back. "
-          "Metabase is not contacted.")
     verdicts, unpaired = [], {}
     for card in cards:
         matches = sorted(folder.glob(f"*--{card}.sql"))
@@ -246,18 +291,20 @@ def _reconcile(guard_only=False):
         print("")
         print("Columns that could not be paired by name. They are NOT compared —")
         print("pairing leftovers by position can agree as easily as disagree.")
-        print("Fill these in as `column_maps` at the top and run it again:")
-        print("   column_maps = {")
+        print("Set them as JSON and run it again — no need to edit this file:")
+        print("   os.environ['DASHBOARD_STUDIO_COLUMN_MAPS'] = json.dumps({")
         for card, (theirs, ours_left) in unpaired.items():
             print(f'       "{card}": {{  # ours: {ours_left}')
             for name in theirs:
                 print(f'           "{name}": "",')
             print("       },")
-        print("   }")
+        print("   })")
     print("")
     print("Nothing was written. Insights logs its own executions, as it does "
           "whenever a query is opened.")
 
 
-_read_only = _reconcile(guard_only=True)
+_helpers = _reconcile(guard_only=True)
+_read_only = _helpers["read_only"]
+_column_maps_from = _helpers["column_maps_from"]
 _reconcile()

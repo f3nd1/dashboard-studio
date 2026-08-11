@@ -482,3 +482,119 @@ class TestTheDatabaseReport(unittest.TestCase):
                and lines[i - 1][:1].isspace() and lines[i - 1].strip()
                and lines[i + 1][:1].isspace() and lines[i + 1].strip()]
         self.assertEqual(bad, [], f"blank line inside a block at {bad}")
+
+
+class _ScriptBase(unittest.TestCase):
+    """Runs the real script over a temp folder, the way bench console does.
+
+    Exceptions are swallowed and stdout returned regardless: without a bench
+    the run reaches `import frappe` and stops, which is exactly the point —
+    everything these tests assert on is printed before it.
+    """
+
+    def run_script(self, files, env=None):
+        import os
+        import sys
+        import tempfile
+        saved_argv, saved_env = list(sys.argv), dict(os.environ)
+        with tempfile.TemporaryDirectory() as directory:
+            for name, sql in files.items():
+                (pathlib.Path(directory) / f"{name}.sql").write_text(sql)
+            os.environ.update({k: v.replace("<DIR>", directory)
+                               for k, v in (env or {}).items()})
+            sys.argv = ["reconcile_numbers.py"]
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out):
+                    try:
+                        exec(compile(SCRIPT.read_text(), str(SCRIPT), "exec"),  # noqa: S102
+                             {}, {})
+                    except Exception:
+                        pass
+            finally:
+                os.environ.clear()
+                os.environ.update(saved_env)
+                sys.argv = saved_argv
+            return out.getvalue()
+
+
+class TestColumnMapsFromTheEnvironment(_ScriptBase):
+    """`column_maps` is read from $DASHBOARD_STUDIO_COLUMN_MAPS.
+
+    Setting it in the console before the exec cannot work — the function
+    declares its own and shadows it, the same trap `directory` already carries
+    a warning about — so the first version meant hand-editing the file between
+    runs, which is not a thing to ask of somebody comparing numbers.
+    """
+
+    def parser(self):
+        namespace = {}
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(SCRIPT.read_text(), str(SCRIPT), "exec"), namespace)  # noqa: S102
+        return namespace["_column_maps_from"]
+
+    def test_unset_means_use_the_files_own_default(self):
+        """None, not {} — the difference between "nothing was supplied" and
+        "an empty mapping was supplied" is what lets the file keep a default."""
+        for blank in (None, "", "   "):
+            with self.subTest(repr(blank)):
+                self.assertEqual(self.parser()(blank), (None, ""))
+
+    def test_the_real_mapping_parses(self):
+        """Card 2424's, exactly as reported: Metabase names an inline
+        `MONTH(`d`)` item after the column it reads, and ADR-022 renames ours
+        to `month_of_d`, so the two need pairing by hand."""
+        maps, problem = self.parser()(
+            '{"2424": {"custom_proposed_date": "month_of_custom_proposed_date",'
+            ' "avg": "avg_of_custom_aggregated_performance_index_api"}}')
+        self.assertEqual(problem, "")
+        self.assertEqual(maps, {"2424": {
+            "custom_proposed_date": "month_of_custom_proposed_date",
+            "avg": "avg_of_custom_aggregated_performance_index_api"}})
+
+    def test_a_numeric_card_id_still_keys_as_a_string(self):
+        """JSON keys are strings, but a card id written as a number in a nested
+        position would not match the loop's string ids."""
+        maps, _ = self.parser()('{"2424": {"avg": "avg_of_x"}}')
+        self.assertIn("2424", maps)
+
+    def test_unreadable_JSON_is_a_PROBLEM_not_a_silent_empty_map(self):
+        """Falling back to {} would run, report the same unpaired columns as
+        last time, and read as "the mapping did not help" rather than "the
+        mapping never arrived"."""
+        maps, problem = self.parser()("{not json")
+        self.assertIsNone(maps)
+        self.assertIn("not readable as JSON", problem)
+
+    def test_the_wrong_SHAPE_is_refused_by_name(self):
+        for raw, expected in (
+                ('["2424"]', "keyed by card id"),
+                ('{"2424": "avg"}', "is not an object"),
+                ('{"2424": {"avg": null}}', "not a column name"),
+                ('{"2424": {"avg": "  "}}', "not a column name")):
+            with self.subTest(raw):
+                maps, problem = self.parser()(raw)
+                self.assertIsNone(maps)
+                self.assertIn(expected, problem)
+
+    def test_a_bad_value_stops_the_run_before_any_query(self):
+        """It is read before the site imports, so a mistyped mapping is a
+        message rather than a stack trace three minutes into a run."""
+        text = self.run_script({"R--10": "SELECT `a` FROM `tabX`"},
+                               env={"DASHBOARD_STUDIO_SQL_DIR": "<DIR>",
+                                    "DASHBOARD_STUDIO_CARDS": "10",
+                                    "DASHBOARD_STUDIO_COLUMN_MAPS": "{oops"})
+        self.assertIn("not readable as JSON", text)
+        self.assertIn("Nothing was run", text)
+        self.assertNotIn("card 10:", text)
+
+    def test_the_run_says_where_the_maps_came_from(self):
+        """Same rule as the directory and the card ids: a run that does not
+        say what it read cannot be argued with."""
+        text = self.run_script({"R--10": "SELECT `a` FROM `tabX`"},
+                               env={"DASHBOARD_STUDIO_SQL_DIR": "<DIR>",
+                                    "DASHBOARD_STUDIO_CARDS": "10",
+                                    "DASHBOARD_STUDIO_COLUMN_MAPS":
+                                        '{"10": {"avg": "avg_of_a"}}'})
+        self.assertIn("Column maps: 1 card(s)   (from "
+                      "$DASHBOARD_STUDIO_COLUMN_MAPS)", text)

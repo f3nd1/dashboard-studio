@@ -599,6 +599,20 @@ The generated name is `<name>_calc`, escalating to `_calc_2` against both the re
 
 **The fixture is a RECONSTRUCTION**, and that is recorded because ADR-033 is the standing warning: a reconstruction converted while the real card refused, over a detail (a double space) that no description carried. The rename is provable independently of the card, but the fixture should be replaced with the real capture.
 
+## ADR-038 — Column maps come from the environment, and the first reconciliation run's asymmetry
+
+**The mapping had nowhere to live.** `column_maps` was a variable at the top of `reconcile_numbers.py`, so supplying one meant hand-editing the script between runs — and setting it in the console before the `exec` cannot work, because the function declares its own and shadows it. That is the same trap `directory` already carries a warning about, and it had been walked into again by the file's own printed advice ("fill these in at the top"). It reads from `$DASHBOARD_STUDIO_COLUMN_MAPS` as JSON now, the same shape as the card list, falling back to the in-file default when unset. A value that is set but unreadable is a PROBLEM that stops the run rather than a silent fall back to `{}` — the latter would run, report the same unpaired columns as last time, and read as "the mapping did not help" rather than "the mapping never arrived".
+
+**The first real run, and what it actually said.** Three cards, row counts matching on all three (12/12, 5/5, 1/1), every card reporting DIFFERS — but on 2076 and 1680 the unpaired columns were **all on our side**, with none left over on the card's. That asymmetry is worth reading precisely, because it inverts the apparent verdict: with no leftovers on the card's side, **every column the card produces was paired and compared**, and with zero value differences reported, all of them agreed within tolerance. The DIFFERS came entirely from `match` requiring both leftover lists to be empty.
+
+**Why our side has extra columns, and why it is structural rather than a fault.** Metabase computes `( AVG(a) + AVG(b) ) / 2.0` as one inline SQL expression producing ONE output column. Insights cannot: ADR-011's translation is a `summarize` that defines the component measures as named columns, then a `mutate` that references those names as text. A summarize emits its measures, and a mutate adds a column — neither removes anything, so the components remain in the result. On 2076 that is six `avg_of_*` columns behind three labelled averages; on 1680, two behind one. They are intermediates of the translation, never Metabase result columns — which ADR-031 already knew, since a measure an expression READS takes no chart series key.
+
+**It cannot hide a row difference**, and that is worth stating rather than assuming: extra columns are per-row values, and the grouping is set by the summarize's dimensions, which matched. Equal row counts plus a fully-paired card side is a real agreement, not a coincidence of counting.
+
+**What made the pairing possible at all was ADR-033's other half** — chosen labels keep their raw spelling, so the card's `Staff Onboarding Average (Obj. 5)` and ours are byte-identical and paired by name with no map. Had those been slugged too, every card would have needed a hand-written mapping for its headline numbers.
+
+Recorded and NOT acted on this round, per the standing rule: `match` conflates "our side has structural extras" with "something was not compared", and those are different findings. So is the question of whether the intermediate columns should be projected away in the created query at all — that changes what a person sees in Insights and is a decision, not a cleanup.
+
 ## Known unsupported — recorded, not scheduled
 
 **Quality Performance Outcomes** (real UCC report) is no longer blocked. It refused for three reasons; all three are now handled, and the real SQL is checked in at `dashboard_studio/tests/fixtures/quality_performance_outcomes.sql` so the suite converts it rather than an approximation of it.
